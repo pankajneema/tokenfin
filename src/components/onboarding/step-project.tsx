@@ -1,106 +1,146 @@
 'use client'
-
 import { useState } from 'react'
-import type { OnboardingData } from '@/app/(onboarding)/onboarding/page'
+import { ArrowRight, Layers, FileText } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 function slugify(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+  return s.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 50)
 }
 
+const TEMPLATES = [
+  { id: 'api',      label: 'API Backend',      emoji: '⚡' },
+  { id: 'chatbot',  label: 'Chatbot / Agent',   emoji: '🤖' },
+  { id: 'data',     label: 'Data Pipeline',     emoji: '🔁' },
+  { id: 'custom',   label: 'Custom',            emoji: '✨' },
+]
+
 export function StepProject({
-  data, onNext, saving,
-}: { data: OnboardingData; onNext: (name: string, slug: string, desc: string) => void; saving: boolean }) {
-  const [name, setName] = useState(data.projectName)
-  const [slug, setSlug] = useState(data.projectName ? slugify(data.projectName) : '')
-  const [slugTouched, setSlugTouched] = useState(false)
-  const [desc, setDesc] = useState(data.projectDesc)
+  saving,
+  onNext,
+}: {
+  saving: boolean
+  onNext: (name: string, slug: string, desc: string) => void
+}) {
+  const [name,     setName]     = useState('')
+  const [slug,     setSlug]     = useState('')
+  const [desc,     setDesc]     = useState('')
+  const [template, setTemplate] = useState('')
+  const [slugEdited, setSlugEdited] = useState(false)
 
-  function handleName(v: string) {
+  function handleNameChange(v: string) {
     setName(v)
-    if (!slugTouched) setSlug(slugify(v))
+    if (!slugEdited) setSlug(slugify(v))
   }
 
-  function handleSlug(v: string) {
-    setSlugTouched(true)
+  function handleSlugChange(v: string) {
     setSlug(slugify(v))
+    setSlugEdited(true)
   }
 
-  const valid = name.trim().length >= 2 && slug.length >= 2
+  const canSubmit = name.trim().length >= 2 && slug.length >= 2
 
   return (
-    <div>
-      <h1 className="text-xl font-semibold mb-1" style={{ color: 'var(--fg)' }}>
-        Create your first project
-      </h1>
-      <p className="text-sm mb-6" style={{ color: 'var(--fg-muted)' }}>
-        A project groups your LLM usage by product area, feature, or service. You can create more later.
-      </p>
+    <div className="p-7">
 
-      {/* Project type examples */}
-      <div className="grid grid-cols-3 gap-2 mb-6">
-        {[
-          { icon: '🤖', label: 'Chatbot' },
-          { icon: '✍️', label: 'Content Gen' },
-          { icon: '🔍', label: 'Search / RAG' },
-          { icon: '📊', label: 'Analytics' },
-          { icon: '🛠️', label: 'Code Assist' },
-          { icon: '🌐', label: 'Translation' },
-        ].map(item => (
-          <button
-            key={item.label}
-            onClick={() => { if (!name) handleName(item.label) }}
-            className="flex items-center gap-2 p-2 rounded-lg border text-xs transition-colors hover:border-[var(--accent)]"
-            style={{ borderColor: 'var(--border)', color: 'var(--fg-muted)', background: 'var(--bg)' }}
-          >
-            <span>{item.icon}</span> {item.label}
-          </button>
-        ))}
+      {/* Template picker */}
+      <div className="mb-7">
+        <p className="text-[11px] font-semibold tracking-widest text-[var(--fg-tertiary)] uppercase mb-3">
+          Project type
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          {TEMPLATES.map(t => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTemplate(t.id)}
+              className={cn(
+                'flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-left transition-all duration-150',
+                template === t.id
+                  ? 'border-coral bg-coral/5 shadow-[0_0_0_1px_#E8533A]'
+                  : 'border-[var(--border)] bg-[var(--bg-secondary)] hover:border-[var(--border-strong)]'
+              )}
+            >
+              <span className="text-[18px]">{t.emoji}</span>
+              <span className="text-[12.5px] font-medium text-[var(--fg)]">{t.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
+      {/* Fields */}
       <div className="space-y-4">
-        <div>
-          <label className="label">Project name</label>
-          <input
-            className="input w-full"
-            placeholder="My Chatbot"
-            value={name}
-            onChange={e => handleName(e.target.value)}
-            autoFocus
-          />
-        </div>
-        <div>
-          <label className="label">URL slug</label>
-          <div className="flex items-center rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border)', background: 'var(--input-bg)' }}>
-            <span className="px-3 py-2 text-sm select-none" style={{ color: 'var(--fg-muted)', borderRight: '1px solid var(--border)', background: 'var(--sidebar-bg)' }}>
-              projects/
-            </span>
+
+        {/* Project name */}
+        <div className="space-y-1.5">
+          <label className="block text-[11px] font-semibold tracking-widest text-[var(--fg-tertiary)] uppercase">
+            Project name <span className="text-coral">*</span>
+          </label>
+          <div className="relative">
+            <Layers size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--fg-tertiary)] pointer-events-none" />
             <input
-              className="flex-1 px-3 py-2 text-sm bg-transparent outline-none"
-              style={{ color: 'var(--fg)' }}
-              placeholder="my-chatbot"
-              value={slug}
-              onChange={e => handleSlug(e.target.value)}
+              type="text"
+              value={name}
+              onChange={e => handleNameChange(e.target.value)}
+              placeholder="My AI Project"
+              autoFocus
+              className="w-full pl-9 pr-3.5 py-3 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-[13px] text-[var(--fg)] placeholder:text-[var(--fg-tertiary)] outline-none focus:border-coral focus:ring-2 focus:ring-coral/10 transition-all"
             />
           </div>
-          <p className="text-xs mt-1" style={{ color: 'var(--fg-muted)' }}>
-            Only lowercase letters, numbers, and hyphens.
-          </p>
         </div>
-        <div>
-          <label className="label">Description <span style={{ color: 'var(--fg-muted)' }}>(optional)</span></label>
-          <textarea
-            className="input w-full resize-none"
-            rows={3}
-            placeholder="Briefly describe what this project does…"
-            value={desc}
-            onChange={e => setDesc(e.target.value)}
-          />
+
+        {/* Slug */}
+        <div className="space-y-1.5">
+          <label className="block text-[11px] font-semibold tracking-widest text-[var(--fg-tertiary)] uppercase">
+            Project slug
+          </label>
+          <div className="flex rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] focus-within:border-coral focus-within:ring-2 focus-within:ring-coral/10 transition-all overflow-hidden">
+            <span className="flex items-center px-3 text-[12px] text-[var(--fg-tertiary)] bg-[var(--bg-tertiary)] border-r border-[var(--border)] select-none whitespace-nowrap">
+              tokenfin /
+            </span>
+            <input
+              type="text"
+              value={slug}
+              onChange={e => handleSlugChange(e.target.value)}
+              placeholder="my-ai-project"
+              className="flex-1 px-3 py-3 bg-transparent text-[13px] text-[var(--fg)] placeholder:text-[var(--fg-tertiary)] outline-none"
+            />
+          </div>
+        </div>
+
+        {/* Description */}
+        <div className="space-y-1.5">
+          <label className="block text-[11px] font-semibold tracking-widest text-[var(--fg-tertiary)] uppercase">
+            Description <span className="text-[var(--fg-tertiary)] normal-case font-normal tracking-normal">(optional)</span>
+          </label>
+          <div className="relative">
+            <FileText size={14} className="absolute left-3.5 top-3.5 text-[var(--fg-tertiary)] pointer-events-none" />
+            <textarea
+              value={desc}
+              onChange={e => setDesc(e.target.value)}
+              placeholder="What does this project do?"
+              rows={3}
+              className="w-full pl-9 pr-3.5 py-3 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-[13px] text-[var(--fg)] placeholder:text-[var(--fg-tertiary)] outline-none focus:border-coral focus:ring-2 focus:ring-coral/10 transition-all resize-none"
+            />
+          </div>
         </div>
       </div>
 
-      <div className="flex justify-end mt-8">
-        <button className="btn-primary" disabled={!valid || saving} onClick={() => onNext(name.trim(), slug, desc.trim())}>
-          {saving ? 'Creating…' : 'Continue →'}
+      {/* CTA */}
+      <div className="mt-7">
+        <button
+          type="button"
+          onClick={() => onNext(name.trim(), slug, desc.trim())}
+          disabled={!canSubmit || saving}
+          className={cn(
+            'w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-[13.5px] font-semibold transition-all duration-150',
+            canSubmit && !saving
+              ? 'bg-coral text-white hover:bg-[#D4432B] shadow-[0_2px_8px_rgba(232,83,58,0.3)] hover:shadow-[0_4px_14px_rgba(232,83,58,0.38)] active:scale-[0.985]'
+              : 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)] cursor-not-allowed'
+          )}
+        >
+          {saving
+            ? <span className="w-4 h-4 rounded-full border-2 border-current/30 border-t-current animate-spin" />
+            : <><span>Create project</span><ArrowRight size={14} strokeWidth={2.5} /></>}
         </button>
       </div>
     </div>

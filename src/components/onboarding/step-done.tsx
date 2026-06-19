@@ -1,81 +1,64 @@
 'use client'
-
-import { useState } from 'react'
+import { ArrowRight, Zap, BarChart3, Key } from 'lucide-react'
 import type { OnboardingData } from '@/app/(onboarding)/onboarding/page'
 
-export function StepDone({
-  data, onGo,
-}: { data: OnboardingData; onGo: () => void }) {
-  const [loading, setLoading] = useState(false)
+const NEXT_STEPS = [
+  { icon: Key,      title: 'Create an API key',       desc: 'Start tracking token usage in minutes' },
+  { icon: BarChart3, title: 'Explore analytics',      desc: 'See real-time cost attribution' },
+  { icon: Zap,      title: 'Set a budget limit',      desc: 'Get alerted before you overspend' },
+]
 
-  const handleGoToDashboard = async () => {
-    setLoading(true)
-    // Wait a moment for database to sync before redirecting
-    await new Promise(resolve => setTimeout(resolve, 500))
-    onGo()
-  }
-
+export function StepDone({ data, onGo }: { data: OnboardingData; onGo: () => void }) {
   return (
-    <div className="text-center py-4">
-      {/* Checkmark animation */}
-      <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-5"
-           style={{ background: 'color-mix(in srgb, var(--success) 12%, var(--bg))', border: '2px solid var(--success)' }}>
-        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-          <path d="M7 16l6 6 12-12" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+    <div className="p-7 text-center">
+
+      {/* Success animation */}
+      <div className="relative mx-auto w-20 h-20 mb-7">
+        <div className="absolute inset-0 rounded-full bg-teal/10 animate-ping-slow" />
+        <div className="relative w-full h-full rounded-full bg-teal/15 border border-teal/30 flex items-center justify-center">
+          <div className="w-12 h-12 rounded-full bg-teal flex items-center justify-center">
+            <svg viewBox="0 0 20 20" className="w-6 h-6 stroke-white fill-none" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 10l4 4 8-8" />
+            </svg>
+          </div>
+        </div>
       </div>
 
-      <h1 className="text-xl font-semibold mb-2" style={{ color: 'var(--fg)' }}>
-        You're all set!
-      </h1>
-      <p className="text-sm mb-8 max-w-sm mx-auto" style={{ color: 'var(--fg-muted)' }}>
-        <strong style={{ color: 'var(--fg)' }}>{data.orgName}</strong> is ready.
-        Your first project <strong style={{ color: 'var(--fg)' }}>{data.projectName}</strong> is live.
-        {data.invites.length > 0 && ` Invitations sent to ${data.invites.length} teammate${data.invites.length > 1 ? 's' : ''}.`}
+      <h2 className="text-[22px] font-bold text-[var(--fg)] tracking-tight mb-2">
+        Your workspace is ready!
+      </h2>
+      <p className="text-[13.5px] text-[var(--fg-secondary)] mb-1">
+        Project <span className="font-semibold text-[var(--fg)]">{data.projectName}</span> created.
       </p>
+      {data.invites.length > 0 && (
+        <p className="text-[12px] text-teal font-medium mb-1">
+          {data.invites.length} invite{data.invites.length !== 1 ? 's' : ''} sent ✓
+        </p>
+      )}
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-3 mb-8 text-left">
-        {[
-          { label: 'Organization', value: data.orgName,     icon: '🏢' },
-          { label: 'Plan',         value: data.plan,        icon: '📋' },
-          { label: 'Project',      value: data.projectName, icon: '📁' },
-        ].map(item => (
-          <div key={item.label} className="rounded-lg p-3"
-               style={{ background: 'var(--sidebar-bg)', border: '1px solid var(--border)' }}>
-            <div className="text-lg mb-1">{item.icon}</div>
-            <div className="text-xs capitalize font-semibold" style={{ color: 'var(--fg)' }}>{item.value}</div>
-            <div className="text-xs" style={{ color: 'var(--fg-muted)' }}>{item.label}</div>
+      {/* What's next */}
+      <div className="mt-7 mb-7 text-left space-y-3">
+        <p className="text-[11px] font-semibold tracking-widest text-[var(--fg-tertiary)] uppercase px-1 mb-4">
+          Suggested next steps
+        </p>
+        {NEXT_STEPS.map(({ icon: Icon, title, desc }) => (
+          <div key={title} className="flex items-start gap-3 px-3.5 py-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)]">
+            <div className="w-8 h-8 rounded-lg bg-coral/10 flex items-center justify-center flex-shrink-0">
+              <Icon size={14} className="text-coral" strokeWidth={2} />
+            </div>
+            <div>
+              <p className="text-[13px] font-semibold text-[var(--fg)]">{title}</p>
+              <p className="text-[11.5px] text-[var(--fg-secondary)]">{desc}</p>
+            </div>
           </div>
         ))}
       </div>
 
-      {/* Next steps */}
-      <div className="text-left rounded-xl p-4 mb-8"
-           style={{ background: 'var(--sidebar-bg)', border: '1px solid var(--border)' }}>
-        <p className="text-xs font-semibold uppercase tracking-wide mb-3" style={{ color: 'var(--fg-muted)' }}>
-          Next steps
-        </p>
-        <div className="space-y-2">
-          {[
-            { n: 1, text: 'Create an API key from the Keys page' },
-            { n: 2, text: 'Install the SDK: npm install @tokenfin/sdk' },
-            { n: 3, text: 'Add track() calls to your LLM code' },
-            { n: 4, text: 'Set up budget limits and alerts' },
-          ].map(step => (
-            <div key={step.n} className="flex items-start gap-3">
-              <span className="w-5 h-5 rounded-full text-xs flex items-center justify-center flex-shrink-0 mt-0.5 font-semibold"
-                    style={{ background: 'var(--accent)', color: '#fff' }}>
-                {step.n}
-              </span>
-              <span className="text-sm" style={{ color: 'var(--fg)' }}>{step.text}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <button className="btn-primary w-full" onClick={handleGoToDashboard} disabled={loading}>
-        {loading ? 'Loading…' : 'Go to Dashboard →'}
+      <button
+        onClick={onGo}
+        className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-coral text-white text-[13.5px] font-semibold hover:bg-[#D4432B] shadow-[0_2px_8px_rgba(232,83,58,0.3)] hover:shadow-[0_4px_14px_rgba(232,83,58,0.38)] active:scale-[0.985] transition-all duration-150"
+      >
+        Go to dashboard <ArrowRight size={14} strokeWidth={2.5} />
       </button>
     </div>
   )

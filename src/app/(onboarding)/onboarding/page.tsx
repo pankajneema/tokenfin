@@ -1,98 +1,103 @@
 'use client'
-
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { Zap } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { StepOrg }    from '@/components/onboarding/step-org'
-import { StepPlan }   from '@/components/onboarding/step-plan'
 import { StepProject } from '@/components/onboarding/step-project'
 import { StepInvite }  from '@/components/onboarding/step-invite'
 import { StepDone }    from '@/components/onboarding/step-done'
+import { cn } from '@/lib/utils'
 
 export type OnboardingData = {
-  orgName:     string
-  orgSlug:     string
-  plan:        'free' | 'starter' | 'pro' | 'enterprise'
   projectName: string
+  projectSlug: string
   projectDesc: string
-  orgId:       string
   projectId:   string
+  orgId:       string
   invites:     string[]
 }
 
-const STEPS = ['Organization', 'Plan', 'Project', 'Invite', 'Done'] as const
-type Step = 0 | 1 | 2 | 3 | 4
+const STEPS = [
+  { id: 0, label: 'Create project',  desc: 'Set up your first project' },
+  { id: 1, label: 'Invite your team', desc: 'Bring your teammates in' },
+  { id: 2, label: 'All done!',        desc: "Your workspace is ready" },
+] as const
+
+function StepIndicator({ current }: { current: number }) {
+  return (
+    <div className="flex items-center">
+      {[0, 1].map((i) => {
+        const done   = i < current
+        const active = i === current
+        return (
+          <div key={i} className="flex items-center">
+            <div className={cn(
+              'w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold transition-all duration-300',
+              done   ? 'bg-teal text-white'
+                : active ? 'bg-coral text-white ring-4 ring-coral/20'
+                : 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)] border border-[var(--border)]'
+            )}>
+              {done ? (
+                <svg viewBox="0 0 12 12" className="w-3.5 h-3.5 stroke-white fill-none" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 6l3 3 5-5" />
+                </svg>
+              ) : i + 1}
+            </div>
+            {i < 1 && (
+              <div className={cn(
+                'w-16 h-px mx-1.5 transition-all duration-500',
+                done ? 'bg-teal' : 'bg-[var(--border)]'
+              )} />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 export default function OnboardingPage() {
-  const router = useRouter()
+  const router   = useRouter()
   const supabase = createClient()
 
-  const [step, setStep] = useState<Step>(0)
+  const [step,   setStep]   = useState<0 | 1 | 2>(0)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [data, setData] = useState<OnboardingData>({
-    orgName: '', orgSlug: '', plan: 'free',
-    projectName: '', projectDesc: '',
-    orgId: '', projectId: '', invites: [],
+  const [error,  setError]  = useState('')
+  const [data,   setData]   = useState<OnboardingData>({
+    projectName: '', projectSlug: '', projectDesc: '',
+    projectId: '', orgId: '', invites: [],
   })
-
-  const pct = Math.round((step / (STEPS.length - 1)) * 100)
 
   function patch(partial: Partial<OnboardingData>) {
     setData(d => ({ ...d, ...partial }))
   }
 
-  async function handleOrgNext(orgName: string, orgSlug: string) {
+  async function handleProjectNext(projectName: string, projectSlug: string, projectDesc: string) {
     setSaving(true); setError('')
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Not authenticated')
 
-      const res = await fetch('/api/orgs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: orgName, slug: orgSlug, owner_id: user.id }),
-      })
-      if (!res.ok) throw new Error(await res.text())
-      const org = await res.json()
-      patch({ orgName, orgSlug, orgId: org.id })
-      setStep(1)
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSaving(false)
-    }
-  }
+      const { data: member } = await supabase
+        .from('members')
+        .select('org_id')
+        .eq('user_id', user.id)
+        .limit(1)
+        .maybeSingle()
 
-  async function handlePlanNext(plan: OnboardingData['plan']) {
-    setSaving(true); setError('')
-    try {
-      await fetch('/api/orgs', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ org_id: data.orgId, plan }),
-      })
-      patch({ plan })
-      setStep(2)
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSaving(false)
-    }
-  }
+      if (!member) throw new Error('No workspace found. Please select a plan first.')
 
-  async function handleProjectNext(projectName: string, projectSlug: string, projectDesc: string) {
-    setSaving(true); setError('')
-    try {
-      const res = await fetch('/api/projects', {
-        method: 'POST',
+      const res = await fetch('/api/v1/projects', {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ org_id: data.orgId, name: projectName, slug: projectSlug, description: projectDesc }),
+        body:    JSON.stringify({ org_id: member.org_id, name: projectName, slug: projectSlug, description: projectDesc }),
       })
       if (!res.ok) throw new Error(await res.text())
       const project = await res.json()
-      patch({ projectName, projectDesc, projectId: project.id })
-      setStep(3)
+
+      patch({ projectName, projectSlug, projectDesc, projectId: project.id, orgId: member.org_id })
+      setStep(1)
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -104,14 +109,14 @@ export default function OnboardingPage() {
     setSaving(true); setError('')
     try {
       if (invites.length > 0) {
-        await fetch('/api/invites', {
-          method: 'POST',
+        await fetch('/api/v1/invites', {
+          method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ org_id: data.orgId, emails: invites }),
+          body:    JSON.stringify({ org_id: data.orgId, emails: invites }),
         })
       }
       patch({ invites })
-      setStep(4)
+      setStep(2)
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -119,69 +124,50 @@ export default function OnboardingPage() {
     }
   }
 
+  const currentStep = STEPS[step]
+
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg)' }}>
-      {/* Top bar */}
-      <header className="flex items-center justify-between px-8 py-5 border-b" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-sm font-bold"
-               style={{ background: 'var(--accent)' }}>T</div>
-          <span className="font-semibold text-sm" style={{ color: 'var(--fg)' }}>TokenFin</span>
-        </div>
-        <span className="text-xs" style={{ color: 'var(--fg-muted)' }}>
-          Step {step + 1} of {STEPS.length}
-        </span>
+    <div className="min-h-screen flex flex-col bg-[var(--bg-secondary)]">
+
+      <header className="flex items-center justify-between px-8 py-4 bg-[var(--bg)] border-b border-[var(--border)]">
+        <Link href="/" className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-coral rounded-xl flex items-center justify-center">
+            <Zap size={15} className="text-white" strokeWidth={2.5} />
+          </div>
+          <span className="text-[15px] font-bold text-[var(--fg)]">TokenFin</span>
+        </Link>
+        <span className="text-[12px] text-[var(--fg-tertiary)] font-medium">Workspace setup</span>
       </header>
 
-      {/* Progress bar */}
-      <div className="h-1 w-full" style={{ background: 'var(--border)' }}>
-        <div
-          className="h-1 transition-all duration-500 ease-out"
-          style={{ width: `${pct}%`, background: 'var(--accent)' }}
-        />
+      <div className="h-[3px] bg-[var(--border)]">
+        <div className="h-full bg-coral transition-all duration-500 ease-out" style={{ width: `${(step / 2) * 100}%` }} />
       </div>
 
-      {/* Step tabs */}
-      <div className="flex items-center justify-center gap-0 pt-8 pb-2 px-4">
-        {STEPS.map((label, i) => (
-          <div key={label} className="flex items-center">
-            <div className="flex flex-col items-center gap-1">
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold transition-all"
-                style={{
-                  background: i < step ? 'var(--accent)' : i === step ? 'var(--accent)' : 'var(--border)',
-                  color:      i <= step ? '#fff' : 'var(--fg-muted)',
-                }}
-              >
-                {i < step ? '✓' : i + 1}
+      <main className="flex-1 flex flex-col items-center justify-center px-4 py-16">
+        <div className="w-full max-w-[520px]">
+
+          {step < 2 && (
+            <div className="flex flex-col items-center mb-10">
+              <StepIndicator current={step} />
+              <div className="mt-6 text-center">
+                <p className="text-[11px] font-semibold tracking-widest text-[var(--fg-tertiary)] uppercase mb-1.5">Step {step + 1} of 2</p>
+                <h1 className="text-[24px] font-bold text-[var(--fg)] tracking-tight">{currentStep.label}</h1>
+                <p className="text-[13.5px] text-[var(--fg-secondary)] mt-1">{currentStep.desc}</p>
               </div>
-              <span className="text-xs hidden sm:block" style={{ color: i === step ? 'var(--accent)' : 'var(--fg-muted)' }}>
-                {label}
-              </span>
             </div>
-            {i < STEPS.length - 1 && (
-              <div className="w-12 sm:w-20 h-px mx-1 mt-[-10px]"
-                   style={{ background: i < step ? 'var(--accent)' : 'var(--border)' }} />
-            )}
-          </div>
-        ))}
-      </div>
+          )}
 
-      {/* Card */}
-      <main className="flex-1 flex items-start justify-center px-4 pt-6 pb-16">
-        <div className="card w-full max-w-lg">
           {error && (
-            <div className="mb-4 px-4 py-3 rounded-lg text-sm"
-                 style={{ background: '#fff0ed', color: 'var(--accent)', border: '1px solid #f9c5bb' }}>
+            <div className="mb-5 px-4 py-3 rounded-xl bg-[var(--red-bg)] border border-[rgba(153,60,29,0.2)] text-[12.5px] text-[var(--red)] text-center">
               {error}
             </div>
           )}
 
-          {step === 0 && <StepOrg    data={data} onNext={handleOrgNext}     saving={saving} />}
-          {step === 1 && <StepPlan   data={data} onNext={handlePlanNext}    saving={saving} />}
-          {step === 2 && <StepProject data={data} onNext={handleProjectNext} saving={saving} />}
-          {step === 3 && <StepInvite  data={data} onNext={handleInviteNext}  saving={saving} />}
-          {step === 4 && <StepDone    data={data} onGo={() => router.push('/dashboard')} />}
+          <div className="bg-[var(--bg)] rounded-2xl border border-[var(--border)] shadow-soft overflow-hidden">
+            {step === 0 && <StepProject saving={saving} onNext={handleProjectNext} />}
+            {step === 1 && <StepInvite  saving={saving} onNext={handleInviteNext} onSkip={() => setStep(2)} />}
+            {step === 2 && <StepDone    data={data} onGo={() => router.push('/dashboard')} />}
+          </div>
         </div>
       </main>
     </div>
