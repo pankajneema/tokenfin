@@ -1,0 +1,104 @@
+version: "3.9"
+
+# ─── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  redis_data:
+
+# ─── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  tokenfin:
+    driver: bridge
+
+# ─── Services ─────────────────────────────────────────────────────────────────
+services:
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - tokenfin
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Ingest (Go) ───────────────────────────────────────────────────────────────
+  ingest:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.ingest
+    restart: unless-stopped
+    ports:
+      - "${INGEST_PORT:-8001}:8001"
+    environment:
+      SUPABASE_URL:             ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      REDIS_URL:                redis://redis:6379
+      INGEST_PORT:              8001
+      ENV:                      ${ENV:-production}
+    networks:
+      - tokenfin
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Worker (Go) ───────────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+    restart: unless-stopped
+    ports:
+      - "${WORKER_PORT:-8002}:8002"
+    environment:
+      SUPABASE_URL:             ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      REDIS_URL:                redis://redis:6379
+      WORKER_PORT:              8002
+      ENV:                      ${ENV:-production}
+    networks:
+      - tokenfin
+    depends_on:
+      redis:
+        condition: service_healthy
+      ingest:
+        condition: service_healthy
+
+  # ── Web (Next.js) ─────────────────────────────────────────────────────────────
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3001}:3001"
+    environment:
+      NODE_ENV:                       production
+      NEXT_PUBLIC_SUPABASE_URL:       ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY:  ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY:      ${SUPABASE_SERVICE_ROLE_KEY}
+      # Point dashboard ingest calls at the Go service
+      NEXT_PUBLIC_INGEST_URL:         http://ingest:8001
+    networks:
+      - tokenfin
+    depends_on:
+      ingest:
+        condition: service_healthy

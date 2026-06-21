@@ -2,14 +2,11 @@
 
 ## Overview
 
-TokenFin is a two-service application:
+TokenFin is a single Next.js application — UI + API routes in one service, backed by Supabase Postgres.
 
-| Service   | Stack              | Port | Responsibility                               |
-|-----------|--------------------|------|----------------------------------------------|
-| **web**   | Next.js 14         | 3001 | UI, auth (Supabase SSR), lightweight API v1  |
-| **api**   | Python FastAPI     | 8000 | Heavy processing, limits, alerts, scheduler  |
-
-Both read/write the same **Supabase Postgres** database via the service-role key.
+| Service | Stack      | Port | Responsibility                              |
+|---------|------------|------|---------------------------------------------|
+| **web** | Next.js 14 | 3001 | UI, auth (Supabase SSR), REST API v1        |
 
 ## Folder Structure
 
@@ -28,28 +25,19 @@ tokenfin/
 │   │   └── onboarding/     Wizard steps
 │   ├── hooks/              Client-side SWR hooks
 │   ├── lib/
-│   │   ├── api/            Server-side helpers (auth, crypto)
 │   │   ├── supabase/       Browser + server clients
-│   │   ├── constants.ts    App-wide constants
-│   │   └── utils.ts        Pure utility functions
+│   │   ├── utils.ts        Pure utility functions
+│   │   └── tokenfin-sdk.ts SDK wrapper for POST /api/v1/ingest
 │   └── types/
 │       ├── db.ts           DB row types (mirrors schema.sql)
 │       └── api.ts          API wire types
-├── backend/                Python FastAPI
-│   ├── app/
-│   │   ├── main.py         FastAPI app + lifespan
-│   │   ├── core/           Config, DB client, logging
-│   │   ├── api/            Route handlers + deps.py
-│   │   ├── models/         Pydantic schemas
-│   │   ├── services/       Business logic
-│   │   └── workers/        APScheduler background jobs
-│   ├── tests/
-│   └── pyproject.toml
 ├── db/
 │   ├── migrations/         Numbered SQL migrations
 │   ├── schema.sql          Full schema reference
 │   └── functions.sql       Postgres functions
-└── .github/workflows/      CI (type-check + lint + tests)
+├── docs/                   Architecture docs
+├── CLAUDE.md               AI session reference
+└── .github/workflows/      CI (type-check + lint)
 ```
 
 ## Data Flow
@@ -59,14 +47,11 @@ User LLM call
     ↓
 TokenFin SDK (fire-and-forget, 2s timeout, circuit breaker)
     ↓
-POST /api/v1/ingest (Next.js route handler)
+POST /api/v1/ingest  (Next.js route handler)
     ↓
 Validates API key (SHA-256 lookup) → Calculates cost → Inserts usage_event
     ↓ (fire-and-forget)
 upsert_usage_agg() RPC → usage_agg table (pre-aggregated for fast dashboard)
-
-Background (Python scheduler, every 1 min):
-    alert_engine.evaluate_rules() → check thresholds/anomalies → dispatch()
 ```
 
 ## Auth Flow
@@ -79,5 +64,13 @@ Background (Python scheduler, every 1 min):
 
 ## API Versioning
 
-All Next.js API routes live under `/api/v1/`. When breaking changes are needed, 
+All API routes live under `/api/v1/`. When breaking changes are needed,
 add `/api/v2/` alongside without touching v1.
+
+## Go Backend (Planned)
+
+A separate Go service will be added for high-throughput ingest and background jobs:
+- High-throughput `POST /ingest` (10k+ req/sec)
+- Alert rule evaluation (cron every 1 min)
+- Usage aggregation worker
+- Single binary deployment, low memory footprint

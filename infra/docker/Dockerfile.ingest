@@ -1,0 +1,36 @@
+# ── Stage 1: build ────────────────────────────────────────────────────────────
+FROM golang:1.23-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /build
+
+# Cache module downloads separately from source
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+
+# Copy source and build the ingest binary
+COPY backend/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" -o /bin/ingest ./cmd/ingest
+
+# ── Stage 2: minimal runtime ───────────────────────────────────────────────────
+FROM scratch
+
+# TLS certs + timezone data from builder
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+
+COPY --from=builder /bin/ingest /ingest
+
+# Metadata
+LABEL org.opencontainers.image.title="tokenfin-ingest"
+LABEL org.opencontainers.image.description="TokenFin high-throughput ingest service"
+
+EXPOSE 8001
+
+# Run as non-root — scratch has no users, so use numeric UID
+USER 65534:65534
+
+ENTRYPOINT ["/ingest"]

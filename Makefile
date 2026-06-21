@@ -1,70 +1,101 @@
-.PHONY: dev dev-ui dev-backend install install-js install-py \
-        lint lint-js lint-py test test-py typecheck \
-        docker-up docker-down db-migrate
+.PHONY: install dev lint typecheck \
+        go-tidy go-vet go-build go-ingest go-worker \
+        sdk-install sdk-typecheck sdk-build \
+        sdk-py-install sdk-py-test sdk-py-build \
+        docker-build docker-up docker-down docker-logs \
+        db-migrate gen-types
 
-PYTHON      := /opt/homebrew/bin/python3.11
-VENV        := backend/.venv
-VENV_PYTHON := $(VENV)/bin/python
-VENV_PIP    := $(VENV)/bin/pip
-
-# ── Install ───────────────────────────────────────────────────────────────────
-install-js:
-	npm install
-
-install-py:
-	$(PYTHON) -m venv $(VENV)
-	$(VENV_PIP) install --upgrade pip
-	$(VENV_PIP) install -r backend/requirements.txt
-
-install-py-dev: install-py
-	$(VENV_PIP) install ruff pytest pytest-asyncio mypy
-
-install: install-js install-py
-
-# ── Dev ───────────────────────────────────────────────────────────────────────
-dev-ui:
-	npm run dev
-
-dev-backend:
-	cd backend && $(VENV_PYTHON) -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# ── Web (Next.js) ──────────────────────────────────────────────────────────────
+install:
+	cd web && npm install
 
 dev:
-	make -j2 dev-ui dev-backend
+	cd web && npm run dev
 
-# ── Lint ──────────────────────────────────────────────────────────────────────
-lint-js:
-	npm run lint
+lint:
+	cd web && npm run lint
 
-lint-py:
-	cd backend && ruff check app/
-
-lint: lint-js lint-py
-
-# ── Type-check ────────────────────────────────────────────────────────────────
 typecheck:
-	npm run typecheck
+	cd web && npm run typecheck
 
-# ── Test ──────────────────────────────────────────────────────────────────────
-test-py:
-	cd backend && pytest tests/ -v
+# ── Go backend ─────────────────────────────────────────────────────────────────
+go-tidy:
+	cd backend && go mod tidy
 
-test: test-py
+go-vet:
+	cd backend && go vet ./...
 
-# ── Docker ────────────────────────────────────────────────────────────────────
+go-build:
+	cd backend && go build -o bin/ingest ./cmd/ingest && go build -o bin/worker ./cmd/worker
+
+go-ingest:
+	cd backend && go run ./cmd/ingest
+
+go-worker:
+	cd backend && go run ./cmd/worker
+
+# Run both Go services in background (local dev — requires Redis running)
+go-dev: go-build
+	@echo "Starting ingest on :8001 and worker on :8002"
+	@./backend/bin/ingest & ./backend/bin/worker
+
+# ── SDK (@tokenfin/sdk) ────────────────────────────────────────────────────────
+sdk-install:
+	cd sdk && npm install
+
+sdk-typecheck:
+	cd sdk && npm run typecheck
+
+sdk-build:
+	cd sdk && npm run build
+
+# ── Python SDK (tokenfin-py) ───────────────────────────────────────────────────
+sdk-py-install:
+	cd sdk/python && pip install -e ".[dev]"
+
+sdk-py-test:
+	cd sdk/python && python -m pytest tests/ -v
+
+sdk-py-build:
+	cd sdk/python && pip install build --quiet && python -m build
+
+# ── Docker ─────────────────────────────────────────────────────────────────────
+# Build all images without starting containers
+docker-build:
+	docker compose -f infra/docker/docker-compose.yml build
+
+# Start all services (redis + ingest + worker + web)
 docker-up:
-	docker compose up --build
+	docker compose -f infra/docker/docker-compose.yml --env-file .env up --build -d
 
+# Start with logs in foreground
+docker-up-fg:
+	docker compose -f infra/docker/docker-compose.yml --env-file .env up --build
+
+# Stop and remove containers + volumes
 docker-down:
-	docker compose down -v
+	docker compose -f infra/docker/docker-compose.yml down -v
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# Tail logs for all services
+docker-logs:
+	docker compose -f infra/docker/docker-compose.yml logs -f
+
+# Start only infrastructure (redis) for local Go/Node dev
+docker-redis:
+	docker compose -f infra/docker/docker-compose.yml up redis -d
+
+# ── Database ───────────────────────────────────────────────────────────────────
 db-migrate:
-	@echo "Run migrations in order via Supabase SQL Editor:"
+	@echo "Run migrations in order via Supabase SQL Editor or CLI:"
 	@ls db/migrations/ | sort
 
-# ── Generate Supabase types ──────────────────────────────────────────────────
+# ── Generate Supabase types ───────────────────────────────────────────────────
 gen-types:
 	npx supabase gen types typescript \
 	  --project-id jolfgtrjvfueoaoopous \
-	  > src/types/db.ts
-	@echo "✓ src/types/db.ts updated"
+	  > web/src/types/db.ts
+	@echo "✓ web/src/types/db.ts updated"
+
+# ── Verify everything builds cleanly ─────────────────────────────────────────
+check: go-vet typecheck sdk-typecheck sdk-py-test
+	@echo "✓ All checks passed"

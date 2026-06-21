@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
   name         TEXT NOT NULL,
   key_hash     TEXT NOT NULL UNIQUE,   -- SHA-256 of raw key
   key_prefix   TEXT NOT NULL,          -- first 20 chars for lookup
+  env          TEXT NOT NULL DEFAULT 'production' CHECK (env IN ('production','staging','development')),
+  scopes       TEXT[] NOT NULL DEFAULT '{read,write}',
+  expires_at   TIMESTAMPTZ,
   is_active    BOOLEAN NOT NULL DEFAULT true,
   last_used_at TIMESTAMPTZ,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -180,15 +183,20 @@ CREATE TABLE IF NOT EXISTS budget_requests (
 
 -- ── alert_rules ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS alert_rules (
-  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  org_id       UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  project_id   UUID REFERENCES projects(id),
-  name         TEXT NOT NULL,
-  trigger_type TEXT NOT NULL CHECK (trigger_type IN ('threshold','anomaly','limit_breach')),
-  threshold    NUMERIC(12,2),
-  channels     JSONB NOT NULL DEFAULT '{"email":true}',  -- email,slack,telegram,webhook
-  is_active    BOOLEAN NOT NULL DEFAULT true,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  org_id          UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id      UUID REFERENCES projects(id),
+  name            TEXT NOT NULL,
+  trigger_type    TEXT NOT NULL CHECK (trigger_type IN ('threshold','anomaly','limit_breach','member')),
+  condition       TEXT NOT NULL DEFAULT '',     -- human-readable condition description
+  scope           TEXT NOT NULL DEFAULT 'All projects',  -- what the rule applies to
+  threshold       NUMERIC(12,2),
+  cooldown_hours  INT NOT NULL DEFAULT 4,
+  fired_count     INT NOT NULL DEFAULT 0,
+  last_fired_at   TIMESTAMPTZ,
+  channels        JSONB NOT NULL DEFAULT '{"email":true}',  -- email,slack,telegram,webhook
+  is_active       BOOLEAN NOT NULL DEFAULT true,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 -- ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
 
@@ -205,6 +213,43 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS notifications_user_read ON notifications(user_id, is_read, created_at DESC);
 -- ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+
+-- ── org_models ───────────────────────────────────────────────
+-- Orgs explicitly add models they want to track; no models pre-loaded.
+CREATE TABLE IF NOT EXISTS org_models (
+  id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  org_id    UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  model     TEXT NOT NULL,
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(org_id, model)
+);
+CREATE INDEX IF NOT EXISTS org_models_org ON org_models(org_id);
+-- ALTER TABLE org_models ENABLE ROW LEVEL SECURITY;
+
+-- ── org_integrations ─────────────────────────────────────────
+-- Stores which external services each org has connected.
+CREATE TABLE IF NOT EXISTS org_integrations (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  org_id          UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  integration     TEXT NOT NULL,           -- 'slack','datadog','grafana', etc.
+  config          JSONB NOT NULL DEFAULT '{}',  -- encrypted creds placeholder
+  is_active       BOOLEAN NOT NULL DEFAULT true,
+  connected_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_synced_at  TIMESTAMPTZ,
+  sync_ok         BOOLEAN NOT NULL DEFAULT true,
+  detail          TEXT,                    -- e.g. channel name, workspace URL
+  UNIQUE(org_id, integration)
+);
+CREATE INDEX IF NOT EXISTS org_integrations_org ON org_integrations(org_id);
+-- ALTER TABLE org_integrations ENABLE ROW LEVEL SECURITY;
+
+-- ── user_preferences ─────────────────────────────────────────
+-- Per-user notification & UI settings stored as JSONB.
+CREATE TABLE IF NOT EXISTS user_preferences (
+  user_id   UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  settings  JSONB NOT NULL DEFAULT '{}'
+);
+-- ALTER TABLE user_preferences ENABLE ROW LEVEL SECURITY;
 
 -- ── model_prices seed ────────────────────────────────────────
 INSERT INTO model_prices (model, provider, input_per_1m, output_per_1m) VALUES

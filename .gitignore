@@ -1,5 +1,8 @@
 # ── Dependencies ──────────────────────────────────────────────
-/node_modules
+**/node_modules
+# ── Build artifacts ────────────────────────────────────────
+sdk/dist/
+backend/bin/
 /.pnp
 .pnp.js
 .yarn/install-state.gz

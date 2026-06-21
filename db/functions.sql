@@ -21,6 +21,30 @@ BEGIN
 END;
 $$;
 
+-- ── Batch aggregate upsert (called by Go worker) ─────────────
+-- Accepts a JSONB array of rows, each with keys matching the
+-- p_* parameter names of the single-row version above.
+-- Increments counters atomically on conflict — safe for concurrent workers.
+CREATE OR REPLACE FUNCTION upsert_usage_agg_batch(rows JSONB)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  INSERT INTO usage_agg (bucket, project_id, org_id, model, total_tokens, cost_usd, request_count)
+  SELECT
+    (r->>'p_bucket')::DATE,
+    (r->>'p_project_id')::UUID,
+    (r->>'p_org_id')::UUID,
+    (r->>'p_model')::TEXT,
+    (r->>'p_tokens')::BIGINT,
+    (r->>'p_cost')::NUMERIC,
+    (r->>'p_requests')::INT
+  FROM jsonb_array_elements(rows) AS r
+  ON CONFLICT (bucket, project_id, model) DO UPDATE SET
+    total_tokens  = usage_agg.total_tokens  + EXCLUDED.total_tokens,
+    cost_usd      = usage_agg.cost_usd      + EXCLUDED.cost_usd,
+    request_count = usage_agg.request_count + EXCLUDED.request_count;
+END;
+$$;
+
 -- ── Cost summary for a project ───────────────────────────────
 CREATE OR REPLACE FUNCTION project_cost_summary(
   p_project_id UUID,
