@@ -2,12 +2,12 @@
 import { useState } from 'react'
 import {
   Plus, Copy, Check, Trash2, Key, MoreHorizontal,
-  Eye, EyeOff, Search, Shield,
+  Search, Shield,
   AlertTriangle, X, ChevronDown, Zap, Clock,
-  BarChart3, Activity,
+  BarChart3, Activity, ToggleLeft, ToggleRight,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { ApiKeyRow, ProjectOption } from './page'
+import type { ApiKeyRow, ProjectOption, TeamOption, MemberOption } from './page'
 
 /* ── Types ─────────────────────────────────────────────────── */
 type Env   = 'production' | 'staging' | 'development'
@@ -52,28 +52,65 @@ function ReqBar({ n, maxN, color }: { n: number; maxN: number; color: string }) 
   )
 }
 
+/* ── Status badge ── */
+function StatusBadge({ active }: { active: boolean }) {
+  return active ? (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[var(--green-bg)] text-teal border border-teal/20 flex-shrink-0">
+      <span className="w-1.5 h-1.5 rounded-full bg-teal" />
+      Active
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[var(--red-bg)] text-[var(--red)] border border-[var(--red)]/20 flex-shrink-0">
+      <span className="w-1.5 h-1.5 rounded-full bg-[var(--red)]" />
+      Inactive
+    </span>
+  )
+}
+
 /* ══════════════════════════════════════════════════════════════
    CREATE KEY MODAL
 ══════════════════════════════════════════════════════════════ */
 function CreateKeyModal({
-  projects, orgId, userId, onClose, onCreate,
+  projects, teams, members, orgId, userId, onClose, onCreate,
 }: {
   projects: ProjectOption[]
+  teams:    TeamOption[]
+  members:  MemberOption[]
   orgId:    string
   userId:   string
   onClose:  () => void
   onCreate: (key: ApiKeyRow, rawKey: string) => void
 }) {
-  const [step,    setStep]    = useState<'form' | 'reveal'>('form')
-  const [name,    setName]    = useState('')
-  const [env,     setEnv]     = useState<Env>('production')
-  const [project, setProject] = useState(projects[0]?.id ?? '')
-  const [scopes,  setScopes]  = useState<Scope[]>(['read', 'write'])
-  const [expiry,  setExpiry]  = useState<'none' | '30d' | '90d' | '1y'>('none')
-  const [loading, setLoading] = useState(false)
-  const [rawKey,  setRawKey]  = useState('')
-  const [copied,  setCopied]  = useState(false)
-  const [error,   setError]   = useState<string | null>(null)
+  const [step,         setStep]         = useState<'form' | 'reveal'>('form')
+  const [name,         setName]         = useState('')
+  const [env,          setEnv]          = useState<Env>('production')
+  const [project,      setProject]      = useState(projects[0]?.id ?? '')
+  const [assignType,   setAssignType]   = useState<'member' | 'team'>('member')
+  const [assignedTeam, setAssignedTeam] = useState<string>('')
+  const [assignedTo,   setAssignedTo]   = useState<string>('')
+  const [scopes,       setScopes]       = useState<Scope[]>(['read', 'write'])
+  const [expiry,       setExpiry]       = useState<'none' | '30d' | '90d' | '1y'>('none')
+  const [loading,      setLoading]      = useState(false)
+  const [rawKey,       setRawKey]       = useState('')
+  const [copied,       setCopied]       = useState(false)
+  const [error,        setError]        = useState<string | null>(null)
+
+  // Members visible in the dropdown — filtered by team when assignType = 'team'
+  const visibleMembers = assignType === 'team' && assignedTeam
+    ? members.filter(m => m.teamId === assignedTeam)
+    : members
+
+  // Reset member when switching type or team
+  function switchAssignType(t: 'member' | 'team') {
+    setAssignType(t)
+    setAssignedTeam('')
+    setAssignedTo('')
+  }
+
+  function handleTeamChange(tid: string) {
+    setAssignedTeam(tid)
+    setAssignedTo('')  // reset member whenever team changes
+  }
 
   function toggleScope(s: Scope) {
     setScopes(prev =>
@@ -87,6 +124,10 @@ function CreateKeyModal({
     return new Date(Date.now() + days * 86400_000).toISOString()
   }
 
+  // Disable Create if required fields are missing
+  const canCreate = name.trim() && project && assignedTo &&
+    (assignType === 'member' || (assignType === 'team' && assignedTeam))
+
   async function handleCreate() {
     setLoading(true); setError(null)
     try {
@@ -98,30 +139,40 @@ function CreateKeyModal({
           project_id: project,
           name,
           created_by: userId,
+          user_id:    assignedTo,
+          team_id:    assignType === 'team' ? (assignedTeam || null) : null,
           env,
           scopes,
           expires_at: expiresAt(),
         }),
       })
       if (!res.ok) {
-        const msg = await res.text()
-        throw new Error(msg)
+        const json = await res.json().catch(() => null)
+        throw new Error(json?.error ?? 'Failed to create key')
       }
       const data = await res.json()
       setRawKey(data.raw_key)
+      const assignedMember = members.find(m => m.id === assignedTo)
+      const assignedTeamObj = teams.find(t => t.id === assignedTeam)
       const newKey: ApiKeyRow = {
-        id:            data.id,
-        name:          data.name,
-        keyPrefix:     data.key_prefix,
-        env:           data.env ?? env,
-        scopes:        data.scopes ?? scopes,
-        projectId:     data.project_id,
-        projectName:   projects.find(p => p.id === data.project_id)?.name ?? '—',
-        expiresAt:     data.expires_at ?? null,
-        isActive:      true,
-        lastUsedAt:    null,
-        createdAt:     data.created_at,
-        createdByName: 'You',
+        id:               data.id,
+        name:             data.name,
+        keyPrefix:        data.key_prefix,
+        env:              data.env ?? env,
+        scopes:           data.scopes ?? scopes,
+        projectId:        data.project_id,
+        projectName:      projects.find(p => p.id === data.project_id)?.name ?? '—',
+        expiresAt:        data.expires_at ?? null,
+        isActive:         true,
+        lastUsedAt:       null,
+        createdAt:        data.created_at,
+        createdByName:    'You',
+        assignedToId:     assignedTo || null,
+        assignedToName:   assignedMember?.name ?? null,
+        assignedTeamId:   assignedTeam || null,
+        assignedTeamName: assignedTeamObj?.name ?? null,
+        requests30d:      0,
+        cost30d:          0,
       }
       onCreate(newKey, data.raw_key)
       setStep('reveal')
@@ -152,7 +203,7 @@ function CreateKeyModal({
                 </div>
                 <div>
                   <h2 className="text-[14.5px] font-bold text-[var(--fg)]">Create API key</h2>
-                  <p className="text-[11.5px] text-[var(--fg-secondary)]">Key will be shown once — copy it immediately</p>
+                  <p className="text-[11.5px] text-[var(--fg-secondary)]">Key can be copied anytime from the Keys list</p>
                 </div>
               </div>
               <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-hover)] transition-colors">
@@ -198,6 +249,86 @@ function CreateKeyModal({
                 </div>
               )}
 
+              {/* ── Assignment section ── */}
+              <div>
+                <label className="text-[11px] font-semibold text-[var(--fg-secondary)] uppercase tracking-wider block mb-2">
+                  Assign to <span className="text-[var(--red)]">*</span>
+                </label>
+
+                {/* Toggle: Member / Team */}
+                <div className="flex gap-1.5 mb-3 bg-[var(--bg-secondary)] p-1 rounded-xl w-fit">
+                  {(['member', 'team'] as const).map(t => (
+                    <button
+                      key={t}
+                      onClick={() => switchAssignType(t)}
+                      className={cn(
+                        'px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all capitalize',
+                        assignType === t
+                          ? 'bg-[var(--fg)] text-[var(--bg)] shadow-sm'
+                          : 'text-[var(--fg-secondary)] hover:text-[var(--fg)]'
+                      )}>
+                      {t === 'member' ? 'Member' : 'Team'}
+                    </button>
+                  ))}
+                </div>
+
+                {members.length === 0 ? (
+                  <p className="text-[12px] text-[var(--amber)] bg-[var(--amber-bg)] border border-[var(--amber)]/20 px-3 py-2 rounded-lg">
+                    No team members found. Invite members first before creating keys.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {/* Team dropdown (only in team mode) */}
+                    {assignType === 'team' && (
+                      <div>
+                        <label className="text-[10.5px] font-medium text-[var(--fg-tertiary)] block mb-1">Team</label>
+                        {teams.length === 0 ? (
+                          <p className="text-[12px] text-[var(--amber)] bg-[var(--amber-bg)] border border-[var(--amber)]/20 px-3 py-2 rounded-lg">
+                            No teams found. <a href="/dashboard/teams" className="underline font-medium">Create a team →</a>
+                          </p>
+                        ) : (
+                          <div className="relative">
+                            <select value={assignedTeam} onChange={e => handleTeamChange(e.target.value)}
+                              className="input appearance-none cursor-pointer">
+                              <option value="">— Select a team —</option>
+                              {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                            <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--fg-tertiary)] pointer-events-none" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Member dropdown */}
+                    {(assignType === 'member' || assignedTeam) && (
+                      <div>
+                        <label className="text-[10.5px] font-medium text-[var(--fg-tertiary)] block mb-1">Member</label>
+                        {assignType === 'team' && assignedTeam && visibleMembers.length === 0 ? (
+                          <p className="text-[12px] text-[var(--amber)] bg-[var(--amber-bg)] border border-[var(--amber)]/20 px-3 py-2 rounded-lg">
+                            No members assigned to this team yet.
+                          </p>
+                        ) : (
+                          <div className="relative">
+                            <select value={assignedTo} onChange={e => setAssignedTo(e.target.value)}
+                              className="input appearance-none cursor-pointer">
+                              <option value="">— Select a member —</option>
+                              {visibleMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                            </select>
+                            <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--fg-tertiary)] pointer-events-none" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <p className="text-[11px] text-[var(--fg-tertiary)]">
+                      {assignType === 'team'
+                        ? 'Team + member tracked separately · 1 active key per member per project'
+                        : 'Each member can have 1 active key per project · usage attributed in analytics'}
+                    </p>
+                  </div>
+                )}
+              </div>
+
               {/* Scopes */}
               <div>
                 <label className="text-[11px] font-semibold text-[var(--fg-secondary)] uppercase tracking-wider block mb-1.5">Permissions</label>
@@ -238,7 +369,7 @@ function CreateKeyModal({
 
             <div className="px-6 py-4 border-t border-[var(--border)] flex gap-2">
               <button onClick={onClose} className="btn-secondary flex-1 justify-center">Cancel</button>
-              <button onClick={handleCreate} disabled={!name.trim() || !project || loading}
+              <button onClick={handleCreate} disabled={!canCreate || loading}
                 className="btn-primary flex-1 justify-center disabled:opacity-40">
                 {loading
                   ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />Generating…</>
@@ -251,8 +382,8 @@ function CreateKeyModal({
             <div className="w-14 h-14 rounded-2xl bg-[var(--green-bg)] flex items-center justify-center mx-auto mb-4">
               <Shield size={24} className="text-teal" />
             </div>
-            <h3 className="text-[16px] font-bold text-[var(--fg)] mb-1">Key created — copy now</h3>
-            <p className="text-[12.5px] text-[var(--fg-secondary)] mb-5">This is the only time your full key is shown. Store it securely.</p>
+            <h3 className="text-[16px] font-bold text-[var(--fg)] mb-1">Key created</h3>
+            <p className="text-[12.5px] text-[var(--fg-secondary)] mb-5">Copy your key below. You can also copy it anytime from the Keys list.</p>
 
             <div className="bg-[var(--bg-secondary)] rounded-xl p-3 mb-4 text-left">
               <p className="text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider mb-2">Your API key</p>
@@ -320,18 +451,20 @@ function DeleteConfirm({ keyName, onConfirm, onClose }: { keyName: string; onCon
 interface Props {
   initialKeys: ApiKeyRow[]
   projects:    ProjectOption[]
+  teams:       TeamOption[]
+  members:     MemberOption[]
   orgId:       string
   userId:      string
 }
 
-export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
+export function KeysClient({ initialKeys, projects, teams, members, orgId, userId }: Props) {
   const [keys,       setKeys]       = useState<ApiKeyRow[]>(initialKeys)
   const [filter,     setFilter]     = useState<'all' | 'active' | 'inactive'>('all')
   const [search,     setSearch]     = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [deleteId,   setDeleteId]   = useState<string | null>(null)
   const [actionMenu, setActionMenu] = useState<string | null>(null)
-  const [revealId,   setRevealId]   = useState<string | null>(null)
+  // revealId removed — key prefix is always shown; full key only visible at creation
   const [copiedId,   setCopiedId]   = useState<string | null>(null)
   const [toggling,   setToggling]   = useState<string | null>(null)
   const [deleting,   setDeleting]   = useState(false)
@@ -347,8 +480,9 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
   })
 
   const totalActive = keys.filter(k => k.isActive).length
-  const maxReq      = 0   // no real usage data yet
-  const totalCost   = 0   // no real usage data yet
+  const totalReq    = keys.reduce((s, k) => s + k.requests30d, 0)
+  const totalCost   = keys.reduce((s, k) => s + k.cost30d, 0)
+  const maxReq      = Math.max(...keys.map(k => k.requests30d), 1)
 
   function handleCreate(key: ApiKeyRow) {
     setKeys(prev => [key, ...prev])
@@ -358,6 +492,7 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
     const key = keys.find(k => k.id === id)
     if (!key) return
     setToggling(id)
+    setActionMenu(null)
     try {
       await fetch('/api/v1/keys', {
         method: 'PATCH',
@@ -390,7 +525,7 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
   const deleteKey = keys.find(k => k.id === deleteId)
 
   return (
-    <div className="space-y-5 max-w-[1100px]">
+    <div className="space-y-5">
 
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -415,10 +550,10 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
       {/* ── Stats strip ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Total keys',    value: String(keys.length),    icon: Key,       color: 'text-coral'           },
-          { label: 'Active',        value: String(totalActive),    icon: Activity,  color: 'text-teal'            },
-          { label: 'Requests 30d',  value: String(maxReq),         icon: BarChart3, color: 'text-[var(--blue)]'   },
-          { label: 'Cost 30d',      value: `$${totalCost.toFixed(2)}`, icon: Zap,  color: 'text-[var(--amber)]'  },
+          { label: 'Total keys',    value: String(keys.length),        icon: Key,       color: 'text-coral'           },
+          { label: 'Active',        value: String(totalActive),        icon: Activity,  color: 'text-teal'            },
+          { label: 'Requests 30d',  value: totalReq.toLocaleString(),  icon: BarChart3, color: 'text-[var(--blue)]'   },
+          { label: 'Cost 30d',      value: `$${totalCost.toFixed(2)}`, icon: Zap,       color: 'text-[var(--amber)]'  },
         ].map(s => (
           <div key={s.label} className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl px-4 py-3 flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-[var(--bg-secondary)] flex items-center justify-center flex-shrink-0">
@@ -455,9 +590,9 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
       </div>
 
       {/* ── Keys table ── */}
-      <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
-        <div className="grid grid-cols-[2.5fr_1.2fr_1.2fr_1fr_1fr_1fr_80px] gap-2 px-5 py-3 border-b border-[var(--border)] bg-[var(--bg-secondary)]/50">
-          {['Key', 'Prefix', 'Project', 'Permissions', 'Requests 30d', 'Last used', ''].map(h => (
+      <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl">
+        <div className="grid grid-cols-[2.2fr_1.2fr_1.1fr_1fr_1fr_1fr_90px] gap-2 px-5 py-3 border-b border-[var(--border)] bg-[var(--bg-secondary)]/50 rounded-t-2xl">
+          {['Key / Status', 'API Key', 'Project', 'Permissions', 'Requests 30d', 'Last used', ''].map(h => (
             <div key={h} className="text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider">{h}</div>
           ))}
         </div>
@@ -479,30 +614,45 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
             </div>
           ) : filtered.map(k => {
             const em      = ENV_META[k.env]
-            const isRev   = revealId === k.id
             const expWarn = isExpiringSoon(k.expiresAt)
+            const isBusy  = toggling === k.id
 
             return (
               <div key={k.id}
-                className={cn('grid grid-cols-[2.5fr_1.2fr_1.2fr_1fr_1fr_1fr_80px] gap-2 items-center px-5 py-4 transition-colors hover:bg-[var(--bg-hover)] group',
-                  !k.isActive && 'opacity-60')}>
+                className={cn(
+                  'grid grid-cols-[2.2fr_1.2fr_1.1fr_1fr_1fr_1fr_90px] gap-2 items-center px-5 py-4 transition-colors hover:bg-[var(--bg-hover)] group',
+                  !k.isActive && 'bg-[var(--bg-secondary)]/40'
+                )}>
 
-                {/* Name + env + expiry */}
+                {/* Name + env + status badge */}
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-[13px] font-semibold text-[var(--fg)] truncate">{k.name}</p>
+                    <p className={cn(
+                      'text-[13px] font-semibold truncate',
+                      k.isActive ? 'text-[var(--fg)]' : 'text-[var(--fg-tertiary)]'
+                    )}>
+                      {k.name}
+                    </p>
                     <span className={cn('px-1.5 py-0.5 rounded-md text-[9.5px] font-bold uppercase tracking-wide flex-shrink-0', em.bg, em.text)}>
                       {em.label}
                     </span>
-                    {!k.isActive && (
-                      <span className="px-1.5 py-0.5 rounded-md text-[9.5px] font-bold bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]">Inactive</span>
-                    )}
+                    <StatusBadge active={k.isActive} />
                   </div>
-                  <div className="flex items-center gap-1.5 mt-0.5">
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                     <Clock size={10} className="text-[var(--fg-tertiary)]" />
                     <span className="text-[10.5px] text-[var(--fg-tertiary)]">
                       Created {new Date(k.createdAt).toLocaleDateString()} by {k.createdByName}
                     </span>
+                    {k.assignedTeamName && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-[var(--green-bg)] text-teal">
+                        ⊞ {k.assignedTeamName}
+                      </span>
+                    )}
+                    {k.assignedToName && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-[var(--blue-bg)] text-[var(--blue)]">
+                        → {k.assignedToName}
+                      </span>
+                    )}
                     {expWarn && k.expiresAt && (
                       <span className="flex items-center gap-0.5 text-[10px] font-semibold text-[var(--amber)]">
                         <AlertTriangle size={9} /> Expires {new Date(k.expiresAt).toLocaleDateString()}
@@ -511,16 +661,16 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
                   </div>
                 </div>
 
-                {/* Prefix */}
+                {/* API Key */}
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <code className="text-[11.5px] font-mono text-[var(--fg-secondary)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded-lg">
-                      {isRev ? k.keyPrefix : `${k.keyPrefix.slice(0, 8)}••••`}
+                    <code className="text-[11px] font-mono text-[var(--fg-secondary)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded-lg truncate max-w-[200px]">
+                      {k.keyPrefix}
                     </code>
-                    <button onClick={() => setRevealId(isRev ? null : k.id)} className="text-[var(--fg-tertiary)] hover:text-[var(--fg)] transition-colors">
-                      {isRev ? <EyeOff size={12} /> : <Eye size={12} />}
-                    </button>
-                    <button onClick={() => copyPrefix(k.keyPrefix, k.id)} className="text-[var(--fg-tertiary)] hover:text-coral transition-colors">
+                    <button
+                      onClick={() => copyPrefix(k.keyPrefix, k.id)}
+                      className="text-[var(--fg-tertiary)] hover:text-coral transition-colors flex-shrink-0"
+                      title="Copy API key">
                       {copiedId === k.id ? <Check size={12} className="text-teal" /> : <Copy size={12} />}
                     </button>
                   </div>
@@ -541,21 +691,32 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
                 </div>
 
                 {/* Requests */}
-                <div><ReqBar n={0} maxN={1} color={em.dot} /></div>
+                <div><ReqBar n={k.requests30d} maxN={maxReq} color={em.dot} /></div>
 
                 {/* Last used */}
                 <div className="text-[11.5px] text-[var(--fg-tertiary)]">{reltime(k.lastUsedAt)}</div>
 
                 {/* Actions */}
-                <div className="flex items-center justify-end gap-1 relative">
-                  <button onClick={() => toggleStatus(k.id)} disabled={toggling === k.id}
-                    className={cn('w-8 h-4 rounded-full relative transition-colors flex-shrink-0 overflow-hidden',
-                      k.isActive ? 'bg-teal' : 'bg-[var(--bg-tertiary)]')}
-                    title={k.isActive ? 'Deactivate' : 'Activate'}>
-                    <span className={cn('absolute top-[2px] left-[2px] w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-200',
-                      k.isActive ? 'translate-x-[14px]' : 'translate-x-0')} />
+                <div className="flex items-center justify-end gap-1.5 relative">
+                  {/* Toggle switch */}
+                  <button
+                    onClick={() => toggleStatus(k.id)}
+                    disabled={isBusy}
+                    title={k.isActive ? 'Click to deactivate' : 'Click to activate'}
+                    className={cn(
+                      'w-9 h-5 rounded-full relative transition-all flex-shrink-0 border',
+                      k.isActive
+                        ? 'bg-teal border-teal/40'
+                        : 'bg-[var(--bg-tertiary)] border-[var(--border-strong)]',
+                      isBusy && 'opacity-50 cursor-wait'
+                    )}>
+                    <span className={cn(
+                      'absolute top-[3px] left-[3px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-transform duration-200',
+                      k.isActive ? 'translate-x-[16px]' : 'translate-x-0'
+                    )} />
                   </button>
 
+                  {/* More menu */}
                   <button onClick={() => setActionMenu(actionMenu === k.id ? null : k.id)}
                     className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--fg)] transition-colors">
                     <MoreHorizontal size={14} />
@@ -564,13 +725,33 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
                   {actionMenu === k.id && (
                     <>
                       <div className="fixed inset-0 z-10" onClick={() => setActionMenu(null)} />
-                      <div className="absolute right-0 top-full mt-1 z-20 w-44 bg-[var(--bg)] border border-[var(--border)] rounded-xl shadow-xl py-1.5 overflow-hidden">
-                        <button onClick={() => { copyPrefix(k.keyPrefix, k.id); setActionMenu(null) }}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] font-medium text-[var(--fg)] hover:bg-[var(--bg-hover)] transition-colors">
-                          <Copy size={13} /> Copy prefix
+                      <div className="absolute right-0 top-full mt-1 z-50 w-48 bg-[var(--bg)] border border-[var(--border)] rounded-xl shadow-xl py-1.5">
+
+                        {/* Status toggle */}
+                        <button
+                          onClick={() => toggleStatus(k.id)}
+                          disabled={isBusy}
+                          className={cn(
+                            'w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] font-medium transition-colors',
+                            k.isActive
+                              ? 'text-[var(--amber)] hover:bg-[var(--amber-bg)]'
+                              : 'text-teal hover:bg-[var(--green-bg)]'
+                          )}>
+                          {k.isActive
+                            ? <><ToggleLeft  size={14} /> Deactivate key</>
+                            : <><ToggleRight size={14} /> Activate key</>}
                         </button>
+
+                        <button
+                          onClick={() => { copyPrefix(k.keyPrefix, k.id); setActionMenu(null) }}
+                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] font-medium text-[var(--fg)] hover:bg-[var(--bg-hover)] transition-colors">
+                          <Copy size={13} /> Copy key
+                        </button>
+
                         <div className="border-t border-[var(--border)] my-1" />
-                        <button onClick={() => { setDeleteId(k.id); setActionMenu(null) }}
+
+                        <button
+                          onClick={() => { setDeleteId(k.id); setActionMenu(null) }}
                           className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] text-[var(--red)] hover:bg-[var(--red-bg)] transition-colors">
                           <Trash2 size={13} /> Revoke key
                         </button>
@@ -595,6 +776,8 @@ export function KeysClient({ initialKeys, projects, orgId, userId }: Props) {
       {showCreate && (
         <CreateKeyModal
           projects={projects}
+          teams={teams}
+          members={members}
           orgId={orgId}
           userId={userId}
           onClose={() => setShowCreate(false)}

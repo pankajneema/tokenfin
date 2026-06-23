@@ -69,7 +69,7 @@ export function CostsClient({ rows: initialRows }: Props) {
 
   if (initialRows.length === 0) {
     return (
-      <div className="space-y-5 max-w-[1100px]">
+      <div className="space-y-5">
         <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Cost Reports</h1>
         <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-10 text-center">
           <DollarSign size={32} className="mx-auto mb-3 text-[var(--fg-tertiary)]" />
@@ -81,7 +81,7 @@ export function CostsClient({ rows: initialRows }: Props) {
   }
 
   return (
-    <div className="space-y-5 max-w-[1100px]">
+    <div className="space-y-5">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">

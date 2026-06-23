@@ -1,6 +1,6 @@
 'use client'
 import { useState, useMemo } from 'react'
-import { ArrowUpRight, ArrowDownRight, Download, Filter, ChevronUp, ChevronDown, Cpu } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, Download, Check, Filter, ChevronUp, ChevronDown, Cpu } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /* ═══════════════════════════════════════════════════════════
@@ -29,19 +29,74 @@ export interface ModelRow {
 
 interface Props { models: ModelRow[] }
 
-const PROVIDER_META: Record<string, { label: string; color: string }> = {
-  Anthropic: { label: 'Anthropic', color: '#D97757' },
-  OpenAI:    { label: 'OpenAI',    color: '#10A37F' },
-  Google:    { label: 'Google',    color: '#4285F4' },
+/* ── Provider color palette for dynamic providers ── */
+const PROVIDER_COLORS: Record<string, string> = {
+  Anthropic: '#D97757',
+  OpenAI:    '#10A37F',
+  Google:    '#4285F4',
+  Other:     '#8B5CF6',
 }
+function providerColor(p: string) {
+  return PROVIDER_COLORS[p] ?? '#6B7280'
+}
+function providerAbbr(p: string) {
+  return p.slice(0, 2).toUpperCase()
+}
+
 const TIER_META: Record<string, { label: string; bg: string; color: string }> = {
-  frontier: { label: 'Frontier', bg: 'bg-[#8B5CF6]/10', color: 'text-[#8B5CF6]' },
-  standard: { label: 'Standard', bg: 'bg-[var(--blue-bg)]',  color: 'text-[var(--blue)]'  },
-  fast:     { label: 'Fast',     bg: 'bg-[var(--green-bg)]', color: 'text-teal'             },
+  frontier: { label: 'Frontier', bg: 'bg-[#8B5CF6]/10',          color: 'text-[#8B5CF6]' },
+  standard: { label: 'Standard', bg: 'bg-[var(--blue-bg)]',       color: 'text-[var(--blue)]'  },
+  fast:     { label: 'Fast',     bg: 'bg-[var(--green-bg)]',      color: 'text-teal'            },
 }
 
 /* ═══════════════════════════════════════════════════════════
-   TREND LINE — uses real prev vs current cost, no fake data
+   HELPERS
+═══════════════════════════════════════════════════════════ */
+function fmtTokens(millions: number): string {
+  if (millions >= 1000) return `${(millions / 1000).toFixed(1)}B`
+  if (millions >= 1)    return `${millions.toFixed(2)}M`
+  if (millions >= 0.001) return `${(millions * 1000).toFixed(0)}K`
+  if (millions > 0)     return '<1K'
+  return '—'
+}
+
+function fmtCost(usd: number): string {
+  if (usd === 0)   return '$0.00'
+  if (usd < 0.01)  return `$${usd.toFixed(4)}`
+  if (usd < 1)     return `$${usd.toFixed(3)}`
+  return `$${usd.toFixed(2)}`
+}
+
+function DeltaBadge({ curr, prev, size = 10 }: { curr: number; prev: number; size?: number }) {
+  if (prev === 0) return <span className="text-[10px] text-[var(--fg-tertiary)]">New</span>
+  const d = ((curr - prev) / prev) * 100
+  return (
+    <span className={cn('flex items-center gap-0.5 font-semibold', d > 0 ? 'text-[var(--red)]' : 'text-teal')}
+      style={{ fontSize: size }}>
+      {d > 0 ? <ArrowUpRight size={size} /> : <ArrowDownRight size={size} />}
+      {Math.abs(d).toFixed(1)}%
+    </span>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CSV EXPORT
+═══════════════════════════════════════════════════════════ */
+function downloadModelsCSV(models: ModelRow[]) {
+  const headers = ['Model','Provider','Tier','Cost 30d ($)','vs Prior (%)','Input Tokens (M)','Output Tokens (M)','API Calls','$/1M tokens']
+  const lines = models.map(m => {
+    const delta = m.costPrev > 0 ? ((m.cost30d - m.costPrev) / m.costPrev * 100).toFixed(1) + '%' : 'N/A'
+    return [m.name, m.provider, m.tier, m.cost30d.toFixed(4), delta, m.inputTok.toFixed(4), m.outputTok.toFixed(4), m.calls30d, m.costPer1M.toFixed(3)]
+  })
+  const csv = [headers, ...lines].map(r => r.join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = 'tokenfin-by-model.csv'; a.click()
+  URL.revokeObjectURL(url)
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TREND LINE
 ═══════════════════════════════════════════════════════════ */
 function TrendLine({ prev, curr, color }: { prev: number; curr: number; color: string }) {
   const w = 80, h = 24, pad = 3
@@ -62,7 +117,7 @@ function TrendLine({ prev, curr, color }: { prev: number; curr: number; color: s
    EFFICIENCY BADGE
 ═══════════════════════════════════════════════════════════ */
 function EffBadge({ costPer1M }: { costPer1M: number }) {
-  const stars = costPer1M < 0.5 ? 5 : costPer1M < 1.5 ? 4 : costPer1M < 5 ? 3 : costPer1M < 10 ? 2 : 1
+  const stars = costPer1M === 0 ? 0 : costPer1M < 0.5 ? 5 : costPer1M < 1.5 ? 4 : costPer1M < 5 ? 3 : costPer1M < 10 ? 2 : 1
   return (
     <div className="flex gap-0.5">
       {Array.from({ length: 5 }, (_, i) => (
@@ -76,14 +131,32 @@ function EffBadge({ costPer1M }: { costPer1M: number }) {
    PAGE
 ═══════════════════════════════════════════════════════════ */
 export function ModelsClient({ models }: Props) {
-  const [provFil,  setProvFil]  = useState<string>('all')
-  const [tierFil,  setTierFil]  = useState<string>('all')
-  const [sortKey,  setSortKey]  = useState<SortKey>('cost')
-  const [sortDir,  setSortDir]  = useState<SortDir>('desc')
+  const [provFil,    setProvFil]    = useState<string>('all')
+  const [tierFil,    setTierFil]    = useState<string>('all')
+  const [sortKey,    setSortKey]    = useState<SortKey>('cost')
+  const [sortDir,    setSortDir]    = useState<SortDir>('desc')
+  const [exportDone, setExportDone] = useState(false)
+
+  function handleExport() {
+    downloadModelsCSV(filtered)
+    setExportDone(true)
+    setTimeout(() => setExportDone(false), 2500)
+  }
+
+  const dateRange = (() => {
+    const now = new Date()
+    const start = new Date(now.getTime() - 30 * 86400_000)
+    return `${start.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${now.toLocaleDateString('en-US',{month:'short',day:'numeric'})}`
+  })()
 
   const totalCost  = models.reduce((s, m) => s + m.cost30d, 0)
-  const totalTok   = models.reduce((s, m) => s + m.inputTok + m.outputTok, 0)
+  const totalTokM  = models.reduce((s, m) => s + m.inputTok + m.outputTok, 0)
   const totalCalls = models.reduce((s, m) => s + m.calls30d, 0)
+
+  // Derive providers dynamically — only providers that appear in real data
+  const activeProviders = useMemo(() =>
+    Array.from(new Set(models.map(m => m.provider))).sort(),
+    [models])
 
   const filtered = useMemo(() => models
     .filter(m => provFil === 'all' || m.provider === provFil)
@@ -93,12 +166,12 @@ export function ModelsClient({ models }: Props) {
                : sortKey === 'tokens'     ? a.inputTok + a.outputTok
                : sortKey === 'calls'      ? a.calls30d
                : sortKey === 'efficiency' ? a.costPer1M
-               : (a.cost30d / totalCost)
+               : (a.cost30d / (totalCost || 1))
       const bv = sortKey === 'cost'       ? b.cost30d
                : sortKey === 'tokens'     ? b.inputTok + b.outputTok
                : sortKey === 'calls'      ? b.calls30d
                : sortKey === 'efficiency' ? b.costPer1M
-               : (b.cost30d / totalCost)
+               : (b.cost30d / (totalCost || 1))
       return sortDir === 'desc' ? bv - av : av - bv
     }), [models, provFil, tierFil, sortKey, sortDir, totalCost])
 
@@ -112,25 +185,32 @@ export function ModelsClient({ models }: Props) {
     return sortDir === 'desc' ? <ChevronDown size={11} className="text-coral" /> : <ChevronUp size={11} className="text-coral" />
   }
 
+  // Active tiers in data
+  const activeTiers = Array.from(new Set(models.map(m => m.tier)))
+
   return (
-    <div className="space-y-5 max-w-[1160px]">
+    <div className="space-y-5">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Model</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Cost, token usage, efficiency and latency for every model — Jun 1–17</p>
+          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Cost, token usage, efficiency and latency — {dateRange}</p>
         </div>
-        <button className="btn-secondary"><Download size={13} /> Export CSV</button>
+        <button onClick={handleExport}
+          className={cn('flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12.5px] font-semibold border transition-all',
+            exportDone ? 'bg-teal/10 border-teal/30 text-teal' : 'btn-secondary')}>
+          {exportDone ? <><Check size={13} /> Exported!</> : <><Download size={13} /> Export CSV</>}
+        </button>
       </div>
 
       {/* ── KPI strip ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label:'Total spend (30d)', value:`$${totalCost.toFixed(2)}`,            color:'#D97757' },
-          { label:'Total tokens',     value:`${totalTok.toFixed(1)}M`,             color:'#20B2AA' },
-          { label:'Total calls',      value:totalCalls.toLocaleString(),            color:'#4285F4' },
-          { label:'Models in use',    value:`${models.length}`,                    color:'#8B5CF6' },
+          { label:'Total spend (30d)', value: fmtCost(totalCost),           color:'#D97757' },
+          { label:'Total tokens',      value: fmtTokens(totalTokM),         color:'#20B2AA' },
+          { label:'Total calls',       value: totalCalls.toLocaleString(),   color:'#4285F4' },
+          { label:'Models in use',     value: `${models.length}`,           color:'#8B5CF6' },
         ].map(s => (
           <div key={s.label} className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-4 flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background:`${s.color}18` }}>
@@ -144,75 +224,97 @@ export function ModelsClient({ models }: Props) {
         ))}
       </div>
 
-      {/* ── Provider comparison bars ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {Object.entries(PROVIDER_META).map(([prov, meta]) => {
-          const provModels = models.filter(m => m.provider === prov)
-          const provCost = provModels.reduce((s, m) => s + m.cost30d, 0)
-          const provPct = totalCost > 0 ? (provCost / totalCost) * 100 : 0
-          return (
-            <div key={prov} className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: meta.color }} />
-                  <p className="text-[13px] font-bold text-[var(--fg)]">{meta.label}</p>
+      {/* ── Provider breakdown — only active providers ── */}
+      {activeProviders.length > 0 && (
+        <div className={cn('grid gap-3', activeProviders.length === 1 ? 'grid-cols-1 max-w-sm' : activeProviders.length === 2 ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-3')}>
+          {activeProviders.map(prov => {
+            const pColor     = providerColor(prov)
+            const provModels = models.filter(m => m.provider === prov)
+            const provCost   = provModels.reduce((s, m) => s + m.cost30d, 0)
+            const provTok    = provModels.reduce((s, m) => s + m.inputTok + m.outputTok, 0)
+            const provPct    = totalCost > 0 ? (provCost / totalCost) * 100 : 0
+            return (
+              <div key={prov} className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: pColor }} />
+                    <p className="text-[13px] font-bold text-[var(--fg)]">{prov}</p>
+                  </div>
+                  <span className="text-[12px] font-semibold text-[var(--fg-tertiary)]">{provPct.toFixed(0)}% of spend</span>
                 </div>
-                <span className="text-[12px] font-semibold text-[var(--fg-tertiary)]">{provPct.toFixed(0)}% of spend</span>
-              </div>
-              <div>
-                <div className="flex items-end justify-between mb-1.5">
-                  <span className="text-[20px] font-bold text-[var(--fg)] tabular-nums">${provCost.toFixed(2)}</span>
-                  <span className="text-[11px] text-[var(--fg-tertiary)]">{provModels.length} model{provModels.length>1?'s':''}</span>
+                <div>
+                  <div className="flex items-end justify-between mb-1.5">
+                    <span className="text-[20px] font-bold text-[var(--fg)] tabular-nums">{fmtCost(provCost)}</span>
+                    <span className="text-[11px] text-[var(--fg-tertiary)]">{fmtTokens(provTok)} · {provModels.length} model{provModels.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="h-2 bg-[var(--bg-secondary)] rounded-full overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-500" style={{ width:`${provPct}%`, background: pColor }} />
+                  </div>
                 </div>
-                <div className="h-2 bg-[var(--bg-secondary)] rounded-full overflow-hidden">
-                  <div className="h-full rounded-full transition-all duration-500" style={{ width:`${provPct}%`, background: meta.color }} />
+                <div className="flex flex-wrap gap-1">
+                  {provModels.map(m => {
+                    const tm = TIER_META[m.tier]
+                    return (
+                      <span key={m.id} className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-md', tm.bg, tm.color)}>
+                        {m.name.replace(/^(claude|gpt|gemini)-?/, '')}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-1">
-                {provModels.map(m => (
-                  <span key={m.id} className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-md', TIER_META[m.tier].bg, TIER_META[m.tier].color)}>
-                    {m.name.replace('claude-','').replace('gpt-','').replace('gemini-','')}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* ── Filters ── */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-1 p-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl">
-          <button onClick={() => setProvFil('all')}
-            className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all',
-              provFil==='all'?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-            All providers
-          </button>
-          {Object.keys(PROVIDER_META).map(p => (
-            <button key={p} onClick={() => setProvFil(p)}
+        {/* Provider filter — only shown if >1 provider */}
+        {activeProviders.length > 1 && (
+          <div className="flex items-center gap-1 p-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl">
+            <button onClick={() => setProvFil('all')}
               className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all',
-                provFil===p?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-              {p}
+                provFil==='all'?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
+              All providers
             </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1 p-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl">
-          {['all','frontier','standard','fast'].map(t => (
-            <button key={t} onClick={() => setTierFil(t)}
-              className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all capitalize',
-                tierFil===t?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-              {t === 'all' ? 'All tiers' : t}
+            {activeProviders.map(p => (
+              <button key={p} onClick={() => setProvFil(p)}
+                className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all',
+                  provFil===p?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Tier filter — only shown if >1 tier */}
+        {activeTiers.length > 1 && (
+          <div className="flex items-center gap-1 p-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl">
+            <button onClick={() => setTierFil('all')}
+              className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all',
+                tierFil==='all'?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
+              All tiers
             </button>
-          ))}
-        </div>
+            {activeTiers.map(t => {
+              const tm = TIER_META[t]
+              return (
+                <button key={t} onClick={() => setTierFil(t)}
+                  className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all capitalize',
+                    tierFil===t?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
+                  {tm?.label ?? t}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
         <div className="flex items-center gap-1.5 text-[11.5px] text-[var(--fg-tertiary)] ml-auto">
-          <Filter size={12} /> {filtered.length} of {models.length} models
+          <Filter size={12} /> {filtered.length} of {models.length} model{models.length !== 1 ? 's' : ''}
         </div>
       </div>
 
       {/* ── Model table ── */}
       <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
-        {/* Table header */}
         <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_100px] gap-3 px-5 py-3 border-b border-[var(--border)] bg-[var(--bg-secondary)]">
           {[
             { label:'Model',      key:null as SortKey|null },
@@ -233,67 +335,63 @@ export function ModelsClient({ models }: Props) {
           ))}
         </div>
 
-        {/* Rows */}
         <div className="divide-y divide-[var(--border)]">
-          {filtered.map((m, rowI) => {
-            const costDelta = ((m.cost30d - m.costPrev) / m.costPrev) * 100
-            const callDelta = ((m.calls30d - m.callsPrev) / m.callsPrev) * 100
-            const pct = (m.cost30d / totalCost) * 100
-            const totTok = m.inputTok + m.outputTok
-            const tm = TIER_META[m.tier]
+          {filtered.map(m => {
+            const pColor  = providerColor(m.provider)
+            const pct     = totalCost > 0 ? (m.cost30d / totalCost) * 100 : 0
+            const totTokM = m.inputTok + m.outputTok
+            const tm      = TIER_META[m.tier]
             return (
               <div key={m.id}
-                className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_100px] gap-3 px-5 py-4 hover:bg-[var(--bg-hover)] transition-colors items-center">
+                className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_100px] gap-3 px-5 py-4 hover:bg-[var(--bg-secondary)]/40 transition-colors items-center">
 
                 {/* Model name */}
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-                    style={{ background:`${m.color}20` }}>
-                    <span className="text-[10px] font-bold" style={{ color: m.color }}>
-                      {m.provider === 'Anthropic' ? 'An' : m.provider === 'OpenAI' ? 'OA' : 'Go'}
+                    style={{ background:`${pColor}20` }}>
+                    <span className="text-[10px] font-bold" style={{ color: pColor }}>
+                      {providerAbbr(m.provider)}
                     </span>
                   </div>
                   <div className="min-w-0">
                     <p className="text-[12.5px] font-semibold text-[var(--fg)] truncate">{m.name}</p>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <span className={cn('text-[9.5px] font-semibold px-1.5 py-0.5 rounded-md', tm.bg, tm.color)}>{tm.label}</span>
-                      <span className="text-[10px] text-[var(--fg-tertiary)]">{m.avgLatencyMs}ms</span>
+                      {m.avgLatencyMs > 0 && <span className="text-[10px] text-[var(--fg-tertiary)]">{m.avgLatencyMs}ms</span>}
                     </div>
                   </div>
                 </div>
 
                 {/* Cost */}
                 <div>
-                  <p className="text-[13px] font-bold text-[var(--fg)] tabular-nums">${m.cost30d.toFixed(2)}</p>
-                  <div className={cn('flex items-center gap-0.5 text-[10px] font-semibold mt-0.5',
-                    costDelta>0?'text-[var(--red)]':'text-teal')}>
-                    {costDelta>0?<ArrowUpRight size={10}/>:<ArrowDownRight size={10}/>}
-                    {Math.abs(costDelta).toFixed(1)}%
+                  <p className="text-[13px] font-bold text-[var(--fg)] tabular-nums">{fmtCost(m.cost30d)}</p>
+                  <div className="mt-0.5">
+                    <DeltaBadge curr={m.cost30d} prev={m.costPrev} />
                   </div>
                 </div>
 
                 {/* Tokens */}
                 <div>
-                  <p className="text-[13px] font-semibold text-[var(--fg)] tabular-nums">{totTok.toFixed(1)}M</p>
+                  <p className="text-[13px] font-semibold text-[var(--fg)] tabular-nums">{fmtTokens(totTokM)}</p>
                   <p className="text-[10px] text-[var(--fg-tertiary)] mt-0.5">
-                    {m.inputTok.toFixed(1)}M in · {m.outputTok.toFixed(1)}M out
+                    {fmtTokens(m.inputTok)} in · {fmtTokens(m.outputTok)} out
                   </p>
                 </div>
 
                 {/* Calls */}
                 <div>
                   <p className="text-[13px] font-semibold text-[var(--fg)] tabular-nums">{m.calls30d.toLocaleString()}</p>
-                  <div className={cn('flex items-center gap-0.5 text-[10px] font-semibold mt-0.5',
-                    callDelta>0?'text-[var(--red)]':'text-teal')}>
-                    {callDelta>0?<ArrowUpRight size={10}/>:<ArrowDownRight size={10}/>}
-                    {Math.abs(callDelta).toFixed(1)}%
+                  <div className="mt-0.5">
+                    <DeltaBadge curr={m.calls30d} prev={m.callsPrev} />
                   </div>
                 </div>
 
                 {/* $/M tokens */}
                 <div>
-                  <p className="text-[13px] font-semibold text-[var(--fg)] tabular-nums">${m.costPer1M.toFixed(2)}</p>
-                  <EffBadge costPer1M={m.costPer1M} />
+                  <p className="text-[13px] font-semibold text-[var(--fg)] tabular-nums">
+                    {m.costPer1M > 0 ? `$${m.costPer1M.toFixed(2)}` : '—'}
+                  </p>
+                  {m.costPer1M > 0 && <EffBadge costPer1M={m.costPer1M} />}
                 </div>
 
                 {/* % of spend */}
@@ -304,7 +402,7 @@ export function ModelsClient({ models }: Props) {
                   </div>
                 </div>
 
-                {/* Trend line (prev → curr, real data) */}
+                {/* Trend line */}
                 <div className="flex items-center">
                   <TrendLine prev={m.costPrev} curr={m.cost30d} color={m.color} />
                 </div>
@@ -314,25 +412,6 @@ export function ModelsClient({ models }: Props) {
         </div>
       </div>
 
-      {/* ── Efficiency insight ── */}
-      <div className="bg-[var(--blue-bg)] border border-[var(--blue)]/20 rounded-2xl p-5">
-        <p className="text-[13px] font-bold text-[var(--blue)] mb-3">Cost optimisation opportunities</p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {[
-            { title:'Switch Opus → Sonnet for batch tasks', saving:'~$140/mo', desc:'claude-opus-4-8 handles tasks that claude-sonnet-4-6 can do at 5× lower cost.' },
-            { title:'Replace GPT-4o with Haiku for classification', saving:'~$68/mo', desc:'Simple intent classification does not need frontier capability. Haiku is 6× cheaper per call.' },
-            { title:'GPT-4o-mini for high-volume routing', saving:'~$28/mo', desc:'ChatBot Pro routes 48K calls/month. At $0.30/M, gpt-4o-mini saves vs gpt-4o for routing.' },
-          ].map(o => (
-            <div key={o.title} className="p-3.5 bg-white/40 dark:bg-black/10 rounded-xl space-y-1.5">
-              <div className="flex items-center justify-between">
-                <p className="text-[12px] font-semibold text-[var(--fg)]">{o.title}</p>
-                <span className="text-[11px] font-bold text-teal flex-shrink-0 ml-2">{o.saving}</span>
-              </div>
-              <p className="text-[11px] text-[var(--fg-secondary)] leading-relaxed">{o.desc}</p>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }

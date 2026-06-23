@@ -11,35 +11,66 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { name, slug } = await req.json()
+  const { name, slug, plan } = await req.json()
   if (!name || !slug)
     return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
 
+  const validPlan = ['free', 'team', 'pro', 'enterprise'].includes(plan) ? plan : 'free'
+
+  // If user already has a membership, just return their existing org
+  const { data: existingMember } = await db()
+    .from('members')
+    .select('org_id, organizations(id,name,slug,plan)')
+    .eq('user_id', user.id)
+    .limit(1)
+    .single()
+
+  if (existingMember) {
+    console.log('[POST /api/v1/orgs] User already has org, returning existing')
+    const org = Array.isArray(existingMember.organizations)
+      ? existingMember.organizations[0]
+      : existingMember.organizations
+    return NextResponse.json(org, { status: 200 })
+  }
+
   // Check slug uniqueness
-  const { data: existing } = await db()
-    .from('orgs')
+  const { data: existingSlug } = await db()
+    .from('organizations')
     .select('id')
     .eq('slug', slug)
     .maybeSingle()
 
-  if (existing)
+  if (existingSlug)
     return NextResponse.json({ error: 'Slug already taken' }, { status: 409 })
 
-  const { data: org, error } = await db()
-    .from('orgs')
-    .insert({ name, slug, plan: 'free' })
+  // Create org
+  const { data: org, error: orgError } = await db()
+    .from('organizations')
+    .insert({ name, slug, plan: validPlan, owner_id: user.id })
     .select()
     .single()
 
-  if (error) return dbError(error, 'POST orgs')
+  if (orgError) {
+    console.error('[POST /api/v1/orgs] org insert failed:', orgError)
+    return dbError(orgError, 'POST orgs — insert org')
+  }
 
-  // Add caller as owner
-  await db().from('members').insert({
-    org_id:  org.id,
-    user_id: user.id,
-    role:    'owner',
-  })
+  // Add caller as owner — MUST succeed or we return an error
+  const { error: memberError } = await db()
+    .from('members')
+    .insert({ org_id: org.id, user_id: user.id, role: 'owner' })
 
+  if (memberError) {
+    console.error('[POST /api/v1/orgs] member insert failed:', memberError)
+    // Roll back org (best-effort)
+    await db().from('organizations').delete().eq('id', org.id)
+    return NextResponse.json(
+      { error: `Failed to create membership: ${memberError.message}` },
+      { status: 500 }
+    )
+  }
+
+  console.log('[POST /api/v1/orgs] org+member created successfully', org.id, user.id)
   return NextResponse.json(org, { status: 201 })
 }
 
@@ -54,7 +85,7 @@ export async function PATCH(req: NextRequest) {
   if (guard instanceof NextResponse) return guard
 
   const { data, error } = await db()
-    .from('orgs')
+    .from('organizations')
     .update({ plan })
     .eq('id', org_id)
     .select()
@@ -70,11 +101,11 @@ export async function GET(_req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('members')
-    .select('orgs(*)')
+    .select('organizations(*)')
     .eq('user_id', user.id)
 
   if (error) return dbError(error, 'GET orgs')
-  return NextResponse.json(data?.map((m: any) => m.orgs) ?? [])
+  return NextResponse.json(data?.map((m: any) => m.organizations) ?? [])
 }

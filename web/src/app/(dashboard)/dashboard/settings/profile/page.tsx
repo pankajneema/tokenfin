@@ -11,12 +11,14 @@ export default async function ProfilePage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  // Fetch org membership for role
-  const { data: membership } = await supabase
+  // Use admin client — bypasses RLS so membership is always found
+  const { data: memberRows } = await admin
     .from('members')
     .select('role, org_id')
     .eq('user_id', user.id)
-    .maybeSingle()
+    .limit(1)
+
+  const membership = memberRows?.[0] ?? null
 
   // Fetch org name
   let orgName = ''
@@ -25,8 +27,8 @@ export default async function ProfilePage() {
       .from('organizations')
       .select('name')
       .eq('id', membership.org_id)
-      .maybeSingle()
-    orgName = (org as unknown as { name: string } | null)?.name ?? ''
+      .single()
+    orgName = org?.name ?? ''
   }
 
   const meta = (user.user_metadata ?? {}) as Record<string, string>

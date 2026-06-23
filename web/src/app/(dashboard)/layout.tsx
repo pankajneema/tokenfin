@@ -39,23 +39,30 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: membership } = await supabase
+  // Use admin client for membership + project checks — bypasses RLS so
+  // we never get a false-negative that boots the user back to /plans.
+  const { data: members } = await admin
     .from('members')
     .select('id, org_id')
     .eq('user_id', user.id)
     .limit(1)
-    .maybeSingle()
 
-  if (!membership) redirect('/plans')
+  const membership = members?.[0] ?? null
+  if (!membership) {
+    console.log('[DashboardLayout] no membership for user', user.id)
+    redirect('/plans')
+  }
 
-  const { data: project } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('org_id', membership.org_id)
-    .limit(1)
-    .maybeSingle()
+  const [{ data: projects }, { data: orgRow }] = await Promise.all([
+    admin.from('projects').select('id').eq('org_id', membership.org_id).limit(1),
+    admin.from('organizations').select('plan').eq('id', membership.org_id).single(),
+  ])
 
-  if (!project) redirect('/onboarding')
+  const project = projects?.[0] ?? null
+  if (!project) {
+    console.log('[DashboardLayout] no project for org', membership.org_id)
+    redirect('/onboarding')
+  }
 
   /* ── Fetch real notifications ── */
   const { data: rawNotifs } = await admin
@@ -81,7 +88,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <div className="flex h-screen bg-[var(--bg-secondary)] overflow-hidden">
       <Sidebar user={user} />
       <div className="flex-1 flex flex-col min-w-0">
-        <Topbar user={user} notifications={notifications} />
+        <Topbar user={user} notifications={notifications} orgPlan={orgRow?.plan ?? 'free'} />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
     </div>

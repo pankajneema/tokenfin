@@ -588,7 +588,7 @@ export function ModelsClient({ initialModels, orgId }: Props) {
   /* ── Empty state ── */
   if (models.length === 0 && !search && provFilter === 'all' && tierFilter === 'all') {
     return (
-      <div className="space-y-5 max-w-[1100px]">
+      <div className="space-y-5">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Models</h1>
@@ -642,7 +642,7 @@ export function ModelsClient({ initialModels, orgId }: Props) {
   }
 
   return (
-    <div className="space-y-5 max-w-[1100px]">
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>

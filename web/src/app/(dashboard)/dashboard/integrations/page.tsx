@@ -14,13 +14,13 @@ export default async function IntegrationsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data: membership } = await supabase
+  const { data: _mb } = await admin
     .from('members')
     .select('org_id')
-    .eq('user_id', user.id)
-    .maybeSingle()
+    .eq('user_id', user!.id)
+    .limit(1)
 
-  const orgId = membership?.org_id ?? ''
+  const orgId = _mb?.[0]?.org_id ?? ''
 
   const { data: rows } = await admin
     .from('org_integrations')

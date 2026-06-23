@@ -34,6 +34,13 @@ function shortName(m: string) {
 function provider(m: string) {
   return MODEL_PROVIDER[m] ?? (m.startsWith('claude') ? 'Anthropic' : m.startsWith('gpt') ? 'OpenAI' : m.startsWith('gemini') ? 'Google' : 'Other')
 }
+function fmtTokens(n: number): string {
+  if (n === 0)         return '—'
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
+  if (n >= 1_000_000)  return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000)      return `${(n / 1_000).toFixed(0)}K`
+  return String(n)
+}
 
 /* ═══════════════════════════════════════════════════════════════ */
 export function ModelBreakdown({ data, totalCost }: Props) {
@@ -70,7 +77,7 @@ export function ModelBreakdown({ data, totalCost }: Props) {
       {/* Header */}
       <div className="mb-4">
         <h2 className="text-[13px] font-semibold text-[var(--fg)]">Model Breakdown</h2>
-        <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">Cost by model · last 30 days</p>
+        <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">Cost &amp; tokens · last 30 days</p>
       </div>
 
       {/* Donut chart */}
@@ -124,7 +131,7 @@ export function ModelBreakdown({ data, totalCost }: Props) {
             <div className="text-right flex-shrink-0">
               <p className="text-[12px] font-semibold text-[var(--fg)] tabular-nums">{formatCost(row.cost)}</p>
               <p className="text-[10.5px] text-[var(--fg-tertiary)] tabular-nums">
-                {row.pct || +(row.cost / total * 100).toFixed(1)}%
+                {fmtTokens(row.tokens)} · {row.pct || +(row.cost / total * 100).toFixed(1)}%
               </p>
             </div>
           </div>

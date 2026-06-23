@@ -177,7 +177,7 @@ func (c *Client) DeliveryCounts(ctx context.Context, ids []string) (map[string]i
 		Stream: StreamRaw,
 		Group:  GroupDBWriter,
 		Start:  first,
-		Stop:   last,
+		End:    last,
 		Count:  int64(len(ids)),
 	}).Result()
 	if err != nil {

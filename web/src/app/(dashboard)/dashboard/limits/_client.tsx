@@ -645,7 +645,7 @@ export function LimitsClient({ initialLimits, projects, teams, orgId }: Props) {
   const deleteTarget = limits.find(l => l.id === deleteId)
 
   return (
-    <div className="space-y-6 max-w-[1100px]">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>

@@ -65,10 +65,9 @@ export async function requireOrgMember(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Verify org membership via the session-bound (anon) client.
-  // RLS on the members table means users can only see their own rows —
-  // passing a foreign org_id returns no rows and fails the check.
-  const { data: member } = await supabase
+  // Verify org membership via the admin client (bypasses RLS for the
+  // security check itself — we already verified the user's identity above).
+  const { data: member } = await createAdminClient()
     .from('members')
     .select('id')
     .eq('user_id', user.id)

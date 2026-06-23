@@ -422,7 +422,7 @@ export function IntegrationsClient({ initialConnected, orgId }: Props) {
   const modalItem = modalId ? CATALOG.find(c => c.id === modalId) ?? null : null
 
   return (
-    <div className="space-y-6 max-w-[1100px]">
+    <div className="space-y-6">
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">

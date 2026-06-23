@@ -523,7 +523,7 @@ export function McpClient({ initialPlatforms, orgId }: Props) {
   const activeCount = platforms.filter(p => p.isActive).length
 
   return (
-    <div className="space-y-6 max-w-[1100px]">
+    <div className="space-y-6">
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">

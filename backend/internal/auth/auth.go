@@ -16,7 +16,7 @@ import (
 // ErrInvalidKey is returned when the API key is missing, malformed, or not found.
 var ErrInvalidKey = errors.New("invalid or inactive api key")
 
-const keyPrefix = "tf_" // all TokenFin keys start with this
+const keyPrefix = "tfk_" // all TokenFin keys start with this
 
 // Service validates API keys against Redis cache + Supabase fallback.
 type Service struct {

@@ -1,4 +1,4 @@
-import { createClient }   from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { ProjectsClient } from './_client'
 
 export const metadata = { title: 'Projects — TokenFin' }
@@ -20,18 +20,19 @@ export interface EnrichedProject {
 /* ═══════════════════════════════════════════════════════════════ */
 export default async function ProjectsPage() {
   const supabase = createClient()
+  const admin    = createAdminClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  /* ── Get org ── */
-  const { data: membership } = await supabase
+  /* ── Get org via admin (bypasses RLS) ── */
+  const { data: memberRows } = await admin
     .from('members')
     .select('org_id')
     .eq('user_id', user!.id)
-    .maybeSingle()
+    .limit(1)
 
-  const orgId = membership?.org_id ?? ''
+  const orgId = memberRows?.[0]?.org_id ?? ''
 
-  /* ── Parallel fetch ── */
+  /* ── Parallel fetch via admin ── */
   const since30 = new Date(Date.now() - 30 * 86400_000).toISOString()
 
   const [
@@ -40,21 +41,21 @@ export default async function ProjectsPage() {
     { data: keys     },
     { data: lastEvts },
   ] = await Promise.all([
-    supabase
+    admin
       .from('projects')
       .select('id,name,slug,description,created_at')
       .eq('org_id', orgId)
       .order('created_at', { ascending: false }),
-    supabase
+    admin
       .from('usage_events')
       .select('project_id,cost_usd,total_tokens')
       .eq('org_id', orgId)
       .gte('created_at', since30),
-    supabase
+    admin
       .from('api_keys')
       .select('project_id,is_active')
       .eq('org_id', orgId),
-    supabase
+    admin
       .from('usage_events')
       .select('project_id,created_at')
       .eq('org_id', orgId)

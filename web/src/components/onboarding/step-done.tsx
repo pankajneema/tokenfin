@@ -1,6 +1,6 @@
 'use client'
 import { ArrowRight, Zap, BarChart3, Key } from 'lucide-react'
-import type { OnboardingData } from '@/app/(onboarding)/onboarding/page'
+import type { OnboardingData } from '@/app/(onboarding)/onboarding/_client'
 
 const NEXT_STEPS = [
   { icon: Key,      title: 'Create an API key',       desc: 'Start tracking token usage in minutes' },

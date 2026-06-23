@@ -31,10 +31,12 @@ export interface PlatformSlice {
 }
 
 export interface AnalyticsData {
-  daily:     DayData[]
-  byModel:   ModelSlice[]
-  byProject: ProjectSlice[]
+  daily:      DayData[]
+  byModel:    ModelSlice[]
+  byProject:  ProjectSlice[]
   byPlatform: PlatformSlice[]
-  totalCost: number
-  totalPrev: number
+  totalCost:  number
+  totalPrev:  number
+  orgBudget:  number | null   // from limits table (org-level cost limit), null = not set
+  tokensUsed: number          // real 30d token total from usage_agg/events
 }

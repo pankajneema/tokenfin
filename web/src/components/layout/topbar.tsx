@@ -407,7 +407,7 @@ function NotificationsPanel({
    PROFILE MENU
 ══════════════════════════════════════════════════════════════ */
 function ProfileMenu({
-  user, displayName, avatarLetter, onClose, onSignOut, router,
+  user, displayName, avatarLetter, onClose, onSignOut, router, orgPlan,
 }: {
   user: User
   displayName: string
@@ -415,6 +415,7 @@ function ProfileMenu({
   onClose: () => void
   onSignOut: () => void
   router: ReturnType<typeof useRouter>
+  orgPlan: string
 }) {
   function go(href: string) { onClose(); router.push(href) }
 
@@ -440,7 +441,7 @@ function ProfileMenu({
         {/* Plan badge */}
         <div className="flex items-center justify-between mt-3">
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-coral/10 border border-coral/20 text-[10.5px] font-bold text-coral">
-            <Sparkles size={9} /> Pro Plan
+            <Sparkles size={9} /> {PLAN_LABEL[orgPlan] ?? 'Free Plan'}
           </span>
           <button
             onClick={() => go('/dashboard/settings')}
@@ -502,7 +503,11 @@ function ProfileMenu({
 /* ══════════════════════════════════════════════════════════════
    MAIN TOPBAR
 ══════════════════════════════════════════════════════════════ */
-export function Topbar({ user, notifications }: { user: User; notifications: Notif[] }) {
+const PLAN_LABEL: Record<string, string> = {
+  free: 'Free Plan', team: 'Starter Plan', pro: 'Pro Plan', enterprise: 'Enterprise',
+}
+
+export function Topbar({ user, notifications, orgPlan = 'free' }: { user: User; notifications: Notif[]; orgPlan?: string }) {
   const router   = useRouter()
   const pathname = usePathname()
   const supabase = createClient()
@@ -673,7 +678,7 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
                 <p className="text-[12px] font-semibold text-[var(--fg)] leading-tight max-w-[100px] truncate">
                   {displayName}
                 </p>
-                <p className="text-[9.5px] text-[var(--fg-tertiary)]">Pro Plan</p>
+                <p className="text-[9.5px] text-[var(--fg-tertiary)]">{PLAN_LABEL[orgPlan] ?? 'Free Plan'}</p>
               </div>
               <ChevronDown size={12} className={cn('text-[var(--fg-tertiary)] transition-transform duration-200', menuOpen && 'rotate-180')} />
             </button>
@@ -689,6 +694,7 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
                     onClose={() => setMenuOpen(false)}
                     onSignOut={signOut}
                     router={router}
+                    orgPlan={orgPlan}
                   />
                 </div>
               </>

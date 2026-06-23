@@ -4,10 +4,10 @@ import {
   Users, Plus, Search, MoreHorizontal, X,
   UserCog, Trash2, ChevronDown, ChevronRight,
   DollarSign, Pencil, UserPlus, ShieldCheck,
-  Code2, Eye, Crown, AlertTriangle,
+  Code2, Eye, Crown, AlertTriangle, Mail, Clock, Send,
 } from 'lucide-react'
 import { cn, formatCost } from '@/lib/utils'
-import type { TeamRow, MemberRow, ProjectRow } from './page'
+import type { TeamRow, MemberRow, ProjectRow, InviteRow } from './page'
 
 /* ── Role config ────────────────────────────────────────────── */
 const ROLES = {
@@ -602,6 +602,179 @@ function UnassignedSection({
   )
 }
 
+/* ── Invite modal ───────────────────────────────────────────── */
+function InviteModal({ orgId, onClose, onInvited }: {
+  orgId:     string
+  onClose:   () => void
+  onInvited: (rows: InviteRow[]) => void
+}) {
+  const [input,   setInput]   = useState('')
+  const [emails,  setEmails]  = useState<string[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState('')
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+  function addEmail(raw: string) {
+    const v = raw.trim().toLowerCase()
+    if (!v) return
+    if (!EMAIL_RE.test(v)) { setError('Invalid email'); return }
+    if (emails.includes(v)) { setError('Already added'); return }
+    setEmails(e => [...e, v]); setInput(''); setError('')
+  }
+
+  async function send() {
+    if (emails.length === 0) return
+    setLoading(true); setError('')
+    try {
+      const res = await fetch('/api/v1/invites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ org_id: orgId, emails }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      // Build InviteRow objects for immediate UI update
+      const now = new Date().toISOString()
+      const newRows: InviteRow[] = emails.map(email => ({
+        id:        crypto.randomUUID(),
+        email,
+        role:      'member',
+        status:    'pending',
+        expiresAt: new Date(Date.now() + 7 * 86400_000).toISOString(),
+        createdAt: now,
+      }))
+      onInvited(newRows)
+      onClose()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative bg-[var(--bg)] border border-[var(--border)] rounded-2xl shadow-2xl w-full max-w-[440px]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
+          <h2 className="text-[15px] font-bold text-[var(--fg)]">Invite team members</h2>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-hover)]">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div>
+            <label className="text-[11px] font-semibold text-[var(--fg-secondary)] uppercase tracking-wider block mb-1.5">Email addresses</label>
+            <div className="flex gap-2">
+              <input
+                value={input}
+                onChange={e => { setInput(e.target.value); setError('') }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addEmail(input) } }}
+                placeholder="colleague@company.com"
+                className="input flex-1 text-[13px]"
+                autoFocus
+              />
+              <button onClick={() => addEmail(input)} className="btn-secondary text-[12px] px-3 py-2">Add</button>
+            </div>
+            {error && <p className="text-[11px] text-[var(--red)] mt-1">{error}</p>}
+          </div>
+          {emails.length > 0 && (
+            <div className="space-y-1.5">
+              {emails.map(e => (
+                <div key={e} className="flex items-center justify-between px-3 py-2 bg-[var(--bg-secondary)] rounded-lg border border-[var(--border)]">
+                  <div className="flex items-center gap-2">
+                    <Mail size={12} className="text-[var(--fg-tertiary)]" />
+                    <span className="text-[12.5px] text-[var(--fg)]">{e}</span>
+                  </div>
+                  <button onClick={() => setEmails(prev => prev.filter(x => x !== e))} className="text-[var(--fg-tertiary)] hover:text-[var(--red)]">
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="px-6 py-4 border-t border-[var(--border)] flex gap-3 justify-end">
+          <button onClick={onClose} className="btn-secondary text-[13px] py-2">Cancel</button>
+          <button
+            onClick={send}
+            disabled={emails.length === 0 || loading}
+            className="btn-primary text-[13px] py-2 min-w-[130px] justify-center"
+          >
+            {loading
+              ? <span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+              : <><Send size={13} /> Send {emails.length > 0 ? `${emails.length} invite${emails.length > 1 ? 's' : ''}` : 'invites'}</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Pending invites section ────────────────────────────────── */
+function PendingInvites({ invites, orgId, onCancel }: {
+  invites:  InviteRow[]
+  orgId:    string
+  onCancel: (id: string) => void
+}) {
+  const [cancelling, setCancelling] = useState<string | null>(null)
+  const pending = invites.filter(i => i.status === 'pending')
+  if (pending.length === 0) return null
+
+  async function cancel(id: string) {
+    setCancelling(id)
+    try {
+      await fetch(`/api/v1/invites?id=${id}&org_id=${orgId}`, { method: 'DELETE' })
+      onCancel(id)
+    } finally {
+      setCancelling(null)
+    }
+  }
+
+  function daysLeft(expiresAt: string) {
+    const diff = new Date(expiresAt).getTime() - Date.now()
+    return Math.max(0, Math.ceil(diff / 86400_000))
+  }
+
+  return (
+    <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
+      <div className="px-5 py-3.5 border-b border-[var(--border)] flex items-center gap-2">
+        <Clock size={15} className="text-[var(--amber)]" />
+        <h3 className="text-[13px] font-semibold text-[var(--fg)]">Pending invitations</h3>
+        <span className="text-[11px] text-[var(--fg-tertiary)] bg-[var(--amber-bg)] text-[var(--amber)] px-2 py-0.5 rounded-full font-medium">{pending.length}</span>
+      </div>
+      <div className="divide-y divide-[var(--border)]">
+        {pending.map(inv => (
+          <div key={inv.id} className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--bg-hover)] transition-colors group">
+            <div className="w-8 h-8 rounded-full bg-[var(--bg-secondary)] border border-[var(--border)] flex items-center justify-center flex-shrink-0">
+              <Mail size={13} className="text-[var(--fg-tertiary)]" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[12.5px] font-semibold text-[var(--fg)] truncate">{inv.email}</p>
+              <p className="text-[11px] text-[var(--fg-tertiary)]">
+                Invited · expires in {daysLeft(inv.expiresAt)} day{daysLeft(inv.expiresAt) !== 1 ? 's' : ''}
+              </p>
+            </div>
+            <span className="text-[10.5px] font-semibold text-[var(--amber)] bg-[var(--amber-bg)] px-2 py-0.5 rounded-full capitalize border border-[var(--amber)]/20">
+              {inv.status}
+            </span>
+            <button
+              onClick={() => cancel(inv.id)}
+              disabled={cancelling === inv.id}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--red-bg)] hover:text-[var(--red)] transition-colors opacity-0 group-hover:opacity-100"
+              title="Cancel invite"
+            >
+              {cancelling === inv.id
+                ? <span className="w-3 h-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                : <X size={12} />}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Main client component
 ═══════════════════════════════════════════════════════════════ */
@@ -609,17 +782,20 @@ interface Props {
   teams:    TeamRow[]
   members:  MemberRow[]
   projects: ProjectRow[]
+  invites:  InviteRow[]
   orgId:    string
 }
 
-export function TeamsClient({ teams: initTeams, members: initMembers, projects, orgId }: Props) {
-  const [teams,      setTeams]      = useState<TeamRow[]>(initTeams)
-  const [members,    setMembers]    = useState<MemberRow[]>(initMembers)
-  const [query,      setQuery]      = useState('')
-  const [showCreate, setShowCreate] = useState(false)
-  const [editTarget, setEditTarget] = useState<TeamRow | null>(null)
-  const [deleteId,   setDeleteId]   = useState<string | null>(null)
-  const [deleting,   setDeleting]   = useState(false)
+export function TeamsClient({ teams: initTeams, members: initMembers, projects, invites: initInvites, orgId }: Props) {
+  const [teams,       setTeams]       = useState<TeamRow[]>(initTeams)
+  const [members,     setMembers]     = useState<MemberRow[]>(initMembers)
+  const [invites,     setInvites]     = useState<InviteRow[]>(initInvites)
+  const [query,       setQuery]       = useState('')
+  const [showCreate,  setShowCreate]  = useState(false)
+  const [showInvite,  setShowInvite]  = useState(false)
+  const [editTarget,  setEditTarget]  = useState<TeamRow | null>(null)
+  const [deleteId,    setDeleteId]    = useState<string | null>(null)
+  const [deleting,    setDeleting]    = useState(false)
 
   const filtered   = useMemo(() => {
     if (!query.trim()) return teams
@@ -672,9 +848,14 @@ export function TeamsClient({ teams: initTeams, members: initMembers, projects, 
             {teams.length} team{teams.length !== 1 ? 's' : ''} · {members.length} member{members.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary text-[13px]">
-          <Plus size={14} /> New team
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowInvite(true)} className="btn-secondary text-[13px]">
+            <UserPlus size={14} /> Invite
+          </button>
+          <button onClick={() => setShowCreate(true)} className="btn-primary text-[13px]">
+            <Plus size={14} /> New team
+          </button>
+        </div>
       </div>
 
       {/* Stats strip */}
@@ -747,7 +928,21 @@ export function TeamsClient({ teams: initTeams, members: initMembers, projects, 
       {/* Unassigned members */}
       <UnassignedSection members={unassigned} onRoleChange={handleRoleChange} />
 
+      {/* Pending invitations */}
+      <PendingInvites
+        invites={invites}
+        orgId={orgId}
+        onCancel={id => setInvites(prev => prev.filter(i => i.id !== id))}
+      />
+
       {/* Modals */}
+      {showInvite && (
+        <InviteModal
+          orgId={orgId}
+          onClose={() => setShowInvite(false)}
+          onInvited={rows => setInvites(prev => [...rows, ...prev])}
+        />
+      )}
       {showCreate && (
         <TeamModal orgId={orgId} projects={projects} onClose={() => setShowCreate(false)} onSave={handleSaveTeam} />
       )}

@@ -5,8 +5,8 @@ import { usePathname } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import {
   Zap, LayoutDashboard, BarChart3,
-  Layers, Users, Key, Cpu, Shield, Bell, GitBranch, Settings,
-  ChevronLeft, ChevronRight, ChevronDown, HelpCircle, BookOpen, Puzzle, FileText,
+  Layers, Users, Key, Shield, Bell, GitBranch, Settings,
+  ChevronLeft, ChevronRight, ChevronDown, HelpCircle, BookOpen, Puzzle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -38,10 +38,10 @@ const NAV_GROUPS: NavGroup[] = [
         label: 'Analytics',
         icon:  BarChart3,
         children: [
-          { label: 'Usage',       href: '/dashboard/analytics' },
-          { label: 'By Model',    href: '/dashboard/analytics/models' },
-          { label: 'By Project',  href: '/dashboard/analytics/projects' },
-          { label: 'Cost Reports',href: '/dashboard/analytics/costs' },
+          { label: 'Usage',        href: '/dashboard/analytics'          },
+          { label: 'By Model',     href: '/dashboard/analytics/models'   },
+          { label: 'By Project',   href: '/dashboard/analytics/projects' },
+          { label: 'Cost Reports', href: '/dashboard/analytics/costs'    },
         ],
       },
     ],
@@ -50,7 +50,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Manage',
     items: [
       { label: 'API Keys',     href: '/dashboard/keys',         icon: Key },
-      { label: 'Models',       href: '/dashboard/models',       icon: Cpu },
+      // { label: 'Models',    href: '/dashboard/models',       icon: Cpu },   // TODO: model registry (reserved for future)
       { label: 'Limits',       href: '/dashboard/limits',       icon: Shield },
       { label: 'Alerts',       href: '/dashboard/alerts',       icon: Bell },
     ],

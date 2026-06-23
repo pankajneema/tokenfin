@@ -97,7 +97,7 @@ export function StatsCards({ totalCost, totalTokens, totalRequests, memberCount,
       spark:     sparks.reqs,
     },
     {
-      label:     'Engineers',
+      label:     'Members',
       value:     String(memberCount || '—'),
       sub:       'Active members in org',
       Icon:      Users,

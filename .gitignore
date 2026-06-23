@@ -8,7 +8,7 @@ backend/bin/
 .yarn/install-state.gz
 
 # ── Next.js ───────────────────────────────────────────────────
-/.next/
+/web/.next/
 /out/
 /build
 

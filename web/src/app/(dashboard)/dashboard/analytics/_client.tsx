@@ -1,10 +1,11 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useTransition } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import {
   TrendingUp, Download, BarChart3, Zap, Activity, DollarSign,
   AlertTriangle, Lightbulb, ArrowUpRight, ArrowDownRight, Minus,
-  ChevronRight, Cpu, Layers, Puzzle,
+  ChevronRight, Cpu, Layers, Puzzle, RefreshCw,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AnalyticsData, DayData } from './_types'
@@ -226,10 +227,16 @@ const MODEL_COLORS = ['#D97757','#E8896A','#10A37F','#F0AC8A','#0D8A6A','#4285F4
 interface Props { initialData: AnalyticsData }
 
 export function AnalyticsClient({ initialData }: Props) {
+  const router                      = useRouter()
+  const [isPending, startTransition] = useTransition()
   const [range,   setRange]   = useState<Range>('30D')
   const [metric,  setMetric]  = useState<Metric>('cost')
   const [compare, setCompare] = useState(true)
   const [hovIdx,  setHovIdx]  = useState<number | null>(null)
+
+  function refresh() {
+    startTransition(() => { router.refresh() })
+  }
 
   const data = useMemo(() =>
     range === '7D' ? initialData.daily.slice(-7) : initialData.daily,
@@ -243,8 +250,8 @@ export function AnalyticsClient({ initialData }: Props) {
   const totPrevCalls = useMemo(() => data.reduce((s, d) => s + d.prevCalls, 0), [data])
 
   const projected = data.length > 0 ? (totCost / data.length) * 30 : 0
-  const budget    = 1500
-  const budgetPct = budget > 0 ? (projected / budget) * 100 : 0
+  const budget    = initialData.orgBudget   // null = no budget set
+  const budgetPct = budget && budget > 0 ? (projected / budget) * 100 : 0
   const costDelta = totPrev > 0 ? ((totCost - totPrev) / totPrev) * 100 : 0
 
   /* ── spike/anomaly detection ── */
@@ -265,7 +272,7 @@ export function AnalyticsClient({ initialData }: Props) {
     : 'No data'
 
   return (
-    <div className="space-y-5 max-w-[1160px]">
+    <div className="space-y-5">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -288,6 +295,14 @@ export function AnalyticsClient({ initialData }: Props) {
               </button>
             ))}
           </div>
+          <button
+            onClick={refresh}
+            disabled={isPending}
+            className="btn-secondary"
+            title="Reload latest data">
+            <RefreshCw size={13} className={isPending ? 'animate-spin' : ''} />
+            {isPending ? 'Refreshing…' : 'Refresh'}
+          </button>
           <button className="btn-secondary"><Download size={13} /> Export</button>
         </div>
       </div>
@@ -300,15 +315,15 @@ export function AnalyticsClient({ initialData }: Props) {
           iconColor="#D97757">
           <DollarSign size={15} />
         </KpiCard>
-        <KpiCard label="Projected EOM" value={`$${projected.toFixed(0)}`}
-          sub={`of $${budget.toLocaleString()} monthly budget`}
-          delta={budgetPct > 0 ? budgetPct - 100 : undefined} deltaLabel="over/under pace"
-          iconColor={budgetPct > 90 ? '#EF4444' : '#F59E0B'} warning={budgetPct > 80}>
+        <KpiCard label="Projected EOM" value={`$${projected.toFixed(2)}`}
+          sub={budget ? `of $${budget.toLocaleString()} budget` : 'No org budget set — add in Limits'}
+          delta={budget && budgetPct > 0 ? budgetPct - 100 : undefined} deltaLabel="over/under pace"
+          iconColor={budget && budgetPct > 90 ? '#EF4444' : '#F59E0B'} warning={!!(budget && budgetPct > 80)}>
           <TrendingUp size={15} />
         </KpiCard>
-        <KpiCard label="Budget Pace" value={`${budgetPct.toFixed(0)}%`}
-          sub={`$${(budget - projected).toFixed(0)} headroom at pace`}
-          iconColor={budgetPct > 90 ? '#EF4444' : '#F59E0B'} warning={budgetPct > 80}>
+        <KpiCard label="Budget Pace" value={budget ? `${budgetPct.toFixed(0)}%` : '—'}
+          sub={budget ? `$${(budget - projected).toFixed(0)} headroom` : 'Set a limit to track pace'}
+          iconColor={budget && budgetPct > 90 ? '#EF4444' : '#F59E0B'} warning={!!(budget && budgetPct > 80)}>
           <Activity size={15} />
         </KpiCard>
         <KpiCard label="Tokens MTD" value={`${totTok.toFixed(1)}M`}

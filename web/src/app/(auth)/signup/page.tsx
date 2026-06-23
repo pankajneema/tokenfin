@@ -131,7 +131,7 @@ export default function SignupPage() {
     if (!canSubmit) return
     setLoading(true)
     setError(null)
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -140,6 +140,12 @@ export default function SignupPage() {
       },
     })
     if (error) { setError(error.message); setLoading(false); return }
+    // If email confirmation is disabled, Supabase returns a session immediately.
+    // Skip the "check inbox" screen and go straight to plan selection.
+    if (data.session) {
+      router.push('/plans')
+      return
+    }
     setDone(true)
   }
 

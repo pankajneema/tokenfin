@@ -2,9 +2,9 @@
  * Server-side auth helpers — import only in Server Components, API routes,
  * Server Actions, and middleware. Never import in client components.
  */
-import { redirect }      from 'next/navigation'
-import { createClient }  from '@/lib/supabase/server'
-import type { User }     from '@supabase/supabase-js'
+import { redirect }                        from 'next/navigation'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
+import type { User }                       from '@supabase/supabase-js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -80,26 +80,28 @@ export async function getUserOrg(userId: string): Promise<UserOrg | null> {
  */
 export async function requireDashboardAccess() {
   const supabase = createClient()
+  const admin    = createAdminClient()
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: membership } = await supabase
+  // Use admin client — bypasses RLS so membership is never missed
+  const { data: members } = await admin
     .from('members')
     .select('id, org_id, role')
     .eq('user_id', user.id)
     .limit(1)
-    .maybeSingle()
 
+  const membership = members?.[0] ?? null
   if (!membership) redirect('/plans')
 
-  const { data: project } = await supabase
+  const { data: projects } = await admin
     .from('projects')
     .select('id')
     .eq('org_id', membership.org_id)
     .limit(1)
-    .maybeSingle()
 
+  const project = projects?.[0] ?? null
   if (!project) redirect('/onboarding')
 
   return { user, membership }

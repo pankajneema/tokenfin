@@ -1,5 +1,4 @@
-import { createClient }      from '@/lib/supabase/server'
-import { createAdminClient }  from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { TeamsClient }        from './_client'
 
 export const metadata = { title: 'Teams — TokenFin' }
@@ -32,6 +31,15 @@ export interface ProjectRow {
   slug: string
 }
 
+export interface InviteRow {
+  id:        string
+  email:     string
+  role:      string
+  status:    string
+  expiresAt: string
+  createdAt: string
+}
+
 /* ═══════════════════════════════════════════════════════════════ */
 export default async function TeamsPage() {
   const supabase = createClient()
@@ -39,24 +47,27 @@ export default async function TeamsPage() {
 
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: membership } = await supabase
+  // Use admin client — bypasses RLS so membership is always found
+  const { data: membershipRows } = await admin
     .from('members')
     .select('org_id')
     .eq('user_id', user!.id)
-    .maybeSingle()
+    .limit(1)
 
-  const orgId = membership?.org_id ?? ''
+  const orgId = membershipRows?.[0]?.org_id ?? ''
 
   const [
-    { data: teams    },
-    { data: members  },
-    { data: limits   },
-    { data: projects },
+    { data: teams       },
+    { data: members     },
+    { data: limits      },
+    { data: projects    },
+    { data: invitations },
   ] = await Promise.all([
-    supabase.from('teams').select('id,name,project_id,created_at').eq('org_id', orgId).order('created_at', { ascending: true }),
-    supabase.from('members').select('id,user_id,team_id,role,created_at').eq('org_id', orgId),
-    supabase.from('limits').select('team_id,budget_usd,warn_at,throttle_at').eq('org_id', orgId).eq('scope', 'team'),
-    supabase.from('projects').select('id,name,slug').eq('org_id', orgId).order('created_at', { ascending: false }),
+    admin.from('teams').select('id,name,project_id,created_at').eq('org_id', orgId).order('created_at', { ascending: true }),
+    admin.from('members').select('id,user_id,team_id,role,created_at').eq('org_id', orgId),
+    admin.from('limits').select('team_id,budget_usd,warn_at,throttle_at').eq('org_id', orgId).eq('scope', 'team'),
+    admin.from('projects').select('id,name,slug').eq('org_id', orgId).order('created_at', { ascending: false }),
+    admin.from('invitations').select('id,email,role,status,expires_at,created_at').eq('org_id', orgId).order('created_at', { ascending: false }),
   ])
 
   /* ── Fetch user display info via service role ── */
@@ -107,11 +118,21 @@ export default async function TeamsPage() {
     email:     userMap.get(m.user_id)?.email ?? '',
   }))
 
+  const enrichedInvites: InviteRow[] = (invitations ?? []).map(i => ({
+    id:        i.id,
+    email:     i.email,
+    role:      i.role,
+    status:    i.status,
+    expiresAt: i.expires_at,
+    createdAt: i.created_at,
+  }))
+
   return (
     <TeamsClient
       teams={enrichedTeams}
       members={enrichedMembers}
       projects={(projects ?? []) as ProjectRow[]}
+      invites={enrichedInvites}
       orgId={orgId}
     />
   )

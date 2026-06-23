@@ -35,13 +35,13 @@ export default async function LimitsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data: membership } = await supabase
+  const { data: _mb } = await admin
     .from('members')
     .select('org_id')
-    .eq('user_id', user.id)
-    .maybeSingle()
+    .eq('user_id', user!.id)
+    .limit(1)
 
-  const orgId = membership?.org_id ?? ''
+  const orgId = _mb?.[0]?.org_id ?? ''
 
   const [
     { data: rawLimits },
@@ -53,8 +53,8 @@ export default async function LimitsPage() {
       .select('id, scope, project_id, team_id, period, budget_usd, warn_at, throttle_at, block_at, is_active, projects(name), teams(name)')
       .eq('org_id', orgId)
       .order('created_at', { ascending: false }),
-    supabase.from('projects').select('id, name').eq('org_id', orgId).order('name'),
-    supabase.from('teams').select('id, name').eq('org_id', orgId).order('name'),
+    admin.from('projects').select('id, name').eq('org_id', orgId).order('name'),
+    admin.from('teams').select('id, name').eq('org_id', orgId).order('name'),
   ])
 
   const limits: LimitRow[] = (rawLimits ?? []).map(l => {
