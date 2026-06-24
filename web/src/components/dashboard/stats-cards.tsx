@@ -54,14 +54,24 @@ function TrendBadge({ pct }: { pct: number | null }) {
 interface Props {
   totalCost:     number
   totalTokens:   number
+  inputTokens:   number
+  outputTokens:  number
   totalRequests: number
   memberCount:   number
   sparks:        { costs: number[]; tokens: number[]; reqs: number[] }
   trends:        { cost: number | null; tokens: number | null; reqs: number | null }
 }
 
+function fmtTokShort(n: number): string {
+  if (n === 0)            return '0'
+  if (n >= 1_000_000_000) return `${(n/1_000_000_000).toFixed(1)}B`
+  if (n >= 1_000_000)     return `${(n/1_000_000).toFixed(1)}M`
+  if (n >= 1_000)         return `${(n/1_000).toFixed(0)}K`
+  return String(n)
+}
+
 /* ═══════════════════════════════════════════════════════════════ */
-export function StatsCards({ totalCost, totalTokens, totalRequests, memberCount, sparks, trends }: Props) {
+export function StatsCards({ totalCost, totalTokens, inputTokens, outputTokens, totalRequests, memberCount, sparks, trends }: Props) {
   const cards = [
     {
       label:     'Total Cost',
@@ -77,7 +87,9 @@ export function StatsCards({ totalCost, totalTokens, totalRequests, memberCount,
     {
       label:     'Tokens Used',
       value:     formatTokens(totalTokens),
-      sub:       'Input + output combined',
+      sub:       inputTokens > 0
+        ? `${fmtTokShort(inputTokens)} in · ${fmtTokShort(outputTokens)} out`
+        : 'Input + output combined',
       Icon:      Zap,
       trend:     trends.tokens,
       color:     '#00C48C',
@@ -86,9 +98,9 @@ export function StatsCards({ totalCost, totalTokens, totalRequests, memberCount,
       spark:     sparks.tokens,
     },
     {
-      label:     'API Requests',
+      label:     'LLM Calls',
       value:     formatNumber(totalRequests),
-      sub:       'Across all projects',
+      sub:       'Total completions sent',
       Icon:      Activity,
       trend:     trends.reqs,
       color:     '#60A5FA',

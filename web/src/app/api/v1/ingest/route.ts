@@ -44,6 +44,84 @@ function hashKey(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex')
 }
 
+/* ── Limit-check + notification (fire-and-forget after each ingest) ──────────
+ * Reads active monthly org limits, compares against current-month spend, and
+ * inserts a warning or alert notification if a threshold is crossed.
+ * Deduplicates: only one notification per org per type per calendar day.
+ * Called non-blocking — never delays or fails the ingest response.
+ * ─────────────────────────────────────────────────────────────────────────── */
+async function checkLimitsAndNotify(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string
+): Promise<void> {
+  // Fetch active monthly org-scoped limits
+  const { data: limits } = await admin
+    .from('limits')
+    .select('budget_usd, warn_at, block_at')
+    .eq('org_id', orgId)
+    .eq('scope', 'org')
+    .eq('period', 'monthly')
+    .eq('is_active', true)
+
+  if (!limits?.length) return
+
+  // Current-month spend from usage_agg
+  const monthStart = new Date()
+  monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+  const { data: aggRows } = await admin
+    .from('usage_agg')
+    .select('cost_usd')
+    .eq('org_id', orgId)
+    .gte('bucket', monthStart.toISOString().slice(0, 10))
+
+  const totalSpend = (aggRows ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const today = new Date().toISOString().slice(0, 10)
+
+  for (const limit of limits) {
+    const budget = Number(limit.budget_usd ?? 0)
+    if (budget <= 0) continue
+
+    const pct     = (totalSpend / budget) * 100
+    const warnAt  = Number(limit.warn_at  ?? 70)
+    const blockAt = Number(limit.block_at ?? 100)
+
+    let notifType: string | null = null
+    let title = ''
+    let body  = ''
+
+    if (pct >= blockAt) {
+      notifType = 'alert'
+      title     = 'Usage limit reached — requests may be blocked'
+      body      = `Monthly spend $${totalSpend.toFixed(2)} has hit ${pct.toFixed(0)}% of your $${budget.toFixed(2)} budget.`
+    } else if (pct >= warnAt) {
+      notifType = 'warning'
+      title     = `Usage warning — ${pct.toFixed(0)}% of monthly budget used`
+      body      = `Monthly spend is $${totalSpend.toFixed(2)} (${pct.toFixed(0)}% of $${budget.toFixed(2)} budget).`
+    }
+
+    if (!notifType) continue
+
+    // Deduplicate: skip if same type already fired today for this org
+    const { data: existing } = await admin
+      .from('notifications')
+      .select('id')
+      .eq('org_id', orgId)
+      .eq('type', notifType)
+      .gte('created_at', today + 'T00:00:00Z')
+      .limit(1)
+
+    if (existing?.length) continue
+
+    await admin.from('notifications').insert({
+      org_id:  orgId,
+      title,
+      body,
+      type:    notifType,
+      is_read: false,
+    })
+  }
+}
+
 /* ── Direct Supabase ingest (fallback) ── */
 async function directIngest(apiKey: string, body: Record<string, unknown>) {
   const admin = createAdminClient()
@@ -84,10 +162,30 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   const orgId    = keyRow.org_id
   const bucket   = new Date().toISOString().slice(0, 10)
 
+  // Resolve project_id — usage_events.project_id is NOT NULL.
+  // If not provided in body or API key, fall back to the org's first project.
+  let resolvedProjectId: string | null = projectId || null
+  if (!resolvedProjectId) {
+    const { data: firstProject } = await admin
+      .from('projects')
+      .select('id')
+      .eq('org_id', orgId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    resolvedProjectId = firstProject?.id ?? null
+  }
+  if (!resolvedProjectId) {
+    return NextResponse.json(
+      { error: 'No project found for this org. Create a project in the dashboard first.' },
+      { status: 422 }
+    )
+  }
+
   // 3. Insert usage event
   const { error: evtErr } = await admin.from('usage_events').insert({
     org_id:        orgId,
-    project_id:    projectId || null,
+    project_id:    resolvedProjectId,
     model,
     input_tokens:  effectiveInput,
     output_tokens: effectiveOutput,
@@ -104,7 +202,7 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   // 4. Upsert usage_agg
   const { error: aggErr } = await admin.rpc('upsert_usage_agg', {
     p_org_id:        orgId,
-    p_project_id:    projectId || null,
+    p_project_id:    resolvedProjectId,
     p_model:         model,
     p_bucket:        bucket,
     p_tokens:        totalTok,
@@ -116,7 +214,7 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   if (aggErr) {
     await admin.from('usage_agg').upsert({
       org_id:        orgId,
-      project_id:    projectId || null,
+      project_id:    resolvedProjectId,
       model,
       bucket,
       total_tokens:  totalTok,
@@ -131,6 +229,9 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   // 5. Update last_used_at on key
   await admin.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', keyRow.id)
 
+  // 6. Check limits & fire notifications (non-blocking — never fails the request)
+  checkLimitsAndNotify(admin, orgId).catch(() => {})
+
   return NextResponse.json({
     ok:           true,
     model,
@@ -143,9 +244,11 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
 
 /* ════════════════════════════════════════════════════════════ */
 
-const GO_INGEST_URL = (
-  process.env.INGEST_SERVICE_URL ?? 'http://localhost:8001'
-).replace(/\/$/, '') + '/v1/ingest'
+// Only proxy to Go ingest service when INGEST_SERVICE_URL is explicitly configured.
+// If unset (local dev default), always write directly to Supabase — no port 8001 attempts.
+const GO_INGEST_URL = process.env.INGEST_SERVICE_URL
+  ? process.env.INGEST_SERVICE_URL.replace(/\/$/, '') + '/v1/ingest'
+  : null
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get('Authorization')
@@ -162,29 +265,34 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  // Try Go service first
-  try {
-    const controller = new AbortController()
-    const timer      = setTimeout(() => controller.abort(), 4_000)
+  // Proxy to Go service only when explicitly configured
+  if (GO_INGEST_URL) {
+    try {
+      const controller = new AbortController()
+      const timer      = setTimeout(() => controller.abort(), 4_000)
 
-    const upstream = await fetch(GO_INGEST_URL, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
-      body:    JSON.stringify(body),
-      signal:  controller.signal,
-    })
-    clearTimeout(timer)
+      const upstream = await fetch(GO_INGEST_URL, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
+        body:    JSON.stringify(body),
+        signal:  controller.signal,
+      })
+      clearTimeout(timer)
 
-    const text = await upstream.text()
-    return new NextResponse(text, {
-      status:  upstream.status,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  } catch {
-    // Go service not running — fall back to direct Supabase write
-    console.info('[ingest] Go service unavailable, using direct Supabase path')
-    return directIngest(rawKey, body)
+      const text = await upstream.text()
+      if (text && text.trim().startsWith('{')) {
+        return new NextResponse(text, {
+          status:  upstream.status,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      console.info('[ingest] Go service returned invalid body, falling back to Supabase')
+    } catch {
+      console.info('[ingest] Go service unavailable, falling back to Supabase')
+    }
   }
+
+  return directIngest(rawKey, body)
 }
 
 export async function GET() {

@@ -1,21 +1,21 @@
 import { NextResponse }                              from 'next/server'
 import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
+import { requireOrgMember, requireApiKeyOrOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
 
 function db() { return createAdminClient() }
 
 /* GET /api/v1/limits?org_id=xxx */
 export async function GET(req: NextRequest) {
-  const orgId = req.nextUrl.searchParams.get('org_id')
-  const guard = await requireOrgMember(orgId)
+  const guard = await requireApiKeyOrOrgMember(req, req.nextUrl.searchParams.get('org_id'))
   if (guard instanceof NextResponse) return guard
+  const { orgId } = guard
 
   const { data, error } = await db()
     .from('limits')
     .select('*')
-    .eq('org_id', orgId!)
+    .eq('org_id', orgId)
     .order('created_at', { ascending: false })
   if (error) return dbError(error, 'GET limits')
   return NextResponse.json(data)

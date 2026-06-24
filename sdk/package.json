@@ -10,7 +10,15 @@
     "url": "https://github.com/tokenfin/tokenfin",
     "directory": "sdk"
   },
-  "keywords": ["llm", "openai", "anthropic", "cost", "tokens", "attribution", "finops"],
+  "keywords": [
+    "llm",
+    "openai",
+    "anthropic",
+    "cost",
+    "tokens",
+    "attribution",
+    "finops"
+  ],
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -21,17 +29,22 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:real": "tsx --tsconfig scripts/tsconfig.json scripts/test.ts",
     "prepublishOnly": "npm run typecheck && npm run build"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.4.0",
-    "@types/node": "^20.0.0"
+    "tsx": "^4.22.4",
+    "typescript": "^5.4.0"
   },
   "engines": {
     "node": ">=18"

@@ -1,24 +1,41 @@
 import { NextResponse }                              from 'next/server'
 import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, dbError }                 from '@/lib/api/auth'
+import { requireOrgMember, requireApiKeyOrOrgMember, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
 
 function db() { return createAdminClient() }
 
-/* GET /api/v1/models?org_id=xxx */
+/* GET /api/v1/models?org_id=xxx
+ * Returns top models by cost (last 30 days) from usage_agg.
+ * Accepts both API key auth (MCP) and session auth (dashboard). */
 export async function GET(req: NextRequest) {
-  const orgId = req.nextUrl.searchParams.get('org_id')
-  const guard = await requireOrgMember(orgId)
+  const guard = await requireApiKeyOrOrgMember(req, req.nextUrl.searchParams.get('org_id'))
   if (guard instanceof NextResponse) return guard
+  const { orgId } = guard
 
+  const since30 = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
   const { data, error } = await db()
-    .from('org_models')
-    .select('model, added_at')
-    .eq('org_id', orgId!)
-    .order('added_at', { ascending: true })
+    .from('usage_agg')
+    .select('model, total_tokens, cost_usd, request_count')
+    .eq('org_id', orgId)
+    .gte('bucket', since30)
   if (error) return dbError(error, 'GET models')
-  return NextResponse.json(data ?? [])
+
+  // Aggregate by model
+  const byModel: Record<string, { tokens: number; cost: number; requests: number }> = {}
+  for (const row of data ?? []) {
+    if (!byModel[row.model]) byModel[row.model] = { tokens: 0, cost: 0, requests: 0 }
+    byModel[row.model].tokens   += row.total_tokens
+    byModel[row.model].cost     += row.cost_usd
+    byModel[row.model].requests += row.request_count
+  }
+
+  return NextResponse.json(
+    Object.entries(byModel)
+      .map(([model, v]) => ({ model, ...v }))
+      .sort((a, b) => b.cost - a.cost)
+  )
 }
 
 /* POST /api/v1/models */

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import {
   TrendingUp, Download, BarChart3, Zap, Activity, DollarSign,
   AlertTriangle, Lightbulb, ArrowUpRight, ArrowDownRight, Minus,
-  ChevronRight, Cpu, Layers, Puzzle, RefreshCw,
+  ChevronRight, Cpu, Layers, Terminal, Globe, Code2, RefreshCw,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AnalyticsData, DayData } from './_types'
@@ -46,8 +46,9 @@ function AreaChart({ data, metric, compare, hovIdx, onHover }: {
     const cv = data.map(d => metric === 'cost' ? d.cost : metric === 'tokens' ? d.tok : d.calls / 1000)
     const pv = data.map(d => metric === 'cost' ? d.prev : metric === 'tokens' ? d.prevTok : d.prevCalls / 1000)
     const maxV = Math.max(...cv, ...pv, 1) * 1.22
-    const daily = metric === 'cost' ? 50 : metric === 'tokens' ? 5.0 : 2.3
-    return { cP: buildPaths(cv, maxV, n), pP: buildPaths(pv, maxV, n), maxV, yBudget: +(PT + PH - (daily / maxV) * PH).toFixed(2) }
+    // Daily avg reference line (real, not hardcoded)
+    const avgVal = cv.reduce((s, v) => s + v, 0) / Math.max(cv.length, 1)
+    return { cP: buildPaths(cv, maxV, n), pP: buildPaths(pv, maxV, n), maxV, yBudget: +(PT + PH - (avgVal / maxV) * PH).toFixed(2) }
   }, [data, metric, n])
 
   const fmtY = (v: number) => metric === 'cost' ? `$${v.toFixed(0)}` : metric === 'tokens' ? `${v.toFixed(1)}M` : `${v.toFixed(0)}K`
@@ -76,9 +77,9 @@ function AreaChart({ data, metric, compare, hovIdx, onHover }: {
         ))}
 
         <line x1={PL} x2={PL + PW} y1={yBudget} y2={yBudget}
-          stroke="#EF4444" strokeWidth="1.5" strokeDasharray="5,4" opacity="0.5" />
-        <text x={PL + PW - 6} y={yBudget - 5} textAnchor="end" fontSize="9.5"
-          fill="#EF4444" opacity="0.65" fontFamily="system-ui">Daily budget</text>
+          stroke="var(--fg-tertiary)" strokeWidth="1" strokeDasharray="4,3" opacity="0.35" />
+        <text x={PL + PW - 6} y={yBudget - 4} textAnchor="end" fontSize="9"
+          fill="var(--fg-tertiary)" opacity="0.5" fontFamily="system-ui">avg</text>
 
         {data.map((d, i) => !d.spike ? null : (
           <g key={i}>
@@ -327,12 +328,18 @@ export function AnalyticsClient({ initialData }: Props) {
           <Activity size={15} />
         </KpiCard>
         <KpiCard label="Tokens MTD" value={`${totTok.toFixed(1)}M`}
-          sub={`${(totTok/Math.max(data.length,1)).toFixed(1)}M/day avg`}
+          sub={(() => {
+            const inM  = (initialData.inputTokens  / 1_000_000).toFixed(1)
+            const outM = (initialData.outputTokens / 1_000_000).toFixed(1)
+            return initialData.inputTokens > 0
+              ? `↑${inM}M in · ↓${outM}M out`
+              : `${(totTok/Math.max(data.length,1)).toFixed(1)}M/day avg`
+          })()}
           delta={totPrevTok > 0 ? ((totTok/totPrevTok)-1)*100 : undefined} deltaLabel="vs prior period"
           iconColor="#20B2AA">
           <Zap size={15} />
         </KpiCard>
-        <KpiCard label="API Calls" value={totCalls.toLocaleString()}
+        <KpiCard label="LLM Calls" value={totCalls.toLocaleString()}
           sub={`${Math.round(totCalls/Math.max(data.length,1)).toLocaleString()}/day avg`}
           delta={totPrevCalls > 0 ? ((totCalls/totPrevCalls)-1)*100 : undefined} deltaLabel="vs prior period"
           iconColor="#4285F4">
@@ -360,8 +367,8 @@ export function AnalyticsClient({ initialData }: Props) {
                 <span className="text-[11px] text-[var(--fg-tertiary)]">Prev period</span>
               </div>}
               <div className="flex items-center gap-1.5">
-                <div className="w-6 border-t-2 border-dashed border-[var(--red)] opacity-50" />
-                <span className="text-[11px] text-[var(--fg-tertiary)]">Budget</span>
+                <div className="w-6 border-t border-dashed border-[var(--fg-tertiary)] opacity-40" />
+                <span className="text-[11px] text-[var(--fg-tertiary)]">Avg</span>
               </div>
             </div>
           </div>
@@ -455,44 +462,70 @@ export function AnalyticsClient({ initialData }: Props) {
           )}
         </div>
 
-        {/* By Platform */}
+        {/* By Source — real platform detection from usage_events.tags */}
         <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-[13px] font-bold text-[var(--fg)]">By platform</p>
-            <Link href="/dashboard/mcp" className="text-[11.5px] font-semibold text-coral hover:opacity-80 flex items-center gap-1">
-              Manage <ChevronRight size={11} />
-            </Link>
+            <p className="text-[13px] font-bold text-[var(--fg)]">By source</p>
+            <span className="text-[10px] font-semibold text-[var(--fg-tertiary)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded-full uppercase tracking-wide">Live</span>
           </div>
-          {initialData.byPlatform.length > 0 ? (
-            <>
-              <div className="space-y-3">
-                {initialData.byPlatform.map(p => (
-                  <div key={p.name}>
+          {/* Input / Output token split */}
+          {(initialData.inputTokens > 0 || initialData.outputTokens > 0) && (
+            <div className="flex gap-2">
+              <div className="flex-1 bg-[var(--bg-secondary)] rounded-xl px-3 py-2">
+                <p className="text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wide">Input</p>
+                <p className="text-[14px] font-bold text-[var(--fg)] tabular-nums mt-0.5">
+                  {initialData.inputTokens >= 1_000_000
+                    ? `${(initialData.inputTokens/1_000_000).toFixed(1)}M`
+                    : `${(initialData.inputTokens/1000).toFixed(0)}K`}
+                </p>
+                <p className="text-[10px] text-[var(--fg-tertiary)]">tokens (prompt)</p>
+              </div>
+              <div className="flex-1 bg-[var(--red-bg)] rounded-xl px-3 py-2">
+                <p className="text-[10px] font-semibold text-[var(--red)] uppercase tracking-wide">Output</p>
+                <p className="text-[14px] font-bold text-[var(--red)] tabular-nums mt-0.5">
+                  {initialData.outputTokens >= 1_000_000
+                    ? `${(initialData.outputTokens/1_000_000).toFixed(1)}M`
+                    : `${(initialData.outputTokens/1000).toFixed(0)}K`}
+                </p>
+                <p className="text-[10px] text-[var(--red)]">tokens (completion)</p>
+              </div>
+            </div>
+          )}
+          {initialData.bySource.length > 0 ? (
+            <div className="space-y-2.5">
+              {initialData.bySource.map(s => {
+                const Icon = s.platform === 'Codex'    ? Terminal :
+                             s.platform === 'MCP'      ? Code2    :
+                             s.platform === 'Claude Web' || s.platform === 'Claude CLI' ? Globe :
+                             Activity
+                return (
+                  <div key={s.platform}>
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background:p.color }} />
-                        <span className="text-[12px] font-semibold text-[var(--fg)]">{p.name}</span>
+                        <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0"
+                          style={{ background: `${s.color}22` }}>
+                          <Icon size={11} style={{ color: s.color }} />
+                        </div>
+                        <span className="text-[12px] font-semibold text-[var(--fg)]">{s.platform}</span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10.5px] text-[var(--fg-tertiary)]">{p.pct.toFixed(1)}%</span>
-                        <span className="text-[12px] font-bold text-[var(--fg)] tabular-nums">${p.cost.toFixed(0)}</span>
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-[10.5px] text-[var(--fg-tertiary)] tabular-nums">{s.calls.toLocaleString()} calls</span>
+                        <span className="text-[11.5px] font-bold text-[var(--fg)] tabular-nums">
+                          {s.pct.toFixed(1)}%
+                        </span>
                       </div>
                     </div>
                     <div className="h-1.5 bg-[var(--bg-secondary)] rounded-full overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width:`${p.pct}%`, background:p.color }} />
+                      <div className="h-full rounded-full transition-all" style={{ width:`${Math.max(s.pct,2)}%`, background: s.color }} />
                     </div>
                   </div>
-                ))}
-              </div>
-              <div className="pt-1 border-t border-[var(--border)] flex items-center gap-2">
-                <Puzzle size={12} className="text-[var(--fg-tertiary)]" />
-                <p className="text-[11px] text-[var(--fg-tertiary)]">{initialData.byPlatform.length} connected · <Link href="/dashboard/mcp" className="text-coral hover:underline">add platform</Link></p>
-              </div>
-            </>
+                )
+              })}
+            </div>
           ) : (
-            <div className="py-4 text-center space-y-2">
-              <p className="text-[12px] text-[var(--fg-tertiary)]">No platforms connected yet</p>
-              <Link href="/dashboard/mcp" className="text-[11.5px] font-semibold text-coral hover:underline">Connect a platform →</Link>
+            <div className="py-4 text-center space-y-1">
+              <p className="text-[12px] text-[var(--fg-tertiary)]">No usage data yet</p>
+              <p className="text-[11px] text-[var(--fg-tertiary)]">Source detected automatically from ingest tags</p>
             </div>
           )}
         </div>

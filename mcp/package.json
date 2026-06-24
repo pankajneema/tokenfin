@@ -1,0 +1,32 @@
+{
+  "name": "@tokenfin/mcp",
+  "version": "0.1.0",
+  "description": "TokenFin MCP Server — connect Claude Desktop, Cursor, OpenCode, Windsurf and any MCP-compatible tool directly to your TokenFin dashboard",
+  "license": "MIT",
+  "author": "TokenFin",
+  "homepage": "https://tokenfin.io",
+  "keywords": ["mcp", "model-context-protocol", "llm", "cost", "tokens", "claude", "cursor", "windsurf"],
+  "type": "module",
+  "bin": {
+    "tokenfin-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

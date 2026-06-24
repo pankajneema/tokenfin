@@ -6,13 +6,290 @@ import {
   MessageCircle, Mail, FileText, PlayCircle, Star,
   AlertCircle, Package, Clock, Rocket, Layers, Key,
   Shield, Bell, GitBranch, BarChart3, RefreshCw,
+  Monitor, Code2, Plug, Plug2, SquareTerminal, Info,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /* ══════════════════════════════════════════════════════════════
    TYPES
 ══════════════════════════════════════════════════════════════ */
-type SdkLang = 'typescript' | 'python' | 'rest'
+type TabId = 'start' | 'tools' | 'api' | 'changelog' | 'support'
+
+/* ══════════════════════════════════════════════════════════════
+   TOOL GUIDES — friendly, non-developer language
+══════════════════════════════════════════════════════════════ */
+interface ToolStep {
+  n:       number
+  title:   string
+  desc:    string
+  code?:   string
+  tip?:    string
+}
+
+interface ToolGuide {
+  id:            string
+  name:          string
+  tagline:       string
+  method:        string
+  methodColor:   string
+  methodBg:      string
+  difficulty:    'Easy' | 'Medium'
+  Icon:          React.ElementType
+  iconColor:     string
+  iconBg:        string
+  steps:         ToolStep[]
+  tracks:        string[]
+  verify:        string
+}
+
+const TOOL_GUIDES: ToolGuide[] = [
+  {
+    id:          'codex',
+    name:        'Codex (OpenAI CLI)',
+    tagline:     'AI coding assistant you run in your terminal',
+    method:      'Auto-tracked via proxy',
+    methodColor: 'text-teal',
+    methodBg:    'bg-[var(--green-bg)]',
+    difficulty:  'Easy',
+    Icon:        SquareTerminal,
+    iconColor:   'text-teal',
+    iconBg:      'bg-[var(--green-bg)]',
+    steps: [
+      {
+        n:    1,
+        title: 'Install the TokenFin Tracker (one-time setup)',
+        desc:  'Find the file called `install.command` inside your TokenFin folder. Double-click it. A window pops up — click "Install". The tracker is now a tiny background app that starts automatically when you log in.',
+        tip:   'You only need to do this once. After that, the tracker runs silently in the background.',
+      },
+      {
+        n:    2,
+        title: 'Open your Codex config file',
+        desc:  'Open a Terminal window and paste this command, then press Enter:',
+        code:  'open ~/.codex/config.toml',
+        tip:   'This opens your Codex settings file in TextEdit (or your default text editor).',
+      },
+      {
+        n:    3,
+        title: 'Tell Codex to use the TokenFin address',
+        desc:  'Look for a section like `[model_providers.something]` — it might say "headroom", "openai", or another name. That is just the name of the AI service Codex is talking to. Inside that section, find the line that says `base_url` and change it to the address below, then save the file (Cmd+S):',
+        code:  'base_url = "http://127.0.0.1:7070/v1"',
+        tip:   'Port 7070 is where the TokenFin tracker runs on your computer. All Codex AI calls will pass through it before reaching the AI provider — that\'s how usage gets captured.',
+      },
+      {
+        n:    4,
+        title: 'Restart Codex',
+        desc:  'Close your terminal and open a new one. Use Codex exactly as you normally would — everything is tracked automatically from now on!',
+      },
+    ],
+    tracks: [
+      'Every Codex session and command',
+      'Number of input tokens (your prompts)',
+      'Number of output tokens (AI responses)',
+      'Cost per session',
+      'Which AI model was used',
+    ],
+    verify: 'Run a Codex command like `codex "explain this code"`, then open the TokenFin Overview page. A new event should appear within 30 seconds.',
+  },
+
+  {
+    id:          'cursor',
+    name:        'Cursor',
+    tagline:     'AI-powered code editor — type less, code more',
+    method:      'Auto-tracked via proxy',
+    methodColor: 'text-teal',
+    methodBg:    'bg-[var(--green-bg)]',
+    difficulty:  'Easy',
+    Icon:        Code2,
+    iconColor:   'text-[var(--blue)]',
+    iconBg:      'bg-[var(--blue-bg)]',
+    steps: [
+      {
+        n:    1,
+        title: 'Install the TokenFin Tracker (one-time)',
+        desc:  'If you have not done this yet: find `install.command` in your TokenFin folder and double-click it. Click "Install" in the window that opens.',
+        tip:   'Already done this for Codex? The tracker is already running — skip to Step 2.',
+      },
+      {
+        n:    2,
+        title: 'Open Cursor Settings',
+        desc:  'Inside Cursor, press Cmd+, (Mac) or Ctrl+, (Windows). The Settings panel opens on the right side of the screen.',
+      },
+      {
+        n:    3,
+        title: 'Find the OpenAI URL setting',
+        desc:  'In the search box at the top of Settings, type "openai base". You will see an option called "Override OpenAI Base URL" or "OpenAI API Base URL".',
+      },
+      {
+        n:    4,
+        title: 'Enter the TokenFin tracker address',
+        desc:  'Click on that setting and change the value to the address below, then press Enter to save:',
+        code:  'http://127.0.0.1:7070/v1',
+        tip:   'This tells Cursor to route its AI calls through the TokenFin tracker before they reach OpenAI.',
+      },
+      {
+        n:    5,
+        title: 'Use Cursor as usual',
+        desc:  'Select some code, press Cmd+K to edit it with AI, or use Cursor Chat — all of these are now tracked automatically!',
+      },
+    ],
+    tracks: [
+      'Inline AI edits (Cmd+K)',
+      'Cursor Chat conversations',
+      'Code generation and autocomplete',
+      'Tokens and cost per session',
+    ],
+    verify: 'Ask Cursor AI to explain or edit a piece of code. Then open TokenFin Overview — the event should show up within 30 seconds.',
+  },
+
+  {
+    id:          'cowork',
+    name:        'Cowork (Claude Desktop)',
+    tagline:     'Anthropic\'s desktop AI assistant — the app you\'re using right now',
+    method:      'MCP server',
+    methodColor: 'text-[#8B5CF6]',
+    methodBg:    'bg-[#8B5CF6]/10',
+    difficulty:  'Easy',
+    Icon:        Monitor,
+    iconColor:   'text-[#8B5CF6]',
+    iconBg:      'bg-[#8B5CF6]/10',
+    steps: [
+      {
+        n:    1,
+        title: 'Get a TokenFin API key',
+        desc:  'Go to Connected Platforms (left sidebar) → click "Connect platform" → name it "Cowork" → click "Generate API key" → copy the key. Keep this tab open, you\'ll need the key in step 3.',
+      },
+      {
+        n:    2,
+        title: 'Open the Claude Desktop config file',
+        desc:  'Open a Terminal window and paste this command, then press Enter:',
+        code:  'open "~/Library/Application Support/Claude/"',
+        tip:   'This opens the Claude Desktop folder. Look for a file called `claude_desktop_config.json`. If it does not exist, create a new text file with that name.',
+      },
+      {
+        n:    3,
+        title: 'Add the TokenFin MCP server',
+        desc:  'Open `claude_desktop_config.json` in TextEdit. Add the block below (paste it inside the outer curly braces). Replace YOUR-API-KEY-HERE with the key you copied:',
+        code:  `{
+  "mcpServers": {
+    "tokenfin": {
+      "command": "node",
+      "args": ["/Users/mac/tokenfin/mcp/dist/index.js"],
+      "env": {
+        "TOKENFIN_API_KEY": "YOUR-API-KEY-HERE",
+        "TOKENFIN_BASE_URL": "https://tokenfin.curiousdevs.com"
+      }
+    }
+  }
+}`,
+        tip:   'If the file already has other mcpServers entries, just add the "tokenfin" block inside the existing "mcpServers" object — do not replace the whole file.',
+      },
+      {
+        n:    4,
+        title: 'Restart Cowork',
+        desc:  'Press Cmd+Q to fully quit Cowork, then reopen it. When you\'re back in a chat, ask "What is my LLM spending this month?" — TokenFin will answer directly in the chat!',
+      },
+    ],
+    tracks: [
+      'Questions about your spending and usage',
+      'All queries you make through Cowork\'s AI',
+      'Token counts and costs per conversation',
+    ],
+    verify: 'In a Cowork chat, type "What is my token usage today?" — you should get a real answer from TokenFin. Then check the Overview dashboard to see the event.',
+  },
+
+  {
+    id:          'claude-cli',
+    name:        'Claude CLI (Claude Code)',
+    tagline:     'Anthropic\'s AI coding tool you run in your terminal',
+    method:      'Proxy (env variable)',
+    methodColor: 'text-coral',
+    methodBg:    'bg-coral/10',
+    difficulty:  'Easy',
+    Icon:        SquareTerminal,
+    iconColor:   'text-coral',
+    iconBg:      'bg-coral/10',
+    steps: [
+      {
+        n:    1,
+        title: 'Install the TokenFin Tracker (one-time)',
+        desc:  'Find `install.command` in your TokenFin folder and double-click it, then click "Install".',
+        tip:   'Already done for Codex or Cursor? Skip this step.',
+      },
+      {
+        n:    2,
+        title: 'Run Claude with tracking (quick way)',
+        desc:  'Instead of just typing `claude`, type the following in your terminal and press Enter:',
+        code:  'ANTHROPIC_BASE_URL=http://127.0.0.1:7070 claude',
+        tip:   'This tells Claude CLI to route through the TokenFin tracker. You\'ll need to add this prefix each time unless you do Step 3.',
+      },
+      {
+        n:    3,
+        title: 'Make it permanent (recommended)',
+        desc:  'So you never have to remember the prefix, paste this into your Terminal and press Enter:',
+        code:  "echo 'export ANTHROPIC_BASE_URL=http://127.0.0.1:7070' >> ~/.zshrc && source ~/.zshrc",
+        tip:   'After this, just typing `claude` automatically routes through TokenFin. Works for the current session and all future ones.',
+      },
+    ],
+    tracks: [
+      'All Claude CLI / Claude Code sessions',
+      'Input and output tokens',
+      'Cost per conversation',
+      'Which model version was used',
+    ],
+    verify: 'Run `claude "write hello world in Python"`, then check TokenFin Overview for a new event.',
+  },
+
+  {
+    id:          'opencode',
+    name:        'OpenCode',
+    tagline:     'Open-source AI coding assistant for your terminal',
+    method:      'Auto-tracked via proxy',
+    methodColor: 'text-teal',
+    methodBg:    'bg-[var(--green-bg)]',
+    difficulty:  'Medium',
+    Icon:        Code,
+    iconColor:   'text-[var(--amber)]',
+    iconBg:      'bg-[var(--amber-bg)]',
+    steps: [
+      {
+        n:    1,
+        title: 'Install the TokenFin Tracker (one-time)',
+        desc:  'Find `install.command` in your TokenFin folder and double-click it, then click "Install".',
+      },
+      {
+        n:    2,
+        title: 'Find your OpenCode config file',
+        desc:  'Open a Terminal window and paste this command to look for the config folder:',
+        code:  'ls ~/.config/opencode/ 2>/dev/null || ls ~/.opencode/ 2>/dev/null',
+        tip:   'The config file is usually called `config.json` or `config.toml`. If nothing shows up, OpenCode may not be installed or the config may be elsewhere.',
+      },
+      {
+        n:    3,
+        title: 'Add the proxy URL to the config',
+        desc:  'Open the config file in a text editor. Add or change the OpenAI base URL setting to:',
+        code:  `# If config.toml:
+openai_base_url = "http://127.0.0.1:7070/v1"
+
+# If config.json:
+{
+  "openai_base_url": "http://127.0.0.1:7070/v1"
+}`,
+        tip:   'OpenCode uses OpenAI-compatible APIs, so pointing it at the TokenFin proxy (port 7070) works the same way as Codex or Cursor.',
+      },
+      {
+        n:    4,
+        title: 'Restart OpenCode',
+        desc:  'Close and reopen OpenCode. All your AI coding sessions will now be tracked!',
+      },
+    ],
+    tracks: [
+      'All OpenCode sessions',
+      'Tokens and cost per session',
+      'Which AI model was used',
+    ],
+    verify: 'Use OpenCode to do something with AI, then check TokenFin Overview for the event within 30 seconds.',
+  },
+]
 
 /* ══════════════════════════════════════════════════════════════
    CHANGELOG DATA
@@ -25,151 +302,109 @@ interface ChangelogEntry {
   items:    string[]
 }
 
-const CHANGELOG: ChangelogEntry[] = [
-  {
-    version: '1.4.0',
-    date:    'Jun 12, 2026',
-    tag:     'new',
-    title:   'Connected Platforms (MCP) + Integrations',
-    items: [
-      'New Connected Platforms page — connect any agent, SaaS tool, or CLI and track its LLM usage via ingest API keys',
-      'Integrations hub with 24 connectors across Observability, Notifications, Auth, DevTools & Billing',
-      'ConnectModal with 3-step flow: info → config → success',
-      'Auto-sync error banners when a connected integration reports a failure',
-    ],
-  },
-  {
-    version: '1.3.0',
-    date:    'Jun 2, 2026',
-    tag:     'new',
-    title:   'Limits & Alerts v2',
-    items: [
-      'Edit and duplicate alert rules inline — no page reload',
-      '"Add alert rule" from a limit card now opens a pre-filled modal scoped to that limit',
-      'Cool-down period selector (1h / 4h / 24h / 72h) on all alert rules',
-      'Notification channel multi-select: Email, Slack, Webhook, In-app',
-    ],
-  },
-  {
-    version: '1.2.0',
-    date:    'May 18, 2026',
-    tag:     'improved',
-    title:   'UI quality pass — Manage section',
-    items: [
-      'Fixed status toggle overflow on API Keys page',
-      'Active filter badge now uses bg-white/20 pill pattern — no more white blob on dark backgrounds',
-      'Menu item text contrast improved across all Manage pages',
-    ],
-  },
-  {
-    version: '1.1.0',
-    date:    'May 4, 2026',
-    tag:     'new',
-    title:   'Models page + cost-per-model analytics',
-    items: [
-      'Dedicated Models page with provider + tier filter tabs',
-      'Cost per 1M tokens shown inline for every model variant',
-      'Deprecation warnings for models with upcoming end-of-life',
-    ],
-  },
-  {
-    version: '1.0.0',
-    date:    'Apr 14, 2026',
-    tag:     'new',
-    title:   'TokenFin public launch',
-    items: [
-      'Dashboard overview with cost, tokens, and savings widgets',
-      'Projects & Teams workspace with role-based access',
-      'API Keys management with rotation and revocation',
-      'Usage analytics with model, project, and cost breakdowns',
-      'Limits with Warn / Throttle / Block thresholds',
-      'Alert rules with multi-channel delivery',
-    ],
-  },
-]
+/* No public releases yet — product is in early access */
+const CHANGELOG: ChangelogEntry[] = []
 
 /* ══════════════════════════════════════════════════════════════
    GUIDES
 ══════════════════════════════════════════════════════════════ */
-const GUIDES = [
-  { icon: Rocket,   title: 'Quick start — first API key',        desc: 'Generate your first ingest key and send a test event in under 5 minutes.',  time: '5 min', href: '#' },
-  { icon: Layers,   title: 'Connect Cowork / Claude Code',       desc: 'Instrument Anthropic tools to attribute every LLM call to the right project.', time: '8 min', href: '#' },
-  { icon: BarChart3,title: 'Read your cost dashboard',           desc: 'Understand the Overview widgets, drill-down flows, and export options.',      time: '6 min', href: '#' },
-  { icon: Shield,   title: 'Set budget limits',                  desc: 'Create Warn / Throttle / Block limits at the project or team level.',         time: '4 min', href: '#' },
-  { icon: Bell,     title: 'Configure alert rules',              desc: 'Route Slack + email alerts for spend spikes, anomalies, and limit breaches.',  time: '5 min', href: '#' },
-  { icon: GitBranch,title: 'Connect Datadog / Grafana',          desc: 'Push TokenFin metrics to your observability stack via the Integrations hub.',  time: '7 min', href: '#' },
-  { icon: Key,      title: 'Rotate & scope API keys',            desc: 'Key rotation best practices, prefix scoping, and revocation workflows.',       time: '3 min', href: '#' },
-  { icon: RefreshCw,title: 'Export data to BigQuery',            desc: 'Sync daily usage snapshots to BigQuery for long-term cost analytics.',         time: '10 min', href: '#' },
+/* Real in-app quick links — no dead href="#" */
+const QUICK_LINKS = [
+  { icon: Rocket,    title: 'Connect your AI tools',   desc: 'Step-by-step guides for Codex, Cursor, Claude CLI, Cowork, OpenCode',  href: null, tab: 'tools' as TabId, color: 'text-[#8B5CF6]', bg: 'bg-[#8B5CF6]/10' },
+  { icon: Shield,    title: 'Set a budget limit',       desc: 'Create Warn / Throttle / Block thresholds at project or team level',    href: '/dashboard/limits',        tab: null, color: 'text-coral',           bg: 'bg-coral/10'          },
+  { icon: Bell,      title: 'Configure alert rules',    desc: 'Route email + Slack alerts for spend spikes and limit breaches',        href: '/dashboard/alerts',        tab: null, color: 'text-[var(--amber)]',  bg: 'bg-[var(--amber-bg)]'  },
+  { icon: GitBranch, title: 'Connect Datadog / Grafana',desc: 'Push TokenFin metrics to your observability stack',                    href: '/dashboard/integrations',  tab: null, color: 'text-[var(--blue)]',   bg: 'bg-[var(--blue-bg)]'   },
+  { icon: Key,       title: 'Manage API keys',          desc: 'Rotate, revoke, and scope your ingest keys by environment',             href: '/dashboard/keys',          tab: null, color: 'text-teal',            bg: 'bg-[var(--green-bg)]'  },
+  { icon: BarChart3, title: 'View cost analytics',      desc: 'Drill into per-model and per-project spend for the last 30 days',       href: '/dashboard/analytics',     tab: null, color: 'text-coral',           bg: 'bg-coral/10'           },
 ]
 
 /* ══════════════════════════════════════════════════════════════
-   API REFERENCE SECTIONS
+   API REFERENCE — public ingest endpoint only
+   Other /api/v1/* routes are internal (admin-auth, not public)
 ══════════════════════════════════════════════════════════════ */
-const API_SECTIONS = [
-  { method: 'POST', path: '/v1/ingest',           desc: 'Track a single LLM call (model, tokens, cost, metadata)',         tag: 'Ingest' },
-  { method: 'POST', path: '/v1/ingest/batch',     desc: 'Track up to 1 000 LLM calls in a single request',                 tag: 'Ingest' },
-  { method: 'GET',  path: '/v1/usage',            desc: 'Query aggregated usage by project, model, team, or date range',    tag: 'Analytics' },
-  { method: 'GET',  path: '/v1/costs',            desc: 'Cost totals with model-level breakdown',                           tag: 'Analytics' },
-  { method: 'GET',  path: '/v1/limits',           desc: 'List all active limits and their current consumption',             tag: 'Limits' },
-  { method: 'POST', path: '/v1/limits',           desc: 'Create or update a Warn / Throttle / Block limit',                 tag: 'Limits' },
-  { method: 'GET',  path: '/v1/alerts',           desc: 'List alert rules and their last-fired timestamps',                 tag: 'Alerts' },
-  { method: 'POST', path: '/v1/export',           desc: 'Trigger an async CSV / JSON export job',                          tag: 'Export' },
+
+/* ── Ingest payload fields ── */
+const INGEST_FIELDS = [
+  { field: 'model',         type: 'string',  req: true,  desc: 'Model name, e.g. "claude-sonnet-4-6" or "gpt-4o". Used to auto-compute cost if cost_usd is omitted.' },
+  { field: 'input_tokens',  type: 'number',  req: false, desc: 'Number of prompt / input tokens for this call.' },
+  { field: 'output_tokens', type: 'number',  req: false, desc: 'Number of completion / output tokens for this call.' },
+  { field: 'total_tokens',  type: 'number',  req: false, desc: 'Total tokens (fallback when input/output split is unavailable). At least one token field must be > 0.' },
+  { field: 'cost_usd',      type: 'number',  req: false, desc: 'Actual cost in USD. If omitted, auto-computed from model pricing table.' },
+  { field: 'project_id',    type: 'string',  req: false, desc: 'Project UUID to attribute this event to. Falls back to the API key\'s project, then the org\'s first project.' },
+  { field: 'tags',          type: 'object',  req: false, desc: 'Flat string→string map for filtering, e.g. { "env": "prod", "team": "backend" }.' },
+  { field: 'metadata',      type: 'object',  req: false, desc: 'Any extra data you want to attach — session IDs, user IDs, feature flags, etc.' },
 ]
 
-/* ══════════════════════════════════════════════════════════════
-   SDK SNIPPETS
-══════════════════════════════════════════════════════════════ */
-const SNIPPET: Record<SdkLang, string> = {
-  typescript: `import { TokenFin } from '@tokenfin/node'
-
-const tf = new TokenFin({
-  apiKey:  process.env.TOKENFIN_API_KEY!,
-  project: 'my-project',   // default project
-})
-
-// Wrap any LLM call — tokens + cost tracked automatically
-const response = await tf.track({
-  model:    'claude-sonnet-4-6',
-  messages: [{ role: 'user', content: 'Hello!' }],
-  metadata: { session_id: 'abc123', user: 'pankaj@co.com' },
-})
-console.log(response.choices[0].message.content)`,
-
-  python: `from tokenfin import TokenFin
-import os
-
-tf = TokenFin(
-    api_key=os.environ["TOKENFIN_API_KEY"],
-    project="my-project",
-)
-
-# Wrap any LLM call
-response = tf.track(
-    model="claude-sonnet-4-6",
-    messages=[{"role": "user", "content": "Hello!"}],
-    metadata={"session_id": "abc123"},
-)
-print(response["choices"][0]["message"]["content"])`,
-
-  rest: `# Single event
-curl -X POST https://api.tokenfin.io/v1/ingest \\
-  -H "Authorization: Bearer $TOKENFIN_API_KEY" \\
+/* ── Code examples (verified against route.ts) ── */
+const INGEST_CURL = `curl -X POST https://tokenfin.curiousdevs.com/api/v1/ingest \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model":         "claude-sonnet-4-6",
-    "project":       "my-project",
     "input_tokens":  1240,
-    "output_tokens": 380,
-    "cost_usd":      0.0072,
+    "output_tokens":  380,
+    "project_id":    "YOUR_PROJECT_ID",
+    "tags":          { "env": "prod" },
     "metadata":      { "session_id": "abc123" }
   }'
 
-# Batch (up to 1 000 events)
-curl -X POST https://api.tokenfin.io/v1/ingest/batch \\
-  -H "Authorization: Bearer $TOKENFIN_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "events": [ { ... }, { ... } ] }'`,
-}
+# Response
+# {
+#   "ok": true,
+#   "model": "claude-sonnet-4-6",
+#   "total_tokens": 1620,
+#   "cost_usd": 0.009420,
+#   "bucket": "2026-06-24",
+#   "source": "direct"
+# }`
+
+const INGEST_PYTHON = `import requests
+
+response = requests.post(
+    "https://tokenfin.curiousdevs.com/api/v1/ingest",
+    headers={
+        "Authorization": "Bearer YOUR_API_KEY",
+        "Content-Type":  "application/json",
+    },
+    json={
+        "model":         "claude-sonnet-4-6",
+        "input_tokens":  1240,
+        "output_tokens":  380,
+        "project_id":    "YOUR_PROJECT_ID",
+        "tags":          { "env": "prod" },
+        "metadata":      { "session_id": "abc123" },
+    },
+)
+
+data = response.json()
+print(data)
+# {'ok': True, 'model': 'claude-sonnet-4-6',
+#  'total_tokens': 1620, 'cost_usd': 0.00942,
+#  'bucket': '2026-06-24', 'source': 'direct'}`
+
+const INGEST_NODE = `// Works with Node.js 18+ (native fetch) and any browser environment
+const response = await fetch("https://tokenfin.curiousdevs.com/api/v1/ingest", {
+  method:  "POST",
+  headers: {
+    "Authorization": "Bearer YOUR_API_KEY",
+    "Content-Type":  "application/json",
+  },
+  body: JSON.stringify({
+    model:         "claude-sonnet-4-6",
+    input_tokens:  1240,
+    output_tokens:  380,
+    project_id:    "YOUR_PROJECT_ID",
+    tags:          { env: "prod" },
+    metadata:      { session_id: "abc123" },
+  }),
+})
+
+const data = await response.json()
+console.log(data)
+// { ok: true, model: 'claude-sonnet-4-6',
+//   total_tokens: 1620, cost_usd: 0.00942,
+//   bucket: '2026-06-24', source: 'direct' }`
+
 
 /* ══════════════════════════════════════════════════════════════
    SETUP STEPS
@@ -191,10 +426,10 @@ const SETUP_STEPS = [
   },
   {
     n: 3,
-    title: 'Instrument your code',
-    desc:  'Install the SDK (npm / pip) or POST directly to /v1/ingest. Pass your API key and project name.',
-    href:  '#sdk',
-    cta:   'See SDK',
+    title: 'Connect your AI tool',
+    desc:  'Follow the step-by-step guide for your tool (Codex, Cursor, Claude CLI, Cowork, OpenCode) — no code required.',
+    href:  null as unknown as string,
+    cta:   'Connect tools',
   },
   {
     n: 4,
@@ -287,19 +522,121 @@ function ChangelogCard({ entry }: { entry: ChangelogEntry }) {
   )
 }
 
+/* ── Tool Guide Card ── */
+function ToolCard({ tool }: { tool: ToolGuide }) {
+  const [open, setOpen] = useState(false)
+  const Icon = tool.Icon
+  const diffColor = tool.difficulty === 'Easy'
+    ? 'bg-[var(--green-bg)] text-teal'
+    : 'bg-[var(--amber-bg)] text-[var(--amber)]'
+
+  return (
+    <div className="border border-[var(--border)] rounded-2xl bg-white dark:bg-[#141428] overflow-hidden transition-all">
+      {/* Header */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-[var(--bg-hover)] transition-colors"
+      >
+        <div className={cn('w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0', tool.iconBg)}>
+          <Icon size={20} className={tool.iconColor} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-[13.5px] font-bold text-[var(--fg)] leading-snug">{tool.name}</p>
+          <p className="text-[11.5px] text-[var(--fg-tertiary)] mt-0.5">{tool.tagline}</p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+          <span className={cn('text-[10.5px] font-semibold px-2 py-0.5 rounded-full', tool.methodBg, tool.methodColor)}>
+            {tool.method}
+          </span>
+          <span className={cn('text-[10.5px] font-semibold px-2 py-0.5 rounded-full', diffColor)}>
+            {tool.difficulty}
+          </span>
+          {open
+            ? <ChevronUp size={14} className="text-[var(--fg-tertiary)]" />
+            : <ChevronDown size={14} className="text-[var(--fg-tertiary)]" />
+          }
+        </div>
+      </button>
+
+      {/* Expanded content */}
+      {open && (
+        <div className="border-t border-[var(--border)] bg-[var(--bg-secondary)]/30">
+
+          {/* Steps */}
+          <div className="p-5 space-y-5">
+            <p className="text-[12px] font-semibold text-[var(--fg-secondary)] uppercase tracking-wider">Step-by-step setup</p>
+
+            {tool.steps.map(step => (
+              <div key={step.n} className="flex gap-4">
+                <div className="flex-shrink-0">
+                  <div className="w-7 h-7 rounded-full bg-coral/15 border border-coral/25 flex items-center justify-center">
+                    <span className="text-[12px] font-bold text-coral">{step.n}</span>
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0 space-y-2.5 pb-1">
+                  <p className="text-[13px] font-semibold text-[var(--fg)] leading-snug">{step.title}</p>
+                  <p className="text-[12px] text-[var(--fg-secondary)] leading-relaxed">{step.desc}</p>
+                  {step.code && <CodeBlock code={step.code} />}
+                  {step.tip && (
+                    <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-[var(--blue-bg)] border border-[var(--blue)]/20">
+                      <Info size={12} className="text-[var(--blue)] flex-shrink-0 mt-0.5" />
+                      <p className="text-[11.5px] text-[var(--blue)] leading-relaxed">{step.tip}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* What gets tracked */}
+          <div className="px-5 pb-4 space-y-2">
+            <p className="text-[12px] font-semibold text-[var(--fg-secondary)] uppercase tracking-wider">What gets tracked automatically</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+              {tool.tracks.map((item, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <CheckCircle2 size={12} className="text-teal flex-shrink-0" />
+                  <span className="text-[12px] text-[var(--fg-secondary)]">{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Verification */}
+          <div className="mx-5 mb-5 flex items-start gap-3 px-4 py-3 bg-[var(--green-bg)] border border-teal/20 rounded-xl">
+            <CheckCircle2 size={14} className="text-teal flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-[12px] font-semibold text-teal">How to confirm it&apos;s working</p>
+              <p className="text-[11.5px] text-teal/80 mt-0.5 leading-relaxed">{tool.verify}</p>
+            </div>
+          </div>
+
+          {/* Connect button */}
+          <div className="px-5 pb-5">
+            <a
+              href="/dashboard/mcp"
+              className="btn-primary w-full justify-center"
+            >
+              <Plug2 size={13} /> Connect {tool.name} — get your API key
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ══════════════════════════════════════════════════════════════
    PAGE
 ══════════════════════════════════════════════════════════════ */
 export default function ResourcesPage() {
-  const [activeTab, setActiveTab] = useState<'start'|'sdk'|'api'|'changelog'|'support'>('start')
-  const [sdkLang,   setSdkLang]   = useState<SdkLang>('typescript')
+  const [activeTab, setActiveTab] = useState<TabId>('start')
 
-  const tabs: { id: typeof activeTab; label: string; icon: React.ElementType }[] = [
-    { id: 'start',     label: 'Get started', icon: Rocket    },
-    { id: 'sdk',       label: 'SDK',         icon: Package   },
-    { id: 'api',       label: 'API reference',icon: Code     },
-    { id: 'changelog', label: 'Changelog',   icon: Clock     },
-    { id: 'support',   label: 'Support',     icon: MessageCircle },
+  const tabs: { id: TabId; label: string; icon: React.ElementType }[] = [
+    { id: 'start',     label: 'Get started',   icon: Rocket        },
+    { id: 'tools',     label: 'Connect tools',  icon: Plug         },
+    { id: 'api',       label: 'API reference',  icon: Code         },
+    { id: 'changelog', label: 'Changelog',      icon: Clock        },
+    { id: 'support',   label: 'Support',        icon: MessageCircle},
   ]
 
   return (
@@ -314,7 +651,7 @@ export default function ResourcesPage() {
       </div>
 
       {/* ── Tabs ── */}
-      <div className="flex items-center gap-1 p-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl w-fit">
+      <div className="flex items-center gap-1 p-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl w-fit flex-wrap">
         {tabs.map(t => {
           const Icon = t.icon
           const active = activeTab === t.id
@@ -356,41 +693,62 @@ export default function ResourcesPage() {
                     <p className="text-[13px] font-semibold text-[var(--fg)]">{s.title}</p>
                     <p className="text-[12px] text-[var(--fg-secondary)] mt-0.5 leading-relaxed">{s.desc}</p>
                   </div>
-                  <a
-                    href={s.href}
-                    className="flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80 flex-shrink-0 mt-0.5"
-                  >
-                    {s.cta} <ArrowRight size={12} />
-                  </a>
+                  {s.href ? (
+                    <a href={s.href} className="flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80 flex-shrink-0 mt-0.5">
+                      {s.cta} <ArrowRight size={12} />
+                    </a>
+                  ) : (
+                    <button onClick={() => setActiveTab('tools')} className="flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80 flex-shrink-0 mt-0.5">
+                      {s.cta} <ArrowRight size={12} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Guides grid */}
+          {/* Quick link to tools tab */}
+          <div className="flex items-center gap-4 px-5 py-4 bg-[#8B5CF6]/10 border border-[#8B5CF6]/20 rounded-2xl">
+            <div className="w-9 h-9 rounded-xl bg-[#8B5CF6]/20 flex items-center justify-center flex-shrink-0">
+              <Plug size={16} className="text-[#8B5CF6]" />
+            </div>
+            <div className="flex-1">
+              <p className="text-[13px] font-semibold text-[#8B5CF6]">Using Codex, Cursor, or Claude CLI?</p>
+              <p className="text-[12px] text-[#8B5CF6]/80 mt-0.5">Step-by-step guides for every AI tool — no developer knowledge needed.</p>
+            </div>
+            <button onClick={() => setActiveTab('tools')} className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[#8B5CF6] hover:opacity-80 flex-shrink-0">
+              See guides <ArrowRight size={12} />
+            </button>
+          </div>
+
+          {/* Quick links — all real, in-app navigation */}
           <div>
-            <p className="text-[13px] font-bold text-[var(--fg)] mb-3">How-to guides</p>
+            <p className="text-[13px] font-bold text-[var(--fg)] mb-3">Quick links</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {GUIDES.map(g => {
+              {QUICK_LINKS.map(g => {
                 const Icon = g.icon
-                return (
-                  <a
-                    key={g.title}
-                    href={g.href}
-                    className="flex items-start gap-3 p-4 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl hover:border-coral/40 hover:bg-coral/5 transition-all group"
-                  >
-                    <div className="w-9 h-9 rounded-xl bg-[var(--bg-secondary)] flex items-center justify-center flex-shrink-0 group-hover:bg-coral/10 transition-colors">
-                      <Icon size={16} className="text-[var(--fg-tertiary)] group-hover:text-coral transition-colors" />
+                const inner = (
+                  <>
+                    <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors', g.bg)}>
+                      <Icon size={16} className={g.color} />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-[12.5px] font-semibold text-[var(--fg)] group-hover:text-coral transition-colors leading-snug">{g.title}</p>
+                      <p className={cn('text-[12.5px] font-semibold leading-snug', g.color)}>{g.title}</p>
                       <p className="text-[11px] text-[var(--fg-tertiary)] mt-1 leading-relaxed">{g.desc}</p>
-                      <p className="text-[10.5px] text-[var(--fg-tertiary)] mt-1.5 flex items-center gap-1">
-                        <Clock size={10} /> {g.time} read
-                      </p>
                     </div>
-                    <ExternalLink size={12} className="text-[var(--fg-tertiary)] group-hover:text-coral mt-0.5 flex-shrink-0 transition-colors" />
+                    <ArrowRight size={13} className={cn(g.color, 'flex-shrink-0 opacity-60')} />
+                  </>
+                )
+                return g.href ? (
+                  <a key={g.title} href={g.href}
+                    className="flex items-start gap-3 p-4 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl hover:border-coral/40 hover:bg-coral/5 transition-all">
+                    {inner}
                   </a>
+                ) : (
+                  <button key={g.title} onClick={() => setActiveTab(g.tab!)}
+                    className="flex items-start gap-3 p-4 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl hover:border-[#8B5CF6]/40 hover:bg-[#8B5CF6]/5 transition-all text-left">
+                    {inner}
+                  </button>
                 )
               })}
             </div>
@@ -398,140 +756,89 @@ export default function ResourcesPage() {
         </div>
       )}
 
-      {/* ═══════════════════════════════════════════════════ SDK */}
-      {activeTab === 'sdk' && (
-        <div className="space-y-5" id="sdk">
+      {/* ═══════════════════════════════════════════════════ CONNECT TOOLS */}
+      {activeTab === 'tools' && (
+        <div className="space-y-4">
 
-          {/* Install cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Intro */}
+          <div className="px-5 py-4 bg-[var(--blue-bg)] border border-[var(--blue)]/20 rounded-2xl">
+            <p className="text-[13px] font-semibold text-[var(--blue)] mb-1">How to use these guides</p>
+            <p className="text-[12px] text-[var(--blue)]/80 leading-relaxed">
+              Click on any tool below to see the exact steps to connect it to TokenFin. No coding required — just copy-paste commands.
+              Most tools connect in under 5 minutes.
+            </p>
+          </div>
+
+          {/* How tracking works — simple explanation */}
+          <div className="grid grid-cols-3 gap-3">
             {[
-              { lang: 'TypeScript / Node', cmd: 'npm install @tokenfin/node', icon: Package,  color: 'text-[var(--blue)]',  bg: 'bg-[var(--blue-bg)]'  },
-              { lang: 'Python',            cmd: 'pip install tokenfin',        icon: Terminal, color: 'text-teal',            bg: 'bg-[var(--green-bg)]' },
-              { lang: 'REST',              cmd: 'No install — just curl',       icon: Globe,   color: 'text-coral',           bg: 'bg-coral/10'          },
-            ].map(s => {
-              const Icon = s.icon
+              { icon: Zap,    title: 'Proxy (auto)',  desc: 'TokenFin intercepts calls silently in the background. Zero changes to your workflow.', color: 'text-teal', bg: 'bg-[var(--green-bg)]' },
+              { icon: Plug,   title: 'MCP server',    desc: 'Adds TokenFin as a tool inside Claude-based apps so you can query your spending in chat.', color: 'text-[#8B5CF6]', bg: 'bg-[#8B5CF6]/10' },
+              { icon: Shield, title: 'Env variable',  desc: 'Set one environment variable and every terminal session is tracked automatically.', color: 'text-coral', bg: 'bg-coral/10' },
+            ].map(m => {
+              const Icon = m.icon
               return (
-                <div key={s.lang} className="p-4 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl space-y-2.5">
-                  <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center', s.bg)}>
-                    <Icon size={16} className={s.color} />
+                <div key={m.title} className="p-3.5 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl space-y-2">
+                  <div className={cn('w-8 h-8 rounded-xl flex items-center justify-center', m.bg)}>
+                    <Icon size={15} className={m.color} />
                   </div>
-                  <p className="text-[12.5px] font-semibold text-[var(--fg)]">{s.lang}</p>
-                  <code className="block text-[11px] font-mono text-[var(--fg-secondary)] bg-[var(--bg-secondary)] px-2.5 py-1.5 rounded-lg border border-[var(--border)]">
-                    {s.cmd}
-                  </code>
+                  <p className="text-[12px] font-bold text-[var(--fg)]">{m.title}</p>
+                  <p className="text-[11px] text-[var(--fg-tertiary)] leading-relaxed">{m.desc}</p>
                 </div>
               )
             })}
           </div>
 
-          {/* Lang switcher + snippet */}
-          <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--border)]">
-              <p className="text-[13px] font-semibold text-[var(--fg)]">Track your first LLM call</p>
-              <div className="flex gap-1 p-0.5 bg-[var(--bg-secondary)] rounded-lg border border-[var(--border)]">
-                {(['typescript', 'python', 'rest'] as SdkLang[]).map(l => (
-                  <button
-                    key={l}
-                    onClick={() => setSdkLang(l)}
-                    className={cn(
-                      'px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all',
-                      sdkLang === l ? 'bg-white dark:bg-[#1E1E35] text-[var(--fg)] shadow-sm' : 'text-[var(--fg-secondary)] hover:text-[var(--fg)]',
-                    )}
-                  >
-                    {l === 'typescript' ? 'TypeScript' : l === 'python' ? 'Python' : 'REST'}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="p-4">
-              <CodeBlock code={SNIPPET[sdkLang]} />
-            </div>
+          {/* Tool cards */}
+          <div className="space-y-3">
+            {TOOL_GUIDES.map(tool => (
+              <ToolCard key={tool.id} tool={tool} />
+            ))}
           </div>
 
-          {/* SDK features */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {[
-              { icon: Zap,         title: 'Auto token counting', desc: 'SDK reads response headers to pull exact input/output token counts — no manual calculation.' },
-              { icon: Layers,      title: 'Multi-model support', desc: 'Anthropic, OpenAI, Google Gemini, Mistral, Cohere — one unified ingest format.' },
-              { icon: RefreshCw,   title: 'Batch flushing',      desc: 'SDK buffers events in-process and flushes every 5 seconds to avoid per-call HTTP overhead.' },
-              { icon: Shield,      title: 'Async / non-blocking',desc: 'Ingest never blocks your LLM call. Fire-and-forget with automatic retry on failure.' },
-            ].map(f => {
-              const Icon = f.icon
-              return (
-                <div key={f.title} className="flex items-start gap-3 p-4 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl">
-                  <div className="w-8 h-8 rounded-lg bg-coral/10 flex items-center justify-center flex-shrink-0">
-                    <Icon size={14} className="text-coral" />
-                  </div>
-                  <div>
-                    <p className="text-[12.5px] font-semibold text-[var(--fg)]">{f.title}</p>
-                    <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5 leading-relaxed">{f.desc}</p>
-                  </div>
-                </div>
-              )
-            })}
+          {/* Footer note */}
+          <div className="flex items-start gap-2.5 px-4 py-3 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl">
+            <Info size={13} className="text-[var(--fg-tertiary)] flex-shrink-0 mt-0.5" />
+            <p className="text-[12px] text-[var(--fg-secondary)] leading-relaxed">
+              Don&apos;t see your tool here? Any app that calls OpenAI or Anthropic APIs can be connected by pointing its base URL to{' '}
+              <code className="font-mono font-semibold text-[var(--fg)]">http://127.0.0.1:7070/v1</code>.
+              Contact us at <span className="text-coral">hello@curiousdevs.com</span> for help.
+            </p>
           </div>
         </div>
       )}
 
       {/* ═══════════════════════════════════════════════════ API REFERENCE */}
       {activeTab === 'api' && (
-        <div className="space-y-4">
-
-          <div className="flex items-center gap-3 px-4 py-3 bg-[var(--blue-bg)] border border-[var(--blue)]/20 rounded-xl">
-            <AlertCircle size={13} className="text-[var(--blue)] flex-shrink-0" />
-            <p className="text-[12px] text-[var(--blue)]">
-              Base URL: <code className="font-mono font-semibold">https://api.tokenfin.io</code> — all requests need{' '}
-              <code className="font-mono font-semibold">Authorization: Bearer &lt;API_KEY&gt;</code>
-            </p>
-          </div>
-
-          <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden divide-y divide-[var(--border)]">
-            {API_SECTIONS.map((ep, i) => (
-              <div key={i} className="flex items-center gap-3 px-5 py-3.5 hover:bg-[var(--bg-hover)] transition-colors group">
-                <span className={cn(
-                  'text-[10.5px] font-bold px-2 py-0.5 rounded-md font-mono flex-shrink-0 w-12 text-center',
-                  ep.method === 'GET'  ? 'bg-[var(--green-bg)] text-teal'       :
-                  ep.method === 'POST' ? 'bg-[var(--blue-bg)] text-[var(--blue)]' :
-                  'bg-[var(--red-bg)] text-[var(--red)]',
-                )}>
-                  {ep.method}
-                </span>
-                <code className="text-[12.5px] font-mono font-semibold text-[var(--fg)] flex-shrink-0">{ep.path}</code>
-                <p className="text-[12px] text-[var(--fg-secondary)] flex-1">{ep.desc}</p>
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-[var(--bg-secondary)] text-[var(--fg-tertiary)] border border-[var(--border)] flex-shrink-0">
-                  {ep.tag}
-                </span>
-                <ExternalLink size={12} className="text-[var(--fg-tertiary)] group-hover:text-coral transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0" />
-              </div>
-            ))}
-          </div>
-
-          <div className="flex gap-3">
-            <a href="#" className="flex items-center gap-2 px-4 py-2.5 border border-[var(--border)] rounded-xl text-[12.5px] font-semibold text-[var(--fg)] hover:border-coral/40 hover:text-coral transition-all">
-              <FileText size={13} /> Full API docs
-            </a>
-            <a href="#" className="flex items-center gap-2 px-4 py-2.5 border border-[var(--border)] rounded-xl text-[12.5px] font-semibold text-[var(--fg)] hover:border-coral/40 hover:text-coral transition-all">
-              <PlayCircle size={13} /> Postman collection
-            </a>
-            <a href="#" className="flex items-center gap-2 px-4 py-2.5 border border-[var(--border)] rounded-xl text-[12.5px] font-semibold text-[var(--fg)] hover:border-coral/40 hover:text-coral transition-all">
-              <Code size={13} /> OpenAPI spec (JSON)
-            </a>
-          </div>
-        </div>
+        <ApiTab />
       )}
 
       {/* ═══════════════════════════════════════════════════ CHANGELOG */}
       {activeTab === 'changelog' && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[12px] text-[var(--fg-secondary)]">
-              {CHANGELOG.length} releases — click any entry to expand
-            </p>
-            <a href="#" className="flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80">
-              <Star size={12} /> Subscribe to updates
-            </a>
-          </div>
-          {CHANGELOG.map(e => <ChangelogCard key={e.version} entry={e} />)}
+        <div className="space-y-4">
+          {CHANGELOG.length === 0 ? (
+            <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl py-16 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-[var(--bg-secondary)] flex items-center justify-center mx-auto">
+                <Clock size={22} className="text-[var(--fg-tertiary)]" />
+              </div>
+              <div>
+                <p className="text-[14px] font-bold text-[var(--fg)]">No public releases yet</p>
+                <p className="text-[12.5px] text-[var(--fg-secondary)] mt-1.5 max-w-[360px] mx-auto leading-relaxed">
+                  TokenFin is currently in early access. Release notes will appear here once we launch publicly.
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-1.5 text-[11.5px] text-[var(--fg-tertiary)]">
+                <Mail size={11} />
+                Questions? Email us at{' '}
+                <a href="mailto:hello@curiousdevs.com" className="text-coral underline underline-offset-2">hello@curiousdevs.com</a>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="text-[12px] text-[var(--fg-secondary)]">{CHANGELOG.length} releases — click any entry to expand</p>
+              {CHANGELOG.map(e => <ChangelogCard key={e.version} entry={e} />)}
+            </>
+          )}
         </div>
       )}
 
@@ -539,70 +846,267 @@ export default function ResourcesPage() {
       {activeTab === 'support' && (
         <div className="space-y-5">
 
-          {/* Status */}
-          <div className="flex items-center gap-3 px-5 py-4 bg-[var(--green-bg)] border border-teal/20 rounded-2xl">
-            <span className="w-2 h-2 rounded-full bg-teal animate-pulse flex-shrink-0" />
-            <div className="flex-1">
-              <p className="text-[13px] font-semibold text-teal">All systems operational</p>
-              <p className="text-[11.5px] text-teal/70 mt-0.5">Ingest API, Dashboard, Webhooks — Last checked 2 min ago</p>
+
+          {/* Email contact */}
+          <div className="flex items-start gap-4 p-5 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl">
+            <div className="w-10 h-10 rounded-2xl flex items-center justify-center bg-coral/10 flex-shrink-0">
+              <Mail size={18} className="text-coral" />
             </div>
-            <a href="#" className="text-[12px] font-semibold text-teal hover:opacity-80 flex items-center gap-1">
-              Status page <ExternalLink size={11} />
+            <div className="flex-1">
+              <p className="text-[13px] font-bold text-[var(--fg)]">Email support</p>
+              <p className="text-[11.5px] text-[var(--fg-secondary)] mt-1 leading-relaxed">
+                Questions, bugs, or feature requests? Email us at{' '}
+                <a href="mailto:hello@curiousdevs.com" className="text-coral underline underline-offset-2">hello@curiousdevs.com</a>
+                {' '}— we reply within 24 hours on business days.
+              </p>
+            </div>
+            <a href="mailto:hello@curiousdevs.com" className="flex items-center gap-1.5 text-[12.5px] font-semibold text-coral hover:opacity-80 flex-shrink-0">
+              Send email <ArrowRight size={12} />
             </a>
           </div>
 
-          {/* Channels */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* FAQ — sectioned */}
+          <div className="space-y-6">
+            <p className="text-[13px] font-bold text-[var(--fg)]">Frequently asked questions</p>
+
             {[
               {
-                icon: Mail, title: 'Email support', desc: 'hello@tokenfin.io — we reply within 24 hours on business days.',
-                cta: 'Send email', href: 'mailto:hello@tokenfin.io', color: 'text-coral', bg: 'bg-coral/10',
+                section: 'Getting started',
+                Icon: Rocket,
+                color: 'text-coral',
+                bg: 'bg-coral/10',
+                items: [
+                  {
+                    q: 'Do I need to be a developer to use TokenFin?',
+                    a: 'Not at all. Most setup involves changing a single URL in your AI tool\'s settings — no code required. The "Connect tools" tab has step-by-step instructions written in plain language for Codex, Cursor, Claude CLI, Cowork, and OpenCode. The longest part (installing the tracker) takes about 2 minutes.',
+                  },
+                  {
+                    q: 'What AI tools can I track?',
+                    a: 'Any tool that calls OpenAI or Anthropic APIs. We have built-in guides for Codex, Cursor, Claude CLI, Cowork (Claude Desktop), and OpenCode. You can also connect any custom application by pointing it to the TokenFin proxy at http://127.0.0.1:7070/v1 — if it uses OpenAI-compatible APIs, it works.',
+                  },
+                  {
+                    q: 'How long does initial setup take?',
+                    a: '5–10 minutes total. Step 1 is running install.command once (about 2 minutes). After that, connecting each tool takes around 1 minute — just change one URL in that tool\'s settings. The dashboard shows data as soon as the first tracked AI call goes through.',
+                  },
+                  {
+                    q: 'Can multiple people share one TokenFin workspace?',
+                    a: 'Yes. Invite teammates from the Teams page. Each person connects their own AI tools, and all usage flows into the shared dashboard. You can see spending broken down by project, team, or individual member — useful for understanding who is using what.',
+                  },
+                ],
               },
               {
-                icon: MessageCircle, title: 'Community Slack', desc: 'Ask questions, share configs, get help from the TokenFin community.',
-                cta: 'Join Slack', href: '#', color: 'text-[var(--blue)]', bg: 'bg-[var(--blue-bg)]',
+                section: 'How tracking works',
+                Icon: Zap,
+                color: 'text-teal',
+                bg: 'bg-[var(--green-bg)]',
+                items: [
+                  {
+                    q: 'How does TokenFin capture my AI usage without me changing my code?',
+                    a: 'TokenFin installs a lightweight local proxy — a tiny background app running on port 7070 on your computer. When you point your AI tool to this address instead of the provider\'s server directly, every API call passes through the proxy. It reads the model, token counts, and cost from the response, logs it to your dashboard, then forwards the call to the provider normally. Your AI tool works exactly as before — tracking adds less than 1ms of overhead.',
+                  },
+                  {
+                    q: 'What is the "proxy" and is it safe?',
+                    a: 'The proxy is a small local server that runs only on your computer. It does not share data with any third party — it only forwards calls to your AI provider and sends metadata (model, tokens, cost) to your local TokenFin dashboard. Your AI provider API keys are never stored by the proxy; they pass through to the provider unchanged. It is installed as a macOS LaunchAgent so it starts automatically when you log in.',
+                  },
+                  {
+                    q: 'What\'s the difference between the "proxy" approach and the "MCP server" approach?',
+                    a: 'The proxy captures every AI call automatically with no ongoing effort — set it once and forget it. The MCP server adds TokenFin as a tool your AI assistant can actively use, so you can ask questions like "What\'s my spending this month?" and get a real answer directly in the chat. For most users, the proxy handles tracking and the MCP server handles querying — they complement each other perfectly.',
+                  },
+                  {
+                    q: 'Why is my usage not appearing in the dashboard after setup?',
+                    a: 'Work through this checklist: (1) Confirm the TokenFin tracker is running — try running install.command again to check its status. (2) Open your AI tool\'s settings and verify the base URL is exactly http://127.0.0.1:7070/v1 — no trailing slash, no typo. (3) Make sure the TokenFin dashboard (localhost:3001) is running. (4) Restart your AI tool after changing its URL. After fixing these, make one AI call and wait 30 seconds — events usually appear immediately.',
+                  },
+                ],
               },
               {
-                icon: BookOpen, title: 'Docs site', desc: 'Full reference docs, cookbooks, and integration guides.',
-                cta: 'Open docs', href: '#', color: 'text-teal', bg: 'bg-[var(--green-bg)]',
+                section: 'Your data & privacy',
+                Icon: Shield,
+                color: 'text-[#8B5CF6]',
+                bg: 'bg-[#8B5CF6]/10',
+                items: [
+                  {
+                    q: 'Does TokenFin store my prompts or AI responses?',
+                    a: 'No. TokenFin never sees or stores the content of your conversations. The proxy only captures metadata: which model was used, how many tokens were consumed (input and output separately), the calculated cost, the timestamp, and which project it belongs to. Your actual questions and AI responses go directly to your provider — TokenFin never touches them.',
+                  },
+                  {
+                    q: 'Are my AI provider API keys stored anywhere by TokenFin?',
+                    a: 'No. Your API keys (Anthropic key, OpenAI key, etc.) live in your AI tool\'s own config files — exactly where they always were. The proxy reads your provider\'s response to extract token counts and cost. It never logs, stores, or transmits your provider keys anywhere.',
+                  },
+                  {
+                    q: 'Where is my usage data stored? Can I delete it?',
+                    a: 'All your usage data is stored in your own Supabase database — either running locally on your machine or in your own Supabase project. TokenFin does not store any of your data on external servers we control. You can delete any data directly from your Supabase dashboard, or by clearing the relevant tables (usage_events, usage_agg).',
+                  },
+                ],
               },
-            ].map(c => {
-              const Icon = c.icon
+              {
+                section: 'Cost calculation',
+                Icon: BarChart3,
+                color: 'text-[var(--blue)]',
+                bg: 'bg-[var(--blue-bg)]',
+                items: [
+                  {
+                    q: 'How does TokenFin calculate the cost of each AI call?',
+                    a: 'When your AI provider responds to a call, it includes the exact number of input and output tokens used. TokenFin multiplies these by the per-token price for that model (maintained in the Models page) to calculate cost. This is the same formula your provider uses on their invoice — we just surface it per-call instead of per-month.',
+                  },
+                  {
+                    q: 'What if a model\'s pricing changes?',
+                    a: 'Pricing is managed in the Models section. If Anthropic or OpenAI changes their pricing, future events will use the old price until you update the Models page. Historical events keep their originally calculated cost (which is correct for when they occurred). We recommend checking Models whenever a provider announces a pricing change.',
+                  },
+                  {
+                    q: 'Why might my TokenFin total differ slightly from my actual provider invoice?',
+                    a: 'Provider invoices often include taxes, minimum monthly charges, rounding at the billing level, and sometimes different rates for committed-use tiers. TokenFin shows the raw per-call cost based on token counts and per-token pricing — it\'s very accurate for per-call attribution but does not replicate invoice-level adjustments. Treat it as a precise breakdown, not an exact invoice replica.',
+                  },
+                ],
+              },
+              {
+                section: 'Limits & alerts',
+                Icon: Bell,
+                color: 'text-[var(--amber)]',
+                bg: 'bg-[var(--amber-bg)]',
+                items: [
+                  {
+                    q: 'What\'s the difference between Warn, Throttle, and Block?',
+                    a: 'Warn: sends you an alert (email, Slack) when spending reaches the threshold — AI calls continue normally. Good for awareness. Throttle: sends an alert and deliberately slows down new requests — useful for rate-limiting heavy usage without fully stopping it. Block: sends an alert and starts rejecting new AI requests — use this as a hard spending cap. You can set all three at different percentages, for example Warn at 70%, Throttle at 90%, Block at 100%.',
+                  },
+                  {
+                    q: 'What happens to AI calls when a Block limit is hit?',
+                    a: 'New calls from that project receive an error response instead of completing. Calls already in-flight finish normally. The block lifts automatically at the start of the next billing period, or you can raise the limit manually from the Limits page at any time. We recommend setting a Warn alert well below the Block threshold so you get advance notice before anything gets cut off.',
+                  },
+                  {
+                    q: 'Can I set limits per person, per project, or per team?',
+                    a: 'Yes — all three scopes are supported. Go to Limits → New limit and choose whether it applies to a specific project, a team, or the whole org. You can layer multiple limits too — for example, a per-team limit and an org-wide backstop that catches everything else.',
+                  },
+                ],
+              },
+              {
+                section: 'Troubleshooting',
+                Icon: AlertCircle,
+                color: 'text-[var(--red)]',
+                bg: 'bg-[var(--red-bg)]',
+                items: [
+                  {
+                    q: 'I installed the tracker and changed the URL but still see no data. What should I do?',
+                    a: 'Try these steps in order: (1) Check the tracker is actually running — open Activity Monitor on Mac and search for "tokenfin", or run ps aux | grep 7070 in Terminal. (2) Verify your AI tool\'s base URL is exactly http://127.0.0.1:7070/v1 — no trailing slash. (3) Confirm the TokenFin dashboard is running at http://localhost:3001. (4) Restart your AI tool after changing its URL setting. (5) Make one test AI call and check the Overview page after 30 seconds. If still nothing, email us at hello@curiousdevs.com with your setup details.',
+                  },
+                  {
+                    q: 'I see "Never used" on a Connected Platform card. Why?',
+                    a: 'This just means the API key was generated but has not received any tracked calls yet — it is not an error. It usually means either the proxy is not running, the base URL in your tool points somewhere else, or you have not made an AI call since connecting. Follow the troubleshooting steps in the previous question, then try using your AI tool and refreshing the dashboard.',
+                  },
+                  {
+                    q: 'My Codex works fine but usage is not being tracked.',
+                    a: 'The most common cause is the base_url in ~/.codex/config.toml still pointing to the old provider address. Open that file in a text editor and confirm the relevant line reads: base_url = "http://127.0.0.1:7070/v1". The section name above it (like [model_providers.headroom]) does not matter — just the URL value inside it. If the URL looks correct, try running install.command again to verify the tracker is running, then restart your terminal.',
+                  },
+                  {
+                    q: 'Can I track API calls from a custom application I am building?',
+                    a: 'Yes — send a POST to http://localhost:3001/api/v1/ingest with your API key and the event fields (model, input_tokens, output_tokens, cost_usd, project). See the "API reference" tab for the exact payload. This works for any custom code in any language, no proxy needed — just a plain HTTP request after each LLM call.',
+                  },
+                ],
+              },
+            ].map(section => {
+              const Icon = section.Icon
               return (
-                <div key={c.title} className="flex flex-col bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-5 gap-3">
-                  <div className={cn('w-10 h-10 rounded-2xl flex items-center justify-center', c.bg)}>
-                    <Icon size={18} className={c.color} />
+                <div key={section.section} className="space-y-2">
+                  <div className="flex items-center gap-2.5 mb-3">
+                    <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center', section.bg)}>
+                      <Icon size={13} className={section.color} />
+                    </div>
+                    <p className="text-[12.5px] font-bold text-[var(--fg-secondary)] uppercase tracking-wider">{section.section}</p>
                   </div>
-                  <div className="flex-1">
-                    <p className="text-[13px] font-bold text-[var(--fg)]">{c.title}</p>
-                    <p className="text-[11.5px] text-[var(--fg-secondary)] mt-1 leading-relaxed">{c.desc}</p>
+                  <div className="space-y-2">
+                    {section.items.map((f, i) => (
+                      <FaqItem key={i} q={f.q} a={f.a} />
+                    ))}
                   </div>
-                  <a href={c.href} className={cn('flex items-center gap-1.5 text-[12.5px] font-semibold', c.color, 'hover:opacity-80')}>
-                    {c.cta} <ArrowRight size={12} />
-                  </a>
                 </div>
               )
             })}
           </div>
-
-          {/* FAQ */}
-          <div>
-            <p className="text-[13px] font-bold text-[var(--fg)] mb-3">Frequently asked questions</p>
-            <div className="space-y-2">
-              {[
-                { q: 'What counts as a "token" in TokenFin?', a: 'TokenFin uses the token counts reported by your LLM provider — input_tokens and output_tokens from the response object. If your provider doesn\'t report them, you can pass them manually in the ingest payload.' },
-                { q: 'How accurate is the cost calculation?', a: 'Costs are calculated using the pricing table for each model+provider (configurable in Models → Manage pricing). Since provider prices change, we recommend updating prices whenever a provider announces a change.' },
-                { q: 'Can I use TokenFin across multiple orgs?', a: 'Yes. Each workspace is org-scoped. You can create multiple projects and teams inside one workspace, or create separate workspaces for separate business units.' },
-                { q: 'Does TokenFin store my prompts or completions?', a: 'No. TokenFin only stores metadata: model, tokens, cost, timestamp, project, and any custom metadata fields you pass. Prompt and completion content never leaves your infrastructure.' },
-                { q: 'What happens when a limit is hit (Block)?', a: 'If your SDK wraps the LLM call, the SDK returns a 429-like error before making the request. If you\'re using the raw ingest API, Block limits send a webhook; enforcement is up to your application logic.' },
-              ].map((f, i) => (
-                <FaqItem key={i} q={f.q} a={f.a} />
-              ))}
-            </div>
-          </div>
         </div>
       )}
 
+    </div>
+  )
+}
+
+/* ── API Tab ── */
+type LangTab = 'curl' | 'python' | 'node'
+function ApiTab() {
+  const [lang, setLang] = useState<LangTab>('curl')
+  const EXAMPLES: Record<LangTab, string> = { curl: INGEST_CURL, python: INGEST_PYTHON, node: INGEST_NODE }
+  const LANG_LABELS: { id: LangTab; label: string }[] = [
+    { id: 'curl',   label: 'cURL'      },
+    { id: 'python', label: 'Python'    },
+    { id: 'node',   label: 'Node / JS' },
+  ]
+  return (
+    <div className="space-y-4">
+
+      {/* Endpoint header */}
+      <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-[var(--border)]">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[10px] font-bold px-2 py-1 rounded-md font-mono bg-[var(--blue-bg)] text-[var(--blue)]">POST</span>
+            <code className="text-[13px] font-mono font-semibold text-[var(--fg)]">/api/v1/ingest</code>
+            <span className="text-[11.5px] text-[var(--fg-secondary)]">— Track an LLM call (tokens, cost, model, project)</span>
+          </div>
+          <p className="text-[12px] text-[var(--fg-tertiary)] mt-2">
+            Auth: <code className="font-mono text-[var(--fg)] bg-[var(--bg-secondary)] px-1.5 py-0.5 rounded">Authorization: Bearer YOUR_API_KEY</code>
+            {' '}— get your key from <a href="/dashboard/mcp" className="text-coral underline underline-offset-2">Connected Platforms</a>
+          </p>
+        </div>
+
+        {/* Request fields */}
+        <div className="divide-y divide-[var(--border)]">
+          {INGEST_FIELDS.map(f => (
+            <div key={f.field} className="flex items-start gap-3 px-5 py-3 hover:bg-[var(--bg-hover)] transition-colors">
+              <div className="flex items-center gap-2 flex-shrink-0 w-44">
+                <code className="text-[12px] font-mono font-semibold text-[var(--fg)]">{f.field}</code>
+                {f.req && (
+                  <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-coral/10 text-coral">required</span>
+                )}
+              </div>
+              <span className="text-[10.5px] font-mono text-[var(--fg-tertiary)] flex-shrink-0 w-14">{f.type}</span>
+              <p className="text-[12px] text-[var(--fg-secondary)] leading-relaxed flex-1">{f.desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Code examples with language tabs */}
+      <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
+        <div className="flex items-center gap-1 px-5 py-3.5 border-b border-[var(--border)]">
+          <p className="text-[13px] font-semibold text-[var(--fg)] flex-1">Try it</p>
+          <div className="flex items-center gap-1 bg-[var(--bg-secondary)] rounded-lg p-1">
+            {LANG_LABELS.map(l => (
+              <button
+                key={l.id}
+                onClick={() => setLang(l.id)}
+                className={cn(
+                  'text-[11.5px] font-semibold px-3 py-1 rounded-md transition-all',
+                  lang === l.id
+                    ? 'bg-white dark:bg-[#141428] text-[var(--fg)] shadow-sm'
+                    : 'text-[var(--fg-tertiary)] hover:text-[var(--fg)]',
+                )}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="p-4">
+          <CodeBlock code={EXAMPLES[lang]} />
+        </div>
+      </div>
+
+      {/* Quick tip */}
+      <div className="flex items-start gap-2.5 px-4 py-3 bg-[var(--green-bg)] border border-teal/20 rounded-xl">
+        <CheckCircle2 size={13} className="text-teal flex-shrink-0 mt-0.5" />
+        <p className="text-[12px] text-[var(--fg-secondary)] leading-relaxed">
+          <span className="font-semibold text-[var(--fg)]">cost_usd is optional.</span>{' '}
+          If you leave it out, TokenFin auto-computes it from the model pricing table.
+          Pass it only if your provider charges a different rate or you have exact pricing.
+        </p>
+      </div>
     </div>
   )
 }

@@ -1,23 +1,27 @@
 import { NextResponse }                    from 'next/server'
 import type { NextRequest }                from 'next/server'
 import { createAdminClient }               from '@/lib/supabase/server'
-import { requireOrgMember, dbError }       from '@/lib/api/auth'
+import { requireApiKeyOrOrgMember, dbError } from '@/lib/api/auth'
 
-/* GET /api/v1/analytics?org_id=xxx&days=30&project_id=xxx */
+/* GET /api/v1/analytics?org_id=xxx&days=30&period=30d&project_id=xxx */
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
-  const orgId     = searchParams.get('org_id')
-  const days      = Math.min(parseInt(searchParams.get('days') ?? '30', 10), 365)
-  const projectId = searchParams.get('project_id')
 
-  const guard = await requireOrgMember(orgId)
+  // period=30d (MCP style) → days=30
+  const periodParam = searchParams.get('period') ?? ''
+  const periodDays  = periodParam ? parseInt(periodParam, 10) : undefined
+  const days        = Math.min(periodDays ?? parseInt(searchParams.get('days') ?? '30', 10), 365)
+  const projectId   = searchParams.get('project_id')
+
+  const guard = await requireApiKeyOrOrgMember(req, searchParams.get('org_id'))
   if (guard instanceof NextResponse) return guard
+  const { orgId } = guard
 
   const db    = createAdminClient()
   const since = new Date(Date.now() - days * 86400_000).toISOString()
   let query = db.from('usage_events')
     .select('model, total_tokens, cost_usd, created_at')
-    .eq('org_id', orgId!)
+    .eq('org_id', orgId)
     .gte('created_at', since)
 
   if (projectId) query = query.eq('project_id', projectId)

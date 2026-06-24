@@ -21,7 +21,9 @@ type NotifType = 'alert' | 'info' | 'success' | 'warning'
 type NotifCategory = 'budget' | 'team' | 'system' | 'usage'
 
 interface Notif {
-  id: number; type: NotifType; category: NotifCategory
+  dbId: string          // DB UUID — used for PATCH mark-as-read
+  id: number            // sequential index — used as React key
+  type: NotifType; category: NotifCategory
   title: string; body: string; time: string; timeMs: number; read: boolean
 }
 
@@ -259,7 +261,7 @@ function NotificationsPanel({
   notifs, onRead, onReadAll, onClose, router,
 }: {
   notifs: Notif[]
-  onRead: (id: number) => void
+  onRead: (dbId: string, id: number) => void
   onReadAll: () => void
   onClose: () => void
   router: ReturnType<typeof useRouter>
@@ -351,7 +353,7 @@ function NotificationsPanel({
               return (
                 <div
                   key={n.id}
-                  onClick={() => onRead(n.id)}
+                  onClick={() => onRead(n.dbId, n.id)}
                   className={cn(
                     'flex items-start gap-3 px-4 py-3.5 cursor-pointer transition-colors group relative',
                     n.read ? 'hover:bg-[var(--bg-hover)]' : 'hover:bg-[var(--bg-secondary)]'
@@ -520,6 +522,81 @@ export function Topbar({ user, notifications, orgPlan = 'free' }: { user: User; 
 
   const unread = notifs.filter(n => !n.read).length
 
+  /* ── Fetch fresh notifications from API on mount ── */
+  useEffect(() => {
+    fetch('/api/v1/notifications')
+      .then(r => r.ok ? r.json() : null)
+      .then((data: Notif[] | null) => { if (data) setNotifs(data) })
+      .catch(() => { /* keep SSR-rendered initial list */ })
+  }, [])
+
+  /* ── Supabase realtime: push new notifications live ── */
+  useEffect(() => {
+    const channel = supabase
+      .channel('notifications-live')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications' },
+        (payload) => {
+          const n = payload.new as {
+            id: string; title: string; body: string
+            type: string; is_read: boolean; created_at: string
+          }
+          // Skip invoice / sales_inquiry system records
+          if (n.type === 'invoice' || n.type === 'sales_inquiry') return
+
+          function mapType(t: string): NotifType {
+            if (t === 'alert') return 'alert'
+            if (t === 'warning') return 'warning'
+            if (t === 'success') return 'success'
+            return 'info'
+          }
+          function mapCategory(title: string): NotifCategory {
+            const l = title.toLowerCase()
+            if (l.includes('budget') || l.includes('spend') || l.includes('cost')) return 'budget'
+            if (l.includes('member') || l.includes('team') || l.includes('key'))   return 'team'
+            if (l.includes('usage')  || l.includes('spike') || l.includes('token')) return 'usage'
+            return 'system'
+          }
+
+          setNotifs(prev => [{
+            dbId:     n.id,
+            id:       0,          // will be renumbered by display order
+            type:     mapType(n.type),
+            category: mapCategory(n.title ?? ''),
+            title:    n.title ?? 'Notification',
+            body:     n.body  ?? '',
+            time:     'Just now',
+            timeMs:   new Date(n.created_at).getTime(),
+            read:     false,
+          }, ...prev].map((x, i) => ({ ...x, id: i + 1 })))
+        }
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [supabase])
+
+  /* ── Mark one notification as read (optimistic + persist) ── */
+  const markRead = useCallback((dbId: string, id: number) => {
+    setNotifs(prev => prev.map(x => x.id === id ? { ...x, read: true } : x))
+    fetch('/api/v1/notifications', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: dbId }),
+    }).catch(() => { /* optimistic — already updated UI */ })
+  }, [])
+
+  /* ── Mark all as read ── */
+  const markAllRead = useCallback(() => {
+    setNotifs(prev => prev.map(x => ({ ...x, read: true })))
+    fetch('/api/v1/notifications', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    }).catch(() => {})
+  }, [])
+
   /* ── Global ⌘K shortcut ── */
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -645,8 +722,8 @@ export function Topbar({ user, notifications, orgPlan = 'free' }: { user: User; 
                 <div className="absolute right-0 top-full mt-2 z-40 animate-slide-up">
                   <NotificationsPanel
                     notifs={notifs}
-                    onRead={id => setNotifs(prev => prev.map(x => x.id === id ? { ...x, read: true } : x))}
-                    onReadAll={() => setNotifs(prev => prev.map(x => ({ ...x, read: true })))}
+                    onRead={markRead}
+                    onReadAll={markAllRead}
                     onClose={() => setNotifOpen(false)}
                     router={router}
                   />

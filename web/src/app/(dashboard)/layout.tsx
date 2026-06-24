@@ -73,7 +73,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
     .order('created_at', { ascending: false })
     .limit(20)
 
-  const notifications = (rawNotifs ?? []).map((n, i) => ({
+  // Filter out internal system records (invoices, sales inquiries)
+  const filteredNotifs = (rawNotifs ?? []).filter(
+    n => n.type !== 'invoice' && n.type !== 'sales_inquiry'
+  )
+
+  const notifications = filteredNotifs.map((n, i) => ({
+    dbId:     n.id as string,          // DB UUID — for PATCH mark-as-read
     id:       i + 1,
     type:     mapType(n.type ?? 'info') as NotifType,
     category: mapCategory(n.title ?? '', n.type ?? '') as NotifCategory,

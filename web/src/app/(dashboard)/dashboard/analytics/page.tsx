@@ -1,7 +1,44 @@
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
 import { AnalyticsClient }    from './_client'
-import type { AnalyticsData, DayData, ModelSlice, ProjectSlice, PlatformSlice } from './_types'
+import type { AnalyticsData, DayData, ModelSlice, ProjectSlice, PlatformSlice, SourceSlice } from './_types'
+
+/* ── Platform detection from usage_events.tags ─────────────────
+ * Tags set by proxy: { source: 'proxy', tool: 'codex' }
+ * Tags set by MCP:   { source: 'mcp' }
+ * Tags set by SDK:   { source: 'sdk' }
+ * No tags / unknown → "Direct API"
+ * ─────────────────────────────────────────────────────────────── */
+const PLATFORM_COLORS: Record<string, string> = {
+  'Codex':           '#00C48C',
+  'Claude CLI':      '#E8533A',
+  'Claude Web':      '#8B5CF6',
+  'GitHub Copilot':  '#24292F',
+  'Cursor':          '#0D8A6A',
+  'MCP':             '#4285F4',
+  'SDK':             '#F59E0B',
+  'Direct API':      '#6B7280',
+  'Proxy':           '#94A3B8',
+}
+
+function detectPlatform(tags: Record<string, string> | null): string {
+  if (!tags) return 'Direct API'
+  const source = tags.source ?? ''
+  const tool   = tags.tool   ?? ''
+  if (source === 'proxy') {
+    if (tool === 'codex')       return 'Codex'
+    if (tool === 'cursor')      return 'Cursor'
+    if (tool === 'copilot')     return 'GitHub Copilot'
+    if (tool === 'claude-cli')  return 'Claude CLI'
+    if (tool === 'claude-web')  return 'Claude Web'
+    return 'Proxy'
+  }
+  if (source === 'mcp')         return 'MCP'
+  if (source === 'sdk')         return 'SDK'
+  if (tool === 'claude-web')    return 'Claude Web'
+  if (tool === 'claude-cli')    return 'Claude CLI'
+  return 'Direct API'
+}
 
 export const metadata = { title: 'Analytics — TokenFin' }
 
@@ -54,10 +91,10 @@ export default async function AnalyticsPage() {
       .select('bucket,model,project_id,total_tokens,cost_usd')
       .eq('org_id', orgId).gte('bucket', since60).lt('bucket', since30),
     admin.from('usage_events')
-      .select('project_id,model,created_at,cost_usd,total_tokens')
+      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags')
       .eq('org_id', orgId).gte('created_at', since30),
     admin.from('usage_events')
-      .select('project_id,model,created_at,cost_usd,total_tokens')
+      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags')
       .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30),
     admin.from('projects').select('id,name').eq('org_id', orgId),
     admin.from('api_keys').select('id,name,project_id').eq('org_id', orgId).eq('is_active', true),
@@ -221,6 +258,39 @@ export default async function AnalyticsPage() {
       color: v.color,
     }))
 
+  /* ── Input / Output token totals ── */
+  let totalInputTokens  = 0
+  let totalOutputTokens = 0
+  for (const r of evts ?? []) {
+    const total  = Number(r.total_tokens ?? 0)
+    const inTok  = Number((r as Record<string,unknown>).input_tokens  ?? Math.round(total * 0.7))
+    const outTok = Number((r as Record<string,unknown>).output_tokens ?? (total - Math.round(total * 0.7)))
+    totalInputTokens  += inTok
+    totalOutputTokens += outTok
+  }
+
+  /* ── By Source (real platform detection from tags) ── */
+  const sourceMap = new Map<string, { calls: number; tokens: number; cost: number }>()
+  for (const r of evts ?? []) {
+    const tags     = (r as Record<string,unknown>).tags as Record<string,string> | null
+    const platform = detectPlatform(tags)
+    const entry    = sourceMap.get(platform) ?? { calls: 0, tokens: 0, cost: 0 }
+    entry.calls  += 1
+    entry.tokens += Number(r.total_tokens ?? 0)
+    entry.cost   += Number(r.cost_usd     ?? 0)
+    sourceMap.set(platform, entry)
+  }
+  const bySource: SourceSlice[] = Array.from(sourceMap.entries())
+    .sort(([, a], [, b]) => b.calls - a.calls)
+    .map(([platform, v]) => ({
+      platform,
+      calls:   v.calls,
+      tokens:  v.tokens,
+      cost:    v.cost,
+      pct:     totalCost > 0 ? +(v.cost / totalCost * 100).toFixed(1) : 0,
+      color:   PLATFORM_COLORS[platform] ?? '#6B7280',
+    }))
+
   const totalPrev = Array.from(costMapPrev.values()).reduce((s, v) => s + v.cost, 0)
 
   // Org-level budget from limits table (real value, not hardcoded)
@@ -232,7 +302,12 @@ export default async function AnalyticsPage() {
   // Real 30d token total (same source as cost)
   const tokensUsed = Array.from(costMap.values()).reduce((s, v) => s + v.tokens, 0)
 
-  const analyticsData: AnalyticsData = { daily, byModel, byProject, byPlatform, totalCost, totalPrev, orgBudget, tokensUsed }
+  const analyticsData: AnalyticsData = {
+    daily, byModel, byProject, byPlatform, bySource,
+    totalCost, totalPrev, orgBudget, tokensUsed,
+    inputTokens:  totalInputTokens,
+    outputTokens: totalOutputTokens,
+  }
 
   return <AnalyticsClient initialData={analyticsData} />
 }

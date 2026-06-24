@@ -1,23 +1,47 @@
 import { NextResponse }                              from 'next/server'
 import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
+import { requireOrgMember, requireApiKeyOrOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
 
 function db() { return createAdminClient() }
 
 export async function GET(req: NextRequest) {
-  const orgId = req.nextUrl.searchParams.get('org_id')
-  const guard = await requireOrgMember(orgId)
+  const guard = await requireApiKeyOrOrgMember(req, req.nextUrl.searchParams.get('org_id'))
   if (guard instanceof NextResponse) return guard
+  const { orgId } = guard
 
-  const { data, error } = await db()
-    .from('budget_requests')
-    .select('*, profiles:requested_by(email)')
-    .eq('org_id', orgId!)
+  // Get current month spend from usage_agg
+  const since = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
+  const { data: agg, error: aggErr } = await db()
+    .from('usage_agg')
+    .select('cost_usd')
+    .eq('org_id', orgId)
+    .gte('bucket', since)
+  if (aggErr) return dbError(aggErr, 'GET budget spend')
+
+  const spentUsd = (agg ?? []).reduce((s, r) => s + r.cost_usd, 0)
+
+  // Get the active org-level monthly limit (budget)
+  const { data: limits } = await db()
+    .from('limits')
+    .select('budget_usd')
+    .eq('org_id', orgId)
+    .eq('scope', 'org')
+    .eq('period', 'monthly')
+    .eq('is_active', true)
     .order('created_at', { ascending: false })
-  if (error) return dbError(error, 'GET budget')
-  return NextResponse.json(data)
+    .limit(1)
+
+  const budgetUsd = limits?.[0]?.budget_usd ?? null
+
+  return NextResponse.json({
+    budget_usd:  budgetUsd,
+    spent_usd:   +spentUsd.toFixed(4),
+    remaining:   budgetUsd != null ? +(budgetUsd - spentUsd).toFixed(4) : null,
+    pct_used:    budgetUsd ? +(spentUsd / budgetUsd * 100).toFixed(1) : null,
+    period:      'last_30d',
+  })
 }
 
 export async function POST(req: NextRequest) {

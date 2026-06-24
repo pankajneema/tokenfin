@@ -4,7 +4,8 @@ import {
   Plus, Search, X, Check, AlertTriangle, ChevronDown, ChevronUp,
   Copy, Eye, EyeOff, RefreshCw, MoreHorizontal, Trash2,
   Activity, Zap, Clock, Code, ExternalLink, Key,
-  Shield, Puzzle, Terminal, Globe,
+  Shield, Puzzle, Terminal, Globe, Monitor, Code2, SquareTerminal,
+  ArrowRight, Plug,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { PlatformRow } from './_types'
@@ -24,6 +25,55 @@ const TYPE_META: Record<PlatformType, { label: string; icon: React.ElementType; 
 const PROVIDER_DOT: Record<string, string> = {
   Anthropic: '#D97757', OpenAI: '#10A37F', Google: '#4285F4',
 }
+
+/* ── Quick connect tool metadata ── */
+const QUICK_TOOLS = [
+  {
+    id:       'codex',
+    name:     'Codex',
+    hint:     'Proxy · Auto-tracked',
+    Icon:     SquareTerminal,
+    color:    'text-teal',
+    bg:       'bg-[var(--green-bg)]',
+    preFill:  { name: 'Codex', type: 'cli' as PlatformType },
+  },
+  {
+    id:       'cursor',
+    name:     'Cursor',
+    hint:     'Proxy · Auto-tracked',
+    Icon:     Code2,
+    color:    'text-[var(--blue)]',
+    bg:       'bg-[var(--blue-bg)]',
+    preFill:  { name: 'Cursor', type: 'agent' as PlatformType },
+  },
+  {
+    id:       'cowork',
+    name:     'Cowork',
+    hint:     'MCP server',
+    Icon:     Monitor,
+    color:    'text-[#8B5CF6]',
+    bg:       'bg-[#8B5CF6]/10',
+    preFill:  { name: 'Cowork', type: 'agent' as PlatformType },
+  },
+  {
+    id:       'claude-cli',
+    name:     'Claude CLI',
+    hint:     'Proxy · Env var',
+    Icon:     SquareTerminal,
+    color:    'text-coral',
+    bg:       'bg-coral/10',
+    preFill:  { name: 'Claude CLI', type: 'cli' as PlatformType },
+  },
+  {
+    id:       'opencode',
+    name:     'OpenCode',
+    hint:     'Proxy · Auto-tracked',
+    Icon:     Code,
+    color:    'text-[var(--amber)]',
+    bg:       'bg-[var(--amber-bg)]',
+    preFill:  { name: 'OpenCode', type: 'cli' as PlatformType },
+  },
+]
 
 function fmtTokens(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -556,6 +606,42 @@ export function McpClient({ initialPlatforms, orgId }: Props) {
         </a>
       </div>
 
+      {/* Quick connect tool cards */}
+      <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-5 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <p className="text-[13.5px] font-bold text-[var(--fg)]">Popular integrations</p>
+            <p className="text-[11.5px] text-[var(--fg-tertiary)] mt-0.5">Click a tool to connect it and get your API key — full guides in Resources</p>
+          </div>
+          <a href="/dashboard/resources" className="flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80">
+            Full setup guides <ArrowRight size={12} />
+          </a>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+          {QUICK_TOOLS.map(tool => {
+            const Icon = tool.Icon
+            return (
+              <button
+                key={tool.id}
+                onClick={() => setShowModal(true)}
+                className="group flex flex-col items-center gap-2.5 p-3.5 rounded-2xl border border-[var(--border)] hover:border-coral/40 hover:bg-coral/5 transition-all text-center"
+              >
+                <div className={cn('w-10 h-10 rounded-2xl flex items-center justify-center transition-all group-hover:scale-105', tool.bg)}>
+                  <Icon size={18} className={tool.color} />
+                </div>
+                <div>
+                  <p className="text-[12px] font-bold text-[var(--fg)] group-hover:text-coral transition-colors leading-snug">{tool.name}</p>
+                  <p className="text-[10px] text-[var(--fg-tertiary)] mt-0.5 leading-tight">{tool.hint}</p>
+                </div>
+                <span className="text-[10px] font-semibold text-coral opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                  <Plug size={9} /> Connect
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
@@ -628,31 +714,20 @@ export function McpClient({ initialPlatforms, orgId }: Props) {
         </>
       )}
 
-      {/* SDK guide */}
-      <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-5 space-y-4">
-        <p className="text-[13px] font-bold text-[var(--fg)]">Not sure how to instrument your platform?</p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {[
-            { icon: Code,     label: 'Node.js / TypeScript', desc: 'npm install @tokenfin/node', href: '#' },
-            { icon: Terminal, label: 'Python',                desc: 'pip install tokenfin',       href: '#' },
-            { icon: Globe,    label: 'REST API',              desc: 'POST /v1/ingest — any language', href: '#' },
-          ].map(s => {
-            const Icon = s.icon
-            return (
-              <a key={s.label} href={s.href}
-                className="flex items-center gap-3 p-3.5 rounded-xl border border-[var(--border)] hover:border-coral/40 hover:bg-coral/5 transition-all group">
-                <div className="w-9 h-9 rounded-xl bg-coral/10 flex items-center justify-center flex-shrink-0">
-                  <Icon size={16} className="text-coral" />
-                </div>
-                <div>
-                  <p className="text-[12.5px] font-semibold text-[var(--fg)] group-hover:text-coral transition-colors">{s.label}</p>
-                  <p className="text-[11px] font-mono text-[var(--fg-tertiary)]">{s.desc}</p>
-                </div>
-                <ExternalLink size={12} className="text-[var(--fg-tertiary)] group-hover:text-coral ml-auto flex-shrink-0 transition-colors" />
-              </a>
-            )
-          })}
+      {/* Custom app / REST ingest tip */}
+      <div className="flex items-center gap-4 px-5 py-4 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl">
+        <div className="w-10 h-10 rounded-xl bg-coral/10 flex items-center justify-center flex-shrink-0">
+          <Globe size={18} className="text-coral" />
         </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-[13px] font-semibold text-[var(--fg)]">Building a custom app?</p>
+          <p className="text-[12px] text-[var(--fg-secondary)] mt-0.5">
+            Send a <code className="font-mono bg-[var(--bg-secondary)] px-1 rounded text-[11px]">POST https://tokenfin.curiousdevs.com/api/v1/ingest</code> with your API key after each LLM call — works in any language, no package to install.
+          </p>
+        </div>
+        <a href="/dashboard/resources?tab=api" className="flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80 transition-opacity flex-shrink-0">
+          API reference <ArrowRight size={12} />
+        </a>
       </div>
 
       {showModal && <AddPlatformModal orgId={orgId} onClose={() => setShowModal(false)} onAdd={handleAdd} />}

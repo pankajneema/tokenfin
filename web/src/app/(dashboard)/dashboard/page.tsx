@@ -41,7 +41,8 @@ export default async function DashboardPage() {
   const now      = Date.now()
   const since30  = new Date(now - 30 * 86400_000).toISOString()
   const since60  = new Date(now - 60 * 86400_000).toISOString()
-  const since14d = new Date(now - 14 * 86400_000).toISOString().slice(0, 10)
+  const since5d  = new Date(now -  5 * 86400_000).toISOString().slice(0, 10)
+  const since10d = new Date(now - 10 * 86400_000).toISOString().slice(0, 10)
   const since7   = new Date(now -  7 * 86400_000).toISOString()
 
   /* ── Identify org ── */
@@ -64,9 +65,10 @@ export default async function DashboardPage() {
     { data: projAgg    },
     { data: apiKeys    },
     { data: teams      },
+    { data: prev5dAgg  },
   ] = await Promise.all([
     admin.from('usage_events')
-      .select('total_tokens,cost_usd,model,project_id,created_at')
+      .select('total_tokens,input_tokens,output_tokens,cost_usd,model,project_id,created_at,tags')
       .eq('org_id', orgId).gte('created_at', since30),
     admin.from('usage_events')
       .select('total_tokens,cost_usd,created_at')
@@ -76,7 +78,7 @@ export default async function DashboardPage() {
       .eq('org_id', orgId).gte('created_at', since7),
     admin.from('usage_agg')
       .select('bucket,cost_usd,total_tokens,request_count')
-      .eq('org_id', orgId).gte('bucket', since14d).order('bucket', { ascending: true }),
+      .eq('org_id', orgId).gte('bucket', since5d).order('bucket', { ascending: true }),
     admin.from('usage_events')
       .select('id,model,total_tokens,cost_usd,created_at,tags,metadata')
       .eq('org_id', orgId).order('created_at', { ascending: false }).limit(10),
@@ -86,18 +88,29 @@ export default async function DashboardPage() {
       .select('id,name,slug').eq('org_id', orgId).limit(10),
     admin.from('usage_agg')
       .select('project_id,cost_usd,request_count,total_tokens')
-      .eq('org_id', orgId).gte('bucket', since14d),
+      .eq('org_id', orgId).gte('bucket', since5d),
     admin.from('api_keys')
       .select('created_by,project_id').eq('org_id', orgId).eq('is_active', true),
     admin.from('teams')
       .select('id,name').eq('org_id', orgId),
+    admin.from('usage_agg')
+      .select('cost_usd,total_tokens,request_count')
+      .eq('org_id', orgId).gte('bucket', since10d).lt('bucket', since5d),
   ])
 
   /* ── Current period aggregations ── */
-  const totalCost   = (events30 ?? []).reduce((s, r) => s + Number(r.cost_usd     ?? 0), 0)
-  const totalTokens = (events30 ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
-  const totalReqs   = events30?.length ?? 0
-  const memberCount = members?.length  ?? 0
+  const totalCost    = (events30 ?? []).reduce((s, r) => s + Number(r.cost_usd     ?? 0), 0)
+  const totalTokens  = (events30 ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
+  const totalReqs    = events30?.length ?? 0
+  const memberCount  = members?.length  ?? 0
+  const inputTokens  = (events30 ?? []).reduce((s, r) => {
+    const total = Number(r.total_tokens ?? 0)
+    return s + Number((r as Record<string,unknown>).input_tokens  ?? Math.round(total * 0.7))
+  }, 0)
+  const outputTokens = (events30 ?? []).reduce((s, r) => {
+    const total = Number(r.total_tokens ?? 0)
+    return s + Number((r as Record<string,unknown>).output_tokens ?? (total - Math.round(total * 0.7)))
+  }, 0)
 
   /* ── Prev period ── */
   const prevCost   = (eventsPrev ?? []).reduce((s, r) => s + Number(r.cost_usd     ?? 0), 0)
@@ -124,40 +137,34 @@ export default async function DashboardPage() {
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 5)
 
-  /* ── Chart data: prefer usage_agg, fall back to daily-bucketed events ── */
-  const aggHasCost = (chartRaw ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
-
+  /* ── Chart data: always bucket events30 by day for last 5 days ──────────────
+   * Usage_agg can be sparse (old ingest attempts may have missed upsert).
+   * Raw usage_events are the source of truth — bucket them in JS.
+   * Pre-seed all 5 days so days with zero usage still appear as flat bars.
+   * ──────────────────────────────────────────────────────────────────────── */
   type ChartRow = { bucket: string; cost_usd: number; total_tokens: number; request_count: number }
-  let chartData: ChartRow[]
 
-  if (aggHasCost) {
-    chartData = (chartRaw ?? []).map(r => ({
-      bucket:        String(r.bucket),
-      cost_usd:      Number(r.cost_usd     ?? 0),
-      total_tokens:  Number(r.total_tokens  ?? 0),
-      request_count: Number(r.request_count ?? 0),
-    }))
-  } else {
-    const d14ts = new Date(now - 14 * 86400_000).toISOString()
-    const dayMap = new Map<string, { cost: number; tokens: number; reqs: number }>()
-    for (const e of events30 ?? []) {
-      if (e.created_at < d14ts) continue
-      const day = e.created_at.slice(0, 10)
-      const entry = dayMap.get(day) ?? { cost: 0, tokens: 0, reqs: 0 }
-      entry.cost   += Number(e.cost_usd     ?? 0)
-      entry.tokens += Number(e.total_tokens ?? 0)
-      entry.reqs++
-      dayMap.set(day, entry)
-    }
-    chartData = Array.from(dayMap.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([day, v]) => ({
-        bucket:        day,
-        cost_usd:      v.cost,
-        total_tokens:  v.tokens,
-        request_count: v.reqs,
-      }))
+  const dayMap = new Map<string, { cost: number; tokens: number; reqs: number }>()
+  for (let i = 4; i >= 0; i--) {
+    const key = new Date(now - i * 86400_000).toISOString().slice(0, 10)
+    dayMap.set(key, { cost: 0, tokens: 0, reqs: 0 })
   }
+  for (const e of events30 ?? []) {
+    const day = e.created_at.slice(0, 10)
+    if (!dayMap.has(day)) continue
+    const entry = dayMap.get(day)!
+    entry.cost   += Number(e.cost_usd     ?? 0)
+    entry.tokens += Number(e.total_tokens ?? 0)
+    entry.reqs++
+  }
+  const chartData: ChartRow[] = Array.from(dayMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([bucket, v]) => ({
+      bucket,
+      cost_usd:      v.cost,
+      total_tokens:  v.tokens,
+      request_count: v.reqs,
+    }))
 
   /* ── Project breakdown: prefer projAgg, fall back to events ── */
   const projAggHasCost = (projAgg ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
@@ -231,6 +238,12 @@ export default async function DashboardPage() {
 
   const sparks = buildSparklines(events7 ?? [])
 
+  const prevTotals = {
+    tokens: (prev5dAgg ?? []).reduce((s, r) => s + Number(r.total_tokens  ?? 0), 0),
+    cost:   (prev5dAgg ?? []).reduce((s, r) => s + Number(r.cost_usd      ?? 0), 0),
+    reqs:   (prev5dAgg ?? []).reduce((s, r) => s + Number(r.request_count ?? 0), 0),
+  }
+
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
       <div className="max-w-[1400px] mx-auto px-6 py-6 space-y-5">
@@ -255,6 +268,8 @@ export default async function DashboardPage() {
         <StatsCards
           totalCost={totalCost}
           totalTokens={totalTokens}
+          inputTokens={inputTokens}
+          outputTokens={outputTokens}
           totalRequests={totalReqs}
           memberCount={memberCount}
           sparks={sparks}
@@ -263,7 +278,7 @@ export default async function DashboardPage() {
 
         <div className="grid grid-cols-1 xl:grid-cols-5 gap-5">
           <div className="xl:col-span-3">
-            <CostChart data={chartData} />
+            <CostChart data={chartData} prevTotals={prevTotals} />
           </div>
           <div className="xl:col-span-2">
             <ModelBreakdown data={modelBreakdown} totalCost={totalCost} />

@@ -4,7 +4,9 @@
  */
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse }                     from 'next/server'
+import type { NextRequest }                 from 'next/server'
 import type { User }                        from '@supabase/supabase-js'
+import crypto                               from 'crypto'
 
 export interface AuthResult {
   user:  User
@@ -108,6 +110,50 @@ export async function requireResourceOwner(
   }
 
   return requireOrgMember(data.org_id)
+}
+
+// ─── API Key auth ─────────────────────────────────────────────────────────────
+
+/**
+ * Resolves org_id from a Bearer API key in the Authorization header.
+ * Returns null if no key present, key is invalid, inactive, or expired.
+ */
+export async function resolveOrgFromApiKey(
+  req: NextRequest,
+): Promise<string | null> {
+  const auth = req.headers.get('authorization') ?? ''
+  const raw  = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
+  if (!raw) return null
+
+  const keyHash        = crypto.createHash('sha256').update(raw).digest('hex')
+  const { data: keyRow } = await createAdminClient()
+    .from('api_keys')
+    .select('org_id, is_active, expires_at')
+    .eq('key_hash', keyHash)
+    .maybeSingle()
+
+  if (!keyRow || !keyRow.is_active) return null
+  if (keyRow.expires_at && new Date(keyRow.expires_at) < new Date()) return null
+  return keyRow.org_id as string
+}
+
+/**
+ * requireApiKeyOrOrgMember — accepts EITHER:
+ *  • Bearer API key  →  resolves org_id from api_keys table (no session needed)
+ *  • Supabase session + org_id query param  →  delegates to requireOrgMember
+ *
+ * Use this on any route the MCP server calls.
+ */
+export async function requireApiKeyOrOrgMember(
+  req: NextRequest,
+  orgIdParam?: string | null,
+): Promise<{ orgId: string } | NextResponse> {
+  const apiKeyOrgId = await resolveOrgFromApiKey(req)
+  if (apiKeyOrgId) return { orgId: apiKeyOrgId }
+
+  const guard = await requireOrgMember(orgIdParam)
+  if (guard instanceof NextResponse) return guard
+  return { orgId: orgIdParam! }
 }
 
 // ─── Error helper ─────────────────────────────────────────────────────────────

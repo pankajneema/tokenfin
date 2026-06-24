@@ -61,6 +61,16 @@ const ENV_BADGE: Record<string, string> = {
   dev:     'bg-[var(--bg-tertiary)] text-[var(--fg-secondary)]',
 }
 
+const TOOL_LABEL: Record<string, string> = {
+  codex:      'Codex',
+  cursor:     'Cursor',
+  cowork:     'Cowork',
+  'claude-cli': 'Claude CLI',
+  opencode:   'OpenCode',
+  mcp:        'MCP',
+  api:        'API',
+}
+
 function reltime(iso: string) {
   const s = (Date.now() - new Date(iso).getTime()) / 1000
   if (s < 60)    return `${Math.round(s)}s ago`
@@ -123,11 +133,27 @@ export function RecentEvents({ events }: { events: Event[] }) {
                 <td className="px-3 py-3"><CostChip cost={ev.cost_usd} /></td>
                 <td className="px-3 py-3">
                   <div className="flex flex-wrap gap-1">
-                    {Object.entries(ev.tags ?? {}).slice(0, 2).map(([k, v]) => (
-                      <span key={k} className={cn('text-[10.5px] font-medium px-1.5 py-0.5 rounded-md font-mono', ENV_BADGE[v] ?? 'bg-[var(--bg-tertiary)] text-[var(--fg-secondary)]')}>
-                        {k}:{v}
+                    {/* tool tag → "via Codex" badge */}
+                    {ev.tags?.tool && (
+                      <span className="text-[10.5px] font-medium px-1.5 py-0.5 rounded-md bg-[var(--bg-tertiary)] text-[var(--fg-secondary)]">
+                        via {TOOL_LABEL[ev.tags.tool] ?? ev.tags.tool}
                       </span>
-                    ))}
+                    )}
+                    {/* env tag → coloured */}
+                    {ev.tags?.env && (
+                      <span className={cn('text-[10.5px] font-medium px-1.5 py-0.5 rounded-md', ENV_BADGE[ev.tags.env] ?? 'bg-[var(--bg-tertiary)] text-[var(--fg-secondary)]')}>
+                        {ev.tags.env}
+                      </span>
+                    )}
+                    {/* any other tags — skip internal keys */}
+                    {Object.entries(ev.tags ?? {})
+                      .filter(([k]) => k !== 'tool' && k !== 'env' && k !== 'source')
+                      .slice(0, 1)
+                      .map(([k, v]) => (
+                        <span key={k} className="text-[10.5px] font-medium px-1.5 py-0.5 rounded-md font-mono bg-[var(--bg-tertiary)] text-[var(--fg-secondary)]">
+                          {k}:{v}
+                        </span>
+                      ))}
                   </div>
                 </td>
                 <td className="px-3 py-3 text-[11.5px] text-[var(--fg-tertiary)] whitespace-nowrap">{reltime(ev.created_at)}</td>
