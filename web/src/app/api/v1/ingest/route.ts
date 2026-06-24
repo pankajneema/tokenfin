@@ -171,7 +171,9 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   if (totalTok <= 0)  return NextResponse.json({ error: 'input_tokens + output_tokens must be > 0' }, { status: 400 })
 
   const orgId    = keyRow.org_id
-  const bucket   = new Date().toISOString().slice(0, 10)
+  // Use IST (UTC+5:30) for date bucketing so Indian users see correct dates
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000
+  const bucket = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10)
 
   // Resolve project_id — usage_events.project_id is NOT NULL.
   // If not provided in body or API key, fall back to the org's first project.
