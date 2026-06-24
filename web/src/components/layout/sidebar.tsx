@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
@@ -199,9 +200,9 @@ export function Sidebar({ user }: { user: User }) {
         collapsed && 'justify-center px-0'
       )}>
         {collapsed ? (
-          <img src="/favicon.svg" alt="TokenFin" className="w-7 h-7 flex-shrink-0" />
+          <Image src="/favicon.svg" alt="TokenFin" width={28} height={28} className="flex-shrink-0" />
         ) : (
-          <img src="/logo.svg" alt="TokenFin" className="h-7 w-auto flex-shrink-0" />
+          <Image src="/logo.svg" alt="TokenFin" width={120} height={28} className="h-7 w-auto flex-shrink-0" />
         )}
       </div>
 

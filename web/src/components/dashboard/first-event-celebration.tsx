@@ -208,7 +208,7 @@ export function FirstEventCelebration({ enabled }: Props) {
         </div>
 
         <p className="text-[11px] text-[var(--fg-tertiary)] mt-4">
-          This message won't appear again — it's your one-time milestone notification.
+          This message won&apos;t appear again &mdash; it&apos;s your one-time milestone notification.
         </p>
       </div>
     </div>

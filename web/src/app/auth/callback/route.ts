@@ -1,14 +1,16 @@
 /**
  * /auth/callback
  *
- * Handles two flows:
+ * Handles three flows:
  *  A. OAuth sign-in (GitHub / Google) — Supabase redirects here with ?code=
  *  B. Password reset email link       — redirectTo includes ?next=/reset-password
+ *  C. Team invitation magic link      — redirectTo includes ?next=/accept-invitation
  *
  * After exchanging the code for a session:
- *  - Password reset → send to /reset-password
- *  - New user (no org membership) → send to /plans
- *  - Existing user → send to `next` (default /dashboard)
+ *  - Password reset     → /reset-password
+ *  - Invite acceptance  → /accept-invitation  (skip membership check — they have none yet)
+ *  - New user, no org   → /plans
+ *  - Existing user      → `next` (default /dashboard)
  */
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { cookies }                               from 'next/headers'
@@ -64,9 +66,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(url.toString())
   }
 
-  // Password-reset flow — always send to reset page, skip membership check.
+  // Password-reset flow — send to reset page, skip membership check.
   if (next === '/reset-password') {
     return NextResponse.redirect(`${origin}${next}`)
+  }
+
+  // Invite flow — user has no membership yet; send straight to accept page.
+  if (next === '/accept-invitation') {
+    return NextResponse.redirect(`${origin}/accept-invitation`)
   }
 
   // For new users (OAuth signup or email confirm), check if they have an org.

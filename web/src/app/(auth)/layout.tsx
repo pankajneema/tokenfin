@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Image from 'next/image'
 import Link from 'next/link'
 
 export const metadata: Metadata = {
@@ -16,14 +17,18 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           {/* Logo — centered above form */}
           <div className="flex flex-col items-center mb-10">
             <Link href="/" className="flex flex-col items-center gap-3 group">
-              <img
+              <Image
                 src="/favicon.svg"
                 alt="TokenFin"
-                className="w-[66px] h-[66px] group-hover:opacity-90 transition-opacity"
+                width={66}
+                height={66}
+                className="group-hover:opacity-90 transition-opacity"
               />
-              <img
+              <Image
                 src="/logo.svg"
                 alt="TokenFin"
+                width={120}
+                height={28}
                 className="h-7 w-auto group-hover:opacity-90 transition-opacity"
               />
             </Link>

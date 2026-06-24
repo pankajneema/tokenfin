@@ -160,7 +160,7 @@ export function PromptsClient({
             <p className="text-[15px] font-semibold text-[var(--fg)]">No prompt data yet</p>
             <p className="text-[13px] text-[var(--fg-secondary)] mt-1 max-w-sm">
               Prompt analytics appear once your proxy sends events with metadata.
-              Make sure you're on proxy version 1.1+.
+              Make sure you&apos;re on proxy version 1.1+.
             </p>
           </div>
           <a href="/dashboard/resources" className="btn-primary text-[13px]">

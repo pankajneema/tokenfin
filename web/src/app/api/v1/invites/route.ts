@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     // 1. Send real invite email via Supabase Auth
     //    Invited user lands on /auth/callback → redirected to /dashboard
     const { error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${appUrl}/auth/callback?next=/dashboard`,
+      redirectTo: `${appUrl}/auth/callback?next=/accept-invitation`,
       data: { org_id, invited_by: guard.userId },
     })
 
