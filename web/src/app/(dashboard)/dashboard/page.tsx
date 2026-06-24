@@ -5,7 +5,9 @@ import { ModelBreakdown } from '@/components/dashboard/model-breakdown'
 import { TopProjects }    from '@/components/dashboard/top-projects'
 import { TeamBreakdown }  from '@/components/dashboard/team-breakdown'
 import { RecentEvents }   from '@/components/dashboard/recent-events'
-import { AlertBanner }    from '@/components/dashboard/alert-banner'
+import { AlertBanner }            from '@/components/dashboard/alert-banner'
+import { OnboardingChecklist }    from '@/components/dashboard/onboarding-checklist'
+import { FirstEventCelebration }  from '@/components/dashboard/first-event-celebration'
 
 export const metadata = { title: 'Overview — TokenFin' }
 
@@ -264,6 +266,18 @@ export default async function DashboardPage() {
         </div>
 
         <AlertBanner />
+
+        {/* First-event celebration — fires once via localStorage gate */}
+        <FirstEventCelebration enabled={totalReqs > 0} />
+
+        {/* Onboarding checklist — visible until first event arrives */}
+        {totalReqs === 0 && (
+          <OnboardingChecklist
+            hasProject={Boolean(projects?.length)}
+            hasApiKey={Boolean(apiKeys?.length)}
+            hasEvent={false}
+          />
+        )}
 
         <StatsCards
           totalCost={totalCost}

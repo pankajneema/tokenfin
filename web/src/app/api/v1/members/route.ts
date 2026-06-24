@@ -7,7 +7,7 @@
 import { NextResponse }    from 'next/server'
 import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
-import { requireOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
+import { requireOrgMember, requirePermission, dbError } from '@/lib/api/auth'
 import { z }                 from 'zod'
 
 function db() { return createAdminClient() }
@@ -63,7 +63,9 @@ export async function PATCH(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireResourceOwner('members', parsed.data.id)
+  const { data: memRow } = await db().from('members').select('org_id').eq('id', parsed.data.id).maybeSingle()
+  if (!memRow) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const guard = await requirePermission(memRow.org_id, 'members:change_role')
   if (guard instanceof NextResponse) return guard
 
   const { id, ...fields } = parsed.data
@@ -76,18 +78,22 @@ export async function PATCH(req: NextRequest) {
    Removes a member from the org entirely. Cannot remove the last owner. */
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id')
-  const guard = await requireResourceOwner('members', id)
-  if (guard instanceof NextResponse) return guard
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  // Guard: fetch the member's role first
+  // Fetch member's role + org — need both for the guard and the last-owner check
   const { data: member } = await db()
     .from('members')
     .select('role, org_id')
-    .eq('id', id!)
+    .eq('id', id)
     .single()
 
-  if (member?.role === 'owner') {
-    // Count other owners
+  if (!member) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+
+  const guard = await requirePermission(member.org_id, 'members:remove')
+  if (guard instanceof NextResponse) return guard
+
+  if (member.role === 'owner') {
+    // Prevent removing the last owner
     const { count } = await db()
       .from('members')
       .select('id', { count: 'exact', head: true })
@@ -98,7 +104,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'Cannot remove the last owner' }, { status: 409 })
   }
 
-  const { error } = await db().from('members').delete().eq('id', id!)
+  const { error } = await db().from('members').delete().eq('id', id)
   if (error) return dbError(error, 'DELETE members')
   return NextResponse.json({ ok: true })
 }

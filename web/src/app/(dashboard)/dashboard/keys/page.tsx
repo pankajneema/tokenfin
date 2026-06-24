@@ -1,5 +1,8 @@
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
+import { getOrgRole }          from '@/lib/api/auth'
+import { can }                 from '@/lib/rbac'
+import { redirect }            from 'next/navigation'
 import { KeysClient }          from './_client'
 
 export const metadata = { title: 'API Keys — TokenFin' }
@@ -56,7 +59,11 @@ export default async function KeysPage() {
     .eq('user_id', user!.id)
     .limit(1)
 
-  const orgId   = _mb?.[0]?.org_id ?? ''
+  const orgId = _mb?.[0]?.org_id ?? ''
+  const role  = await getOrgRole(user.id, orgId)
+
+  // Only owner/admin can access the keys page
+  if (!can(role, 'keys:view')) redirect('/dashboard')
   const since30 = new Date(Date.now() - 30 * 86400_000).toISOString()
 
   const [
@@ -160,6 +167,7 @@ export default async function KeysPage() {
       members={memberOptions}
       orgId={orgId}
       userId={user.id}
+      role={role}
     />
   )
 }

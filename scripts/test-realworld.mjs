@@ -8,7 +8,7 @@
  *
  * Usage:
  *   TOKENFIN_API_KEY=tfk_dev_xxxx \
- *   TOKENFIN_BASE_URL=http://localhost:3000 \
+ *   TOKENFIN_BASE_URL=https://tokenfin.curiousdevs.com \
  *   ANTHROPIC_API_KEY=sk-ant-xxxx \        # optional — for real Claude call
  *   node scripts/test-realworld.mjs
  */
@@ -33,7 +33,7 @@ const head = (s) => `\n${C.bold}${C.cyan}${s}${C.reset}`
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const TF_KEY      = process.env.TOKENFIN_API_KEY
-const TF_BASE     = (process.env.TOKENFIN_BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '')
+const TF_BASE     = (process.env.TOKENFIN_BASE_URL ?? 'https://tokenfin.curiousdevs.com').replace(/\/$/, '')
 const ANT_KEY     = process.env.ANTHROPIC_API_KEY
 const PROJECT_ID  = process.env.TOKENFIN_PROJECT_ID ?? ''   // optional override
 

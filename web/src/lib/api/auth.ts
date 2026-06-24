@@ -6,6 +6,7 @@ import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse }                     from 'next/server'
 import type { NextRequest }                 from 'next/server'
 import type { User }                        from '@supabase/supabase-js'
+import { can, type Role, type Permission }  from '@/lib/rbac'
 import crypto                               from 'crypto'
 
 export interface AuthResult {
@@ -84,6 +85,62 @@ export async function requireOrgMember(
 }
 
 /**
+ * requireOrgMemberWithRole — like requireOrgMember but also returns the
+ * member's role. Use on pages and routes that need role-based UI/logic.
+ */
+export async function requireOrgMemberWithRole(
+  orgId: string | null | undefined,
+): Promise<{ userId: string; role: Role } | NextResponse> {
+  if (!orgId) {
+    return NextResponse.json({ error: 'org_id required' }, { status: 400 })
+  }
+
+  const supabase = createClient()
+  const { data: { user }, error: authErr } = await supabase.auth.getUser()
+  if (authErr || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const { data: member } = await createAdminClient()
+    .from('members')
+    .select('id, role')
+    .eq('user_id', user.id)
+    .eq('org_id', orgId)
+    .maybeSingle()
+
+  if (!member) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
+  return { userId: user.id, role: (member.role ?? 'viewer') as Role }
+}
+
+/**
+ * requirePermission — verifies membership AND a specific RBAC permission.
+ * Returns { userId, role } or a 403/401 NextResponse.
+ *
+ * Usage:
+ *   const guard = await requirePermission(orgId, 'keys:create')
+ *   if (guard instanceof NextResponse) return guard
+ */
+export async function requirePermission(
+  orgId:      string | null | undefined,
+  permission: Permission,
+): Promise<{ userId: string; role: Role } | NextResponse> {
+  const guard = await requireOrgMemberWithRole(orgId)
+  if (guard instanceof NextResponse) return guard
+
+  if (!can(guard.role, permission)) {
+    return NextResponse.json(
+      { error: 'Forbidden', reason: `Requires permission: ${permission}` },
+      { status: 403 }
+    )
+  }
+
+  return guard
+}
+
+/**
  * requireResourceOwner — for PATCH/DELETE that only receive a resource `id`
  * (no org_id in the request).
  *
@@ -110,6 +167,23 @@ export async function requireResourceOwner(
   }
 
   return requireOrgMember(data.org_id)
+}
+
+// ─── Role helper for Server Components (pages) ────────────────────────────────
+
+/**
+ * getOrgRole — lightweight helper for server components.
+ * Fetches the current user's role in the given org.
+ * Returns 'viewer' on any error so pages degrade gracefully.
+ */
+export async function getOrgRole(userId: string, orgId: string): Promise<Role> {
+  const { data } = await createAdminClient()
+    .from('members')
+    .select('role')
+    .eq('user_id', userId)
+    .eq('org_id', orgId)
+    .maybeSingle()
+  return (data?.role as Role | undefined) ?? 'viewer'
 }
 
 // ─── API Key auth ─────────────────────────────────────────────────────────────

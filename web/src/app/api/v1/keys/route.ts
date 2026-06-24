@@ -1,9 +1,9 @@
-import { NextResponse }                              from 'next/server'
-import type { NextRequest }                          from 'next/server'
-import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
-import crypto                                         from 'crypto'
-import { z }                                          from 'zod'
+import { NextResponse }                                          from 'next/server'
+import type { NextRequest }                                     from 'next/server'
+import { createAdminClient }                                    from '@/lib/supabase/server'
+import { requireOrgMember, requirePermission, requireResourceOwner, dbError } from '@/lib/api/auth'
+import crypto                                                    from 'crypto'
+import { z }                                                     from 'zod'
 
 function db() { return createAdminClient() }
 
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireOrgMember(parsed.data.org_id)
+  const guard = await requirePermission(parsed.data.org_id, 'keys:create')
   if (guard instanceof NextResponse) return guard
 
   const { org_id, project_id, name, created_by, user_id, team_id, env, scopes, expires_at } = parsed.data
@@ -168,7 +168,11 @@ export async function PATCH(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireResourceOwner('api_keys', parsed.data.id)
+  // requireResourceOwner resolves org_id from the key, then checks membership.
+  // We additionally need role check — fetch org_id first.
+  const { data: keyRow } = await db().from('api_keys').select('org_id').eq('id', parsed.data.id).maybeSingle()
+  if (!keyRow) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const guard = await requirePermission(keyRow.org_id, 'keys:toggle')
   if (guard instanceof NextResponse) return guard
 
   const { error } = await db().from('api_keys').update({ is_active: parsed.data.is_active }).eq('id', parsed.data.id)
@@ -179,7 +183,10 @@ export async function PATCH(req: NextRequest) {
 /* DELETE /api/v1/keys?id=xxx */
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id')
-  const guard = await requireResourceOwner('api_keys', id)
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+  const { data: keyRow } = await db().from('api_keys').select('org_id').eq('id', id).maybeSingle()
+  if (!keyRow) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const guard = await requirePermission(keyRow.org_id, 'keys:delete')
   if (guard instanceof NextResponse) return guard
 
   const { error } = await db().from('api_keys').delete().eq('id', id!)

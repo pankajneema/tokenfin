@@ -1,5 +1,6 @@
 import { createClient }      from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
+import { getOrgRole }         from '@/lib/api/auth'
 import { LimitsClient }       from './_client'
 
 export const metadata = { title: 'Budget Limits — TokenFin' }
@@ -42,6 +43,7 @@ export default async function LimitsPage() {
     .limit(1)
 
   const orgId = _mb?.[0]?.org_id ?? ''
+  const role  = await getOrgRole(user.id, orgId)
 
   const [
     { data: rawLimits },
@@ -90,6 +92,7 @@ export default async function LimitsPage() {
       projects={projectOptions}
       teams={teamOptions}
       orgId={orgId}
+      role={role}
     />
   )
 }

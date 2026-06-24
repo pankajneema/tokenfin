@@ -1,5 +1,6 @@
 import { createClient }      from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
+import { getOrgRole }         from '@/lib/api/auth'
 import { AlertsClient }       from './_client'
 import type { AlertRuleRow, AlertHistoryRow, TriggerType } from './_types'
 
@@ -23,6 +24,7 @@ export default async function AlertsPage() {
 
   const orgId = _mb?.[0]?.org_id ?? ''
   const email = user.email ?? ''
+  const role  = await getOrgRole(user.id, orgId)
 
   const [
     { data: rawRules },
@@ -70,6 +72,7 @@ export default async function AlertsPage() {
       initialHistory={history}
       orgId={orgId}
       userEmail={email}
+      role={role}
     />
   )
 }

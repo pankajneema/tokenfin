@@ -16,10 +16,11 @@
  *   metadata?:     Record<string,unknown>
  * }
  */
-import { NextResponse }        from 'next/server'
-import type { NextRequest }    from 'next/server'
-import { createAdminClient }   from '@/lib/supabase/server'
-import crypto                  from 'crypto'
+import { NextResponse }                       from 'next/server'
+import type { NextRequest }                   from 'next/server'
+import { createAdminClient }                  from '@/lib/supabase/server'
+import { rateLimit, rateLimitResponse }       from '@/lib/ratelimit'
+import crypto                                 from 'crypto'
 
 /* ── Pricing (per 1M tokens) ── */
 const PRICE: Record<string, { in: number; out: number }> = {
@@ -134,12 +135,22 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
     .eq('key_hash', keyHash)
     .single()
 
-  if (!keyRow)         return NextResponse.json({ error: 'Invalid API key' }, { status: 401 })
+  if (!keyRow)           return NextResponse.json({ error: 'Invalid API key' },    { status: 401 })
   if (!keyRow.is_active) return NextResponse.json({ error: 'API key is inactive' }, { status: 403 })
   if (keyRow.expires_at && new Date(keyRow.expires_at) < new Date())
     return NextResponse.json({ error: 'API key expired' }, { status: 403 })
 
-  // 2. Validate body
+  // 2. Rate limit — per API key, plan-aware
+  const { data: org } = await admin
+    .from('orgs')
+    .select('plan')
+    .eq('id', keyRow.org_id)
+    .single()
+
+  const rl = await rateLimit(keyRow.id, org?.plan ?? 'free')
+  if (!rl.allowed) return rateLimitResponse(rl)
+
+  // 3. Validate body
   const model       = String(body.model ?? '')
   const inputTok    = Number(body.input_tokens  ?? 0)
   const outputTok   = Number(body.output_tokens ?? 0)
@@ -182,7 +193,7 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
     )
   }
 
-  // 3. Insert usage event
+  // 4. Insert usage event
   const { error: evtErr } = await admin.from('usage_events').insert({
     org_id:        orgId,
     project_id:    resolvedProjectId,
@@ -199,7 +210,7 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
     return NextResponse.json({ error: 'Failed to record event' }, { status: 500 })
   }
 
-  // 4. Upsert usage_agg
+  // 5. Upsert usage_agg
   const { error: aggErr } = await admin.rpc('upsert_usage_agg', {
     p_org_id:        orgId,
     p_project_id:    resolvedProjectId,
@@ -226,10 +237,10 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
     })
   }
 
-  // 5. Update last_used_at on key
+  // 6. Update last_used_at on key
   await admin.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', keyRow.id)
 
-  // 6. Check limits & fire notifications (non-blocking — never fails the request)
+  // 7. Check limits & fire notifications (non-blocking — never fails the request)
   checkLimitsAndNotify(admin, orgId).catch(() => {})
 
   return NextResponse.json({

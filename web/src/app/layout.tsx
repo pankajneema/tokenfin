@@ -8,7 +8,7 @@ export const metadata: Metadata = {
     template: '%s · TokenFin',
   },
   description: 'LLM Cost Attribution & FinOps Engineering Teams',
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3001'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? 'https://tokenfin.curiousdevs.com'),
   icons: {
     icon: [
       { url: '/favicon.svg', type: 'image/svg+xml' },

@@ -15,19 +15,58 @@ let reqCount = 0
 
 function log(...args) { console.log(new Date().toISOString(), ...args) }
 
+// ── Prompt fingerprinting (no raw text stored) ────────────────────────────────
+// djb2 hash over the first 500 chars of the concatenated prompt text.
+// Same prompt → same hash. Lets analytics group expensive/slow patterns
+// without storing anything sensitive.
+function djb2Hash(str) {
+  let hash = 5381
+  const len = Math.min(str.length, 500)
+  for (let i = 0; i < len; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i)
+    hash = hash >>> 0   // keep as unsigned 32-bit
+  }
+  return hash.toString(16).padStart(8, '0')
+}
+
+function extractPromptMeta(parsed) {
+  if (!parsed) return {}
+  try {
+    // Chat completions format: messages[]
+    const messages = parsed.messages || parsed.input || []
+    if (!Array.isArray(messages) || messages.length === 0) return {}
+
+    const text = messages
+      .map(m => (typeof m.content === 'string' ? m.content : ''))
+      .join(' ')
+
+    return {
+      prompt_chars:       text.length,
+      prompt_hash:        djb2Hash(text),
+      messages_count:     messages.length,
+      has_system_prompt:  messages.some(m => m.role === 'system'),
+    }
+  } catch {
+    return {}
+  }
+}
+
 // ── Send usage to TokenFin ────────────────────────────────────────────────────
-function track(model, inputTokens, outputTokens) {
+function track(model, inputTokens, outputTokens, extraMeta = {}) {
   if (!inputTokens && !outputTokens) return
   const payload = JSON.stringify({
     model: model || 'unknown',
     input_tokens:  inputTokens  || 0,
     output_tokens: outputTokens || 0,
-    tags: { tool: 'codex' },
+    tags:     { tool: 'codex' },
+    metadata: extraMeta,
   })
-  const u = new URL(TOKENFIN_URL)
-  const req = http.request({
+  const u    = new URL(TOKENFIN_URL)
+  const isHttps = u.protocol === 'https:'
+  const transport = isHttps ? require('https') : http
+  const req = transport.request({
     hostname: u.hostname,
-    port:     parseInt(u.port) || 3001,
+    port:     parseInt(u.port) || (isHttps ? 443 : 80),
     path:     u.pathname,
     method:   'POST',
     headers: {
@@ -63,6 +102,7 @@ const server = http.createServer((clientReq, clientRes) => {
   log(`[${id}] HTTP ${clientReq.method} ${clientReq.url}`)
 
   const chunks = []
+  const reqStart = Date.now()   // capture before any async work
   clientReq.on('data', c => chunks.push(c))
   clientReq.on('end', () => {
     let bodyBuf = Buffer.concat(chunks)
@@ -98,6 +138,8 @@ const server = http.createServer((clientReq, clientRes) => {
       upstreamRes.on('data', chunk => { clientRes.write(chunk); accumulated += chunk.toString() })
       upstreamRes.on('end', () => {
         clientRes.end()
+        const latency_ms   = Date.now() - reqStart
+        const promptMeta   = extractPromptMeta(parsed)
 
         // Try to extract usage from SSE stream (both /responses and /chat/completions formats)
         if (parsed?.stream || accumulated.includes('data:')) {
@@ -114,7 +156,10 @@ const server = http.createServer((clientReq, clientRes) => {
                 const input  = usage.input_tokens  ?? usage.prompt_tokens     ?? 0
                 const output = usage.output_tokens ?? usage.completion_tokens ?? 0
                 const model  = d.model || d.response?.model || modelHint
-                if (input || output) { track(model, input, output); break }
+                if (input || output) {
+                  track(model, input, output, { latency_ms, ...promptMeta })
+                  break
+                }
               }
             } catch {}
           }
@@ -126,7 +171,7 @@ const server = http.createServer((clientReq, clientRes) => {
             if (usage) {
               const input  = usage.input_tokens  ?? usage.prompt_tokens     ?? 0
               const output = usage.output_tokens ?? usage.completion_tokens ?? 0
-              track(d.model || modelHint, input, output)
+              track(d.model || modelHint, input, output, { latency_ms, ...promptMeta })
             } else {
               log(`[${id}] no usage in response — body:`, accumulated.slice(0, 300))
             }

@@ -1,7 +1,7 @@
 import { NextResponse }                              from 'next/server'
 import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, dbError }                 from '@/lib/api/auth'
+import { requireOrgMember, requirePermission, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
 
 function db() { return createAdminClient() }
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireOrgMember(parsed.data.org_id)
+  const guard = await requirePermission(parsed.data.org_id, 'integrations:manage')
   if (guard instanceof NextResponse) return guard
 
   const { org_id, integration, detail, config } = parsed.data
@@ -60,7 +60,7 @@ export async function DELETE(req: NextRequest) {
   const integration = req.nextUrl.searchParams.get('integration')
   if (!integration) return NextResponse.json({ error: 'integration required' }, { status: 400 })
 
-  const guard = await requireOrgMember(orgId)
+  const guard = await requirePermission(orgId, 'integrations:manage')
   if (guard instanceof NextResponse) return guard
 
   const { error } = await db()

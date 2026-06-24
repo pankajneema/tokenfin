@@ -7,6 +7,7 @@ import {
   BarChart3, Activity, ToggleLeft, ToggleRight,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { can, type Role } from '@/lib/rbac'
 import type { ApiKeyRow, ProjectOption, TeamOption, MemberOption } from './page'
 
 /* ── Types ─────────────────────────────────────────────────── */
@@ -455,9 +456,10 @@ interface Props {
   members:     MemberOption[]
   orgId:       string
   userId:      string
+  role:        Role
 }
 
-export function KeysClient({ initialKeys, projects, teams, members, orgId, userId }: Props) {
+export function KeysClient({ initialKeys, projects, teams, members, orgId, userId, role }: Props) {
   const [keys,       setKeys]       = useState<ApiKeyRow[]>(initialKeys)
   const [filter,     setFilter]     = useState<'all' | 'active' | 'inactive'>('all')
   const [search,     setSearch]     = useState('')
@@ -533,9 +535,11 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
           <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">API Keys</h1>
           <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Manage keys for SDK integration and cost attribution</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary" disabled={projects.length === 0}>
-          <Plus size={14} /> Create key
-        </button>
+        {can(role, 'keys:create') && (
+          <button onClick={() => setShowCreate(true)} className="btn-primary" disabled={projects.length === 0}>
+            <Plus size={14} /> Create key
+          </button>
+        )}
       </div>
 
       {projects.length === 0 && (
@@ -606,7 +610,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
               <p className="text-[13px] text-[var(--fg-secondary)]">
                 {search ? `No keys matching "${search}"` : 'No API keys yet'}
               </p>
-              {!search && projects.length > 0 && (
+              {!search && projects.length > 0 && can(role, 'keys:create') && (
                 <button onClick={() => setShowCreate(true)} className="btn-primary text-[12.5px]">
                   <Plus size={12} /> Create your first key
                 </button>
@@ -727,20 +731,22 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
                       <div className="fixed inset-0 z-10" onClick={() => setActionMenu(null)} />
                       <div className="absolute right-0 top-full mt-1 z-50 w-48 bg-[var(--bg)] border border-[var(--border)] rounded-xl shadow-xl py-1.5">
 
-                        {/* Status toggle */}
-                        <button
-                          onClick={() => toggleStatus(k.id)}
-                          disabled={isBusy}
-                          className={cn(
-                            'w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] font-medium transition-colors',
-                            k.isActive
-                              ? 'text-[var(--amber)] hover:bg-[var(--amber-bg)]'
-                              : 'text-teal hover:bg-[var(--green-bg)]'
-                          )}>
-                          {k.isActive
-                            ? <><ToggleLeft  size={14} /> Deactivate key</>
-                            : <><ToggleRight size={14} /> Activate key</>}
-                        </button>
+                        {/* Status toggle — admin+ only */}
+                        {can(role, 'keys:toggle') && (
+                          <button
+                            onClick={() => toggleStatus(k.id)}
+                            disabled={isBusy}
+                            className={cn(
+                              'w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] font-medium transition-colors',
+                              k.isActive
+                                ? 'text-[var(--amber)] hover:bg-[var(--amber-bg)]'
+                                : 'text-teal hover:bg-[var(--green-bg)]'
+                            )}>
+                            {k.isActive
+                              ? <><ToggleLeft  size={14} /> Deactivate key</>
+                              : <><ToggleRight size={14} /> Activate key</>}
+                          </button>
+                        )}
 
                         <button
                           onClick={() => { copyPrefix(k.keyPrefix, k.id); setActionMenu(null) }}
@@ -748,13 +754,16 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
                           <Copy size={13} /> Copy key
                         </button>
 
-                        <div className="border-t border-[var(--border)] my-1" />
-
-                        <button
-                          onClick={() => { setDeleteId(k.id); setActionMenu(null) }}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] text-[var(--red)] hover:bg-[var(--red-bg)] transition-colors">
-                          <Trash2 size={13} /> Revoke key
-                        </button>
+                        {can(role, 'keys:delete') && (
+                          <>
+                            <div className="border-t border-[var(--border)] my-1" />
+                            <button
+                              onClick={() => { setDeleteId(k.id); setActionMenu(null) }}
+                              className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] text-[var(--red)] hover:bg-[var(--red-bg)] transition-colors">
+                              <Trash2 size={13} /> Revoke key
+                            </button>
+                          </>
+                        )}
                       </div>
                     </>
                   )}

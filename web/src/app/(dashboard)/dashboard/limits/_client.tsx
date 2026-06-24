@@ -6,6 +6,7 @@ import {
   Building2, FolderOpen, Users, User, Zap, Activity,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { can, type Role } from '@/lib/rbac'
 import type { LimitRow, LimitScope, LimitPeriod, ScopeOption } from './page'
 
 /* ── Helpers ─────────────────────────────────────────────────── */
@@ -66,13 +67,14 @@ function ThresholdBar({ limit }: { limit: LimitRow }) {
 
 /* ── LimitCard ── */
 function LimitCard({
-  limit, onToggle, onDelete, onEdit, onAddAlert,
+  limit, onToggle, onDelete, onEdit, onAddAlert, readOnly = false,
 }: {
-  limit:      LimitRow
-  onToggle:   (id: string) => void
-  onDelete:   (id: string) => void
-  onEdit:     (l: LimitRow) => void
-  onAddAlert: (l: LimitRow) => void
+  limit:       LimitRow
+  onToggle:    (id: string) => void
+  onDelete:    (id: string) => void
+  onEdit:      (l: LimitRow) => void
+  onAddAlert:  (l: LimitRow) => void
+  readOnly?:   boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const status    = getStatus(limit)
@@ -113,7 +115,7 @@ function LimitCard({
           <div className={cn('flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-semibold', stm.bg, stm.color)}>
             <span className={cn('w-1.5 h-1.5 rounded-full', stm.dot)} />{stm.label}
           </div>
-          <div className="relative">
+          {!readOnly && <div className="relative">
             <button onClick={() => setMenuOpen(v => !v)}
               className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--fg-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] transition-colors">
               <MoreHorizontal size={15} />
@@ -138,7 +140,7 @@ function LimitCard({
                 </div>
               </>
             )}
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -586,9 +588,10 @@ interface Props {
   projects:      ScopeOption[]
   teams:         ScopeOption[]
   orgId:         string
+  role:          Role
 }
 
-export function LimitsClient({ initialLimits, projects, teams, orgId }: Props) {
+export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Props) {
   const [limits,        setLimits]        = useState<LimitRow[]>(initialLimits)
   const [scopeFilter,   setScopeFilter]   = useState<LimitScope | 'all'>('all')
   const [showModal,     setShowModal]     = useState(false)
@@ -652,9 +655,11 @@ export function LimitsClient({ initialLimits, projects, teams, orgId }: Props) {
           <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Budget Limits</h1>
           <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Spend guardrails · warn → throttle → block pipeline</p>
         </div>
-        <button onClick={() => { setEditTarget(null); setShowModal(true) }} className="btn-primary flex-shrink-0">
-          <Plus size={14} /> New limit
-        </button>
+        {can(role, 'limits:write') && (
+          <button onClick={() => { setEditTarget(null); setShowModal(true) }} className="btn-primary flex-shrink-0">
+            <Plus size={14} /> New limit
+          </button>
+        )}
       </div>
 
       {/* Stats */}
@@ -707,7 +712,9 @@ export function LimitsClient({ initialLimits, projects, teams, orgId }: Props) {
           <Shield size={36} className="text-[var(--fg-tertiary)] mx-auto mb-4" />
           <p className="text-[14px] font-semibold text-[var(--fg)]">No limits for this scope</p>
           <p className="text-[12.5px] text-[var(--fg-secondary)] mt-1">Create a budget limit to add spend guardrails</p>
-          <button onClick={() => setShowModal(true)} className="btn-primary mt-5"><Plus size={13} /> New limit</button>
+          {can(role, 'limits:write') && (
+            <button onClick={() => setShowModal(true)} className="btn-primary mt-5"><Plus size={13} /> New limit</button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -715,10 +722,11 @@ export function LimitsClient({ initialLimits, projects, teams, orgId }: Props) {
             <LimitCard
               key={limit.id}
               limit={{ ...limit, isActive: toggling === limit.id ? !limit.isActive : limit.isActive }}
-              onToggle={handleToggle}
-              onDelete={id => { setDeleteId(id); setDeleteInput('') }}
-              onEdit={l => { setEditTarget(l); setShowModal(true) }}
+              onToggle={can(role, 'limits:write') ? handleToggle : () => {}}
+              onDelete={can(role, 'limits:write') ? id => { setDeleteId(id); setDeleteInput('') } : () => {}}
+              onEdit={can(role, 'limits:write') ? l => { setEditTarget(l); setShowModal(true) } : () => {}}
               onAddAlert={l => setAlertForLimit(l)}
+              readOnly={!can(role, 'limits:write')}
             />
           ))}
         </div>

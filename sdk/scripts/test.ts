@@ -46,7 +46,7 @@ import { TokenFinClient } from '../src/index.js'
 
 /* ── Config from env ── */
 const API_KEY  = process.env.TOKENFIN_API_KEY  ?? ''
-const BASE_URL = process.env.TOKENFIN_BASE_URL ?? 'http://localhost:3000'
+const BASE_URL = process.env.TOKENFIN_BASE_URL ?? 'https://tokenfin.curiousdevs.com'
 
 /* ── Terminal helpers ── */
 const C = {
@@ -157,7 +157,7 @@ async function main() {
     err('TOKENFIN_API_KEY not set.')
     warn('Create sdk/.env with:')
     console.log(`     TOKENFIN_API_KEY=tf_live_your_key_here`)
-    console.log(`     TOKENFIN_BASE_URL=http://localhost:3000`)
+    console.log(`     TOKENFIN_BASE_URL=https://tokenfin.curiousdevs.com`)
     process.exit(1)
   }
   info(`API key: ${API_KEY.slice(0, 10)}…${API_KEY.slice(-4)}`)

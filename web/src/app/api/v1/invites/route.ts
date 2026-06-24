@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
   if (guard instanceof NextResponse) return guard
 
   const admin  = createAdminClient()
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3001'
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://tokenfin.curiousdevs.com'
 
   const results: { email: string; status: 'sent' | 'failed'; error?: string }[] = []
 

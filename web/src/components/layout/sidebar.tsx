@@ -42,6 +42,7 @@ const NAV_GROUPS: NavGroup[] = [
           { label: 'By Model',     href: '/dashboard/analytics/models'   },
           { label: 'By Project',   href: '/dashboard/analytics/projects' },
           { label: 'Cost Reports', href: '/dashboard/analytics/costs'    },
+          { label: 'Prompts',      href: '/dashboard/analytics/prompts'  },
         ],
       },
     ],

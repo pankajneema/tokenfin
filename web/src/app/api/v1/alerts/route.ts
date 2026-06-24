@@ -1,7 +1,7 @@
 import { NextResponse }                                    from 'next/server'
 import type { NextRequest }                                from 'next/server'
 import { createAdminClient }                               from '@/lib/supabase/server'
-import { requireOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
+import { requireOrgMember, requirePermission, dbError } from '@/lib/api/auth'
 import { z }                                               from 'zod'
 
 function db() { return createAdminClient() }
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireOrgMember(parsed.data.org_id)
+  const guard = await requirePermission(parsed.data.org_id, 'alerts:write')
   if (guard instanceof NextResponse) return guard
 
   const { data, error } = await db().from('alert_rules').insert(parsed.data).select().single()
@@ -69,7 +69,9 @@ export async function PATCH(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireResourceOwner('alert_rules', parsed.data.id)
+  const { data: ruleRow } = await db().from('alert_rules').select('org_id').eq('id', parsed.data.id).maybeSingle()
+  if (!ruleRow) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const guard = await requirePermission(ruleRow.org_id, 'alerts:write')
   if (guard instanceof NextResponse) return guard
 
   const { id, ...fields } = parsed.data
@@ -81,7 +83,10 @@ export async function PATCH(req: NextRequest) {
 /* DELETE /api/v1/alerts?id=xxx */
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id')
-  const guard = await requireResourceOwner('alert_rules', id)
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+  const { data: ruleRow } = await db().from('alert_rules').select('org_id').eq('id', id).maybeSingle()
+  if (!ruleRow) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const guard = await requirePermission(ruleRow.org_id, 'alerts:write')
   if (guard instanceof NextResponse) return guard
 
   const { error } = await db().from('alert_rules').delete().eq('id', id!)

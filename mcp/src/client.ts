@@ -5,7 +5,7 @@
 
 export interface TokenFinClientConfig {
   apiKey:  string   // API key — used as Bearer token for /ingest; Admin routes use it via cookie
-  baseUrl: string   // e.g. http://localhost:3000 or https://app.yourdomain.com
+  baseUrl: string   // e.g. https://tokenfin.curiousdevs.com or https://app.yourdomain.com
 }
 
 export class TokenFinApiClient {

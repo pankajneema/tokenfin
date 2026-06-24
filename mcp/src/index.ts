@@ -12,14 +12,14 @@
  *       "args": ["-y", "@tokenfin/mcp"],
  *       "env": {
  *         "TOKENFIN_API_KEY": "tf_live_...",
- *         "TOKENFIN_BASE_URL": "http://localhost:3000"
+ *         "TOKENFIN_BASE_URL": "https://tokenfin.curiousdevs.com"
  *       }
  *     }
  *   }
  * }
  *
  * Or run locally:
- *   TOKENFIN_API_KEY=tf_live_... TOKENFIN_BASE_URL=http://localhost:3000 node dist/index.js
+ *   TOKENFIN_API_KEY=tf_live_... TOKENFIN_BASE_URL=https://tokenfin.curiousdevs.com node dist/index.js
  */
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -28,7 +28,7 @@ import { createTokenFinServer } from './server.js'
 
 /* ── Config from environment ── */
 const API_KEY  = process.env.TOKENFIN_API_KEY  ?? ''
-const BASE_URL = process.env.TOKENFIN_BASE_URL ?? 'http://localhost:3000'
+const BASE_URL = process.env.TOKENFIN_BASE_URL ?? 'https://tokenfin.curiousdevs.com'
 
 if (!API_KEY) {
   console.error('[tokenfin-mcp] ERROR: TOKENFIN_API_KEY environment variable is required.')

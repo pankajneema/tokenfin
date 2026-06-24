@@ -1,5 +1,8 @@
 import { createClient }      from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
+import { getOrgRole }         from '@/lib/api/auth'
+import { can }                from '@/lib/rbac'
+import { redirect }           from 'next/navigation'
 import { BillingClient }     from './_client'
 
 export const metadata = { title: 'Billing — TokenFin' }
@@ -14,6 +17,10 @@ export default async function BillingPage() {
   const { data: members } = await admin
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = members?.[0]?.org_id ?? ''
+
+  // Billing is owner-only
+  const role = await getOrgRole(user.id, orgId)
+  if (!can(role, 'billing:view')) redirect('/dashboard')
 
   let plan      = 'free'
   let orgName   = ''

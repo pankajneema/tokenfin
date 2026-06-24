@@ -7,6 +7,7 @@ import {
   Settings, Search, RefreshCw, Link2, Pencil, Copy, PlayCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { can, type Role } from '@/lib/rbac'
 import type { AlertRuleRow, AlertHistoryRow, TriggerType } from './_types'
 
 /* ── Local types ── */
@@ -80,13 +81,14 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 
 /* ── RuleCard ── */
 function RuleCard({
-  rule, onToggle, onDelete, onEdit, onDuplicate,
+  rule, onToggle, onDelete, onEdit, onDuplicate, readOnly = false,
 }: {
   rule:        AlertRuleRow
   onToggle:    (id: string) => void
   onDelete:    (id: string) => void
   onEdit:      (r: AlertRuleRow) => void
   onDuplicate: (r: AlertRuleRow) => void
+  readOnly?:   boolean
 }) {
   const [menu, setMenu] = useState(false)
   const tm  = TRIGGER_META[rule.triggerType]
@@ -104,8 +106,8 @@ function RuleCard({
           <p className="text-[11.5px] text-[var(--fg-secondary)] mt-1">{rule.condition || '—'}</p>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
-          <Toggle on={rule.isActive} onChange={() => onToggle(rule.id)} />
-          <div className="relative">
+          {!readOnly && <Toggle on={rule.isActive} onChange={() => onToggle(rule.id)} />}
+          {!readOnly && <div className="relative">
             <button onClick={() => setMenu(v => !v)}
               className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--fg-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] transition-colors">
               <MoreHorizontal size={15} />
@@ -130,7 +132,7 @@ function RuleCard({
                 </div>
               </>
             )}
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -510,9 +512,10 @@ interface Props {
   initialHistory: AlertHistoryRow[]
   orgId:          string
   userEmail:      string
+  role:           Role
 }
 
-export function AlertsClient({ initialRules, initialHistory, orgId, userEmail }: Props) {
+export function AlertsClient({ initialRules, initialHistory, orgId, userEmail, role }: Props) {
   const [tab,        setTab]        = useState<PageTab>('rules')
   const [rules,      setRules]      = useState<AlertRuleRow[]>(initialRules)
   const [history]                   = useState<AlertHistoryRow[]>(initialHistory)
@@ -633,9 +636,11 @@ export function AlertsClient({ initialRules, initialHistory, orgId, userEmail }:
           <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Alerts</h1>
           <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Rule-based notifications for spend events, anomalies and limit breaches</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn-primary flex-shrink-0">
-          <Plus size={14} /> New rule
-        </button>
+        {can(role, 'alerts:write') && (
+          <button onClick={() => setShowModal(true)} className="btn-primary flex-shrink-0">
+            <Plus size={14} /> New rule
+          </button>
+        )}
       </div>
 
       {/* Stats */}
@@ -711,16 +716,19 @@ export function AlertsClient({ initialRules, initialHistory, orgId, userEmail }:
               <Bell size={36} className="text-[var(--fg-tertiary)] mx-auto mb-4" />
               <p className="text-[14px] font-semibold text-[var(--fg)]">No rules match</p>
               <p className="text-[12.5px] text-[var(--fg-secondary)] mt-1">Try changing your filter or create a new rule</p>
-              <button onClick={() => setShowModal(true)} className="btn-primary mt-5"><Plus size={13} /> New rule</button>
+              {can(role, 'alerts:write') && (
+                <button onClick={() => setShowModal(true)} className="btn-primary mt-5"><Plus size={13} /> New rule</button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {displayRules.map(rule => (
                 <RuleCard key={rule.id} rule={rule}
-                  onToggle={handleToggle}
-                  onDelete={handleDelete}
-                  onEdit={r => { setEditTarget(r); setShowModal(true) }}
+                  onToggle={can(role, 'alerts:write') ? handleToggle : () => {}}
+                  onDelete={can(role, 'alerts:write') ? handleDelete : () => {}}
+                  onEdit={can(role, 'alerts:write') ? r => { setEditTarget(r); setShowModal(true) } : () => {}}
                   onDuplicate={handleDuplicate}
+                  readOnly={!can(role, 'alerts:write')}
                 />
               ))}
             </div>
