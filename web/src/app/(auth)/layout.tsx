@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { Zap } from 'lucide-react'
 
 export const metadata: Metadata = {
   title: 'TokenFin · LLM Cost Intelligence',
@@ -16,11 +15,17 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
 
           {/* Logo — centered above form */}
           <div className="flex flex-col items-center mb-10">
-            <Link href="/" className="flex flex-col items-center gap-1.5 group">
-              <div className="w-[66px] h-[66px] bg-coral rounded-2xl flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow">
-                <Zap size={32} className="text-white" strokeWidth={2.5} />
-              </div>
-              <span className="text-[28px] font-bold text-[var(--fg)] tracking-tight">TokenFin</span>
+            <Link href="/" className="flex flex-col items-center gap-3 group">
+              <img
+                src="/favicon.svg"
+                alt="TokenFin"
+                className="w-[66px] h-[66px] group-hover:opacity-90 transition-opacity"
+              />
+              <img
+                src="/logo.svg"
+                alt="TokenFin"
+                className="h-7 w-auto group-hover:opacity-90 transition-opacity"
+              />
             </Link>
           </div>
 
