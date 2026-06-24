@@ -22,10 +22,11 @@ export interface PromptPattern {
   avg_cost_usd:       number
   avg_input_tokens:   number
   avg_output_tokens:  number
-  io_ratio:           number | null   // input/output ratio — high = verbose prompt
+  io_ratio:           number | null
   avg_latency_ms:     number | null
   p95_latency_ms:     number | null
   prompt_chars:       number
+  prompt_preview:     string | null   // first 120 chars of last user message
   top_model:          string
 }
 
@@ -53,14 +54,15 @@ export async function GET(req: NextRequest) {
 
   // ── Aggregate by prompt_hash ──────────────────────────────────────────────
   type Agg = {
-    hash:        string
-    count:       number
-    totalCost:   number
-    totalInput:  number
-    totalOutput: number
-    latencies:   number[]
-    models:      Record<string, number>
-    promptChars: number
+    hash:          string
+    count:         number
+    totalCost:     number
+    totalInput:    number
+    totalOutput:   number
+    latencies:     number[]
+    models:        Record<string, number>
+    promptChars:   number
+    promptPreview: string | null
   }
 
   const byHash = new Map<string, Agg>()
@@ -74,19 +76,25 @@ export async function GET(req: NextRequest) {
 
     const existing = byHash.get(hash) ?? {
       hash,
-      count:       0,
-      totalCost:   0,
-      totalInput:  0,
-      totalOutput: 0,
-      latencies:   [],
-      models:      {},
-      promptChars: Number(meta?.prompt_chars ?? 0),
+      count:         0,
+      totalCost:     0,
+      totalInput:    0,
+      totalOutput:   0,
+      latencies:     [],
+      models:        {},
+      promptChars:   Number(meta?.prompt_chars ?? 0),
+      promptPreview: (meta?.prompt_preview as string | undefined) ?? null,
     }
 
     existing.count++
     existing.totalCost   += Number(row.cost_usd ?? 0)
     existing.totalInput  += Number(meta?.input_tokens  ?? 0)
     existing.totalOutput += Number(meta?.output_tokens ?? 0)
+
+    // Keep the first non-null preview we encounter for this hash
+    if (!existing.promptPreview && meta?.prompt_preview) {
+      existing.promptPreview = meta.prompt_preview as string
+    }
 
     const lat = Number(meta?.latency_ms ?? 0)
     if (lat > 0) existing.latencies.push(lat)
@@ -129,6 +137,7 @@ export async function GET(req: NextRequest) {
         avg_latency_ms:    avgLatency,
         p95_latency_ms:    p95Latency,
         prompt_chars:      p.promptChars,
+        prompt_preview:    p.promptPreview ?? null,
         top_model:         topModel,
       }
     })

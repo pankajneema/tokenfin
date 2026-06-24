@@ -34,7 +34,8 @@ export default async function PromptsAnalyticsPage() {
   type Agg = {
     hash: string; count: number; totalCost: number
     totalInput: number; totalOutput: number
-    latencies: number[]; models: Record<string, number>; promptChars: number
+    latencies: number[]; models: Record<string, number>
+    promptChars: number; promptPreview: string | null
   }
 
   const byHash = new Map<string, Agg>()
@@ -49,11 +50,15 @@ export default async function PromptsAnalyticsPage() {
     const ex = byHash.get(hash) ?? {
       hash, count: 0, totalCost: 0, totalInput: 0, totalOutput: 0,
       latencies: [], models: {}, promptChars: Number(meta?.prompt_chars ?? 0),
+      promptPreview: (meta?.prompt_preview as string | undefined) ?? null,
     }
     ex.count++
     ex.totalCost   += Number(row.cost_usd ?? 0)
     ex.totalInput  += Number(meta?.input_tokens  ?? 0)
     ex.totalOutput += Number(meta?.output_tokens ?? 0)
+    if (!ex.promptPreview && meta?.prompt_preview) {
+      ex.promptPreview = meta.prompt_preview as string
+    }
     const lat = Number(meta?.latency_ms ?? 0)
     if (lat > 0) ex.latencies.push(lat)
     const m = row.model ?? 'unknown'
@@ -80,6 +85,7 @@ export default async function PromptsAnalyticsPage() {
         avg_latency_ms:    avg,
         p95_latency_ms:    p95,
         prompt_chars:      p.promptChars,
+        prompt_preview:    p.promptPreview ?? null,
         top_model:         topModel,
       }
     })

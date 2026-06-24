@@ -188,6 +188,21 @@ export function ModelsClient({ models }: Props) {
   // Active tiers in data
   const activeTiers = Array.from(new Set(models.map(m => m.tier)))
 
+  if (models.length === 0) {
+    return (
+      <div className="space-y-5">
+        <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Model</h1>
+        <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-12 text-center">
+          <Cpu size={32} className="mx-auto mb-3 text-[var(--fg-tertiary)]" />
+          <p className="text-[14px] font-semibold text-[var(--fg)]">No model usage yet</p>
+          <p className="text-[12px] text-[var(--fg-tertiary)] mt-1">
+            Send events via <code className="font-mono bg-[var(--bg-secondary)] px-1 rounded">POST /api/v1/ingest</code> to see per-model breakdown here.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
 

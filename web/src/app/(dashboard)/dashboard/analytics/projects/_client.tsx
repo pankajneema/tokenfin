@@ -157,6 +157,21 @@ export function ProjectsClient({ projects }: Props) {
 
   const teams = ['all', ...Array.from(new Set(projects.map(p => p.team).filter(t => t !== '—')))]
 
+  if (projects.length === 0) {
+    return (
+      <div className="space-y-5">
+        <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Project</h1>
+        <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-12 text-center">
+          <Layers size={32} className="mx-auto mb-3 text-[var(--fg-tertiary)]" />
+          <p className="text-[14px] font-semibold text-[var(--fg)]">No project usage yet</p>
+          <p className="text-[12px] text-[var(--fg-tertiary)] mt-1">
+            Send events with a <code className="font-mono bg-[var(--bg-secondary)] px-1 rounded">project_id</code> to see project-level cost attribution here.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
 

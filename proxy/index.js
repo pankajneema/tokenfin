@@ -40,9 +40,17 @@ function extractPromptMeta(parsed) {
       .map(m => (typeof m.content === 'string' ? m.content : ''))
       .join(' ')
 
+    // Use the last user message as the preview (most meaningful for analytics)
+    const lastUser = [...messages].reverse().find(m => m.role === 'user')
+    const previewSrc = (typeof lastUser?.content === 'string' ? lastUser.content : text).trim()
+    const prompt_preview = previewSrc.length > 120
+      ? previewSrc.slice(0, 120).trimEnd() + '…'
+      : previewSrc
+
     return {
       prompt_chars:       text.length,
       prompt_hash:        djb2Hash(text),
+      prompt_preview,
       messages_count:     messages.length,
       has_system_prompt:  messages.some(m => m.role === 'system'),
     }

@@ -298,17 +298,23 @@ export function PromptsClient({
                           ? 'bg-[var(--bg-secondary)]'
                           : 'hover:bg-[var(--bg-secondary)]'
                       )}>
-                      {/* Pattern ID */}
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-[11px] text-[var(--fg-tertiary)] w-5 text-right tabular-nums">{i + 1}</span>
-                          <code className="text-[11.5px] font-mono bg-[var(--bg-tertiary)] px-2 py-0.5 rounded-md text-[var(--fg-secondary)]">
-                            #{p.hash}
-                          </code>
+                      {/* Pattern */}
+                      <td className="px-5 py-3.5 max-w-xs">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="text-[11px] text-[var(--fg-tertiary)] w-5 text-right tabular-nums flex-shrink-0">{i + 1}</span>
                           <span
                             className="w-2 h-2 rounded-full flex-shrink-0"
                             style={{ backgroundColor: modelColor(p.top_model) }}
                           />
+                          {p.prompt_preview ? (
+                            <span className="text-[13px] text-[var(--fg)] truncate" title={p.prompt_preview}>
+                              {p.prompt_preview}
+                            </span>
+                          ) : (
+                            <code className="text-[11.5px] font-mono bg-[var(--bg-tertiary)] px-2 py-0.5 rounded-md text-[var(--fg-secondary)] flex-shrink-0">
+                              #{p.hash}
+                            </code>
+                          )}
                         </div>
                       </td>
 
@@ -399,6 +405,14 @@ export function PromptsClient({
                       <tr key={`${p.hash}-detail`} className="bg-[var(--bg-secondary)]">
                         <td colSpan={7} className="px-8 pb-5 pt-2">
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                            {p.prompt_preview && (
+                              <div className="col-span-2 sm:col-span-4 mb-1">
+                                <p className="text-[11px] text-[var(--fg-tertiary)] font-medium uppercase tracking-wide mb-1">Prompt preview</p>
+                                <p className="text-[12.5px] text-[var(--fg)] italic leading-relaxed">
+                                  &ldquo;{p.prompt_preview}&rdquo;
+                                </p>
+                              </div>
+                            )}
                             <div>
                               <p className="text-[11px] text-[var(--fg-tertiary)] font-medium uppercase tracking-wide mb-1">Top model</p>
                               <div className="flex items-center gap-1.5">
@@ -449,7 +463,7 @@ export function PromptsClient({
         <div className="px-5 py-3 border-t border-[var(--border)] bg-[var(--bg-secondary)]">
           <p className="text-[11.5px] text-[var(--fg-tertiary)]">
             Showing {sorted.length} pattern{sorted.length !== 1 ? 's' : ''} ·
-            Privacy-safe: only prompt hash + char count stored, never raw text ·
+            Preview shows first 120 chars of last user message ·
             Click a row to expand details
           </p>
         </div>
