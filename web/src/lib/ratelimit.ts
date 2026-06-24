@@ -17,6 +17,7 @@ import { Redis }      from '@upstash/redis'
 export const PLAN_LIMITS: Record<string, number> = {
   free:       60,
   pro:        300,
+  team:       600,
   enterprise: 2_000,
 }
 
