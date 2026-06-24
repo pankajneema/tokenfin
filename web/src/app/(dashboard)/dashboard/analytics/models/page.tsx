@@ -1,5 +1,6 @@
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
+import { daysAgoIST, tsNDaysAgo } from '@/lib/dates'
 import { ModelsClient }       from './_client'
 import type { ModelRow }      from './_client'
 
@@ -39,10 +40,10 @@ export default async function ModelsAnalyticsPage() {
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const since30date = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
-  const since60date = new Date(Date.now() - 60 * 86400_000).toISOString().slice(0, 10)
-  const since30ts   = new Date(Date.now() - 30 * 86400_000).toISOString()
-  const since60ts   = new Date(Date.now() - 60 * 86400_000).toISOString()
+  const since30date = daysAgoIST(30)   // IST date for usage_agg.bucket
+  const since60date = daysAgoIST(60)
+  const since30ts   = tsNDaysAgo(30)   // UTC ts for usage_events.created_at
+  const since60ts   = tsNDaysAgo(60)
 
   const [{ data: curr }, { data: prev }, { data: evts }, { data: evtsPrev }] = await Promise.all([
     admin.from('usage_agg')

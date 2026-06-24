@@ -1,5 +1,6 @@
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
+import { daysAgoIST, tsNDaysAgo } from '@/lib/dates'
 import { ProjectsClient }     from './_client'
 import type { ProjectRow }    from './_client'
 
@@ -19,10 +20,10 @@ export default async function ProjectsAnalyticsPage() {
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const since30date = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
-  const since60date = new Date(Date.now() - 60 * 86400_000).toISOString().slice(0, 10)
-  const since30ts   = new Date(Date.now() - 30 * 86400_000).toISOString()
-  const since60ts   = new Date(Date.now() - 60 * 86400_000).toISOString()
+  const since30date = daysAgoIST(30)
+  const since60date = daysAgoIST(60)
+  const since30ts   = tsNDaysAgo(30)
+  const since60ts   = tsNDaysAgo(60)
 
   const [
     { data: curr     },

@@ -1,4 +1,5 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { toISTDate, daysAgoIST, tsNDaysAgo } from '@/lib/dates'
 import { StatsCards }     from '@/components/dashboard/stats-cards'
 import { CostChart }      from '@/components/dashboard/cost-chart'
 import { ModelBreakdown } from '@/components/dashboard/model-breakdown'
@@ -16,11 +17,11 @@ type SparkRow = { cost_usd?: number | null; total_tokens?: number | null; create
 function buildSparklines(events: SparkRow[]) {
   const days: Record<string, { cost: number; tokens: number; reqs: number }> = {}
   for (let i = 6; i >= 0; i--) {
-    const key = new Date(Date.now() - i * 86400_000).toISOString().slice(0, 10)
+    const key = daysAgoIST(i)
     days[key] = { cost: 0, tokens: 0, reqs: 0 }
   }
   for (const e of events) {
-    const key = e.created_at.slice(0, 10)
+    const key = toISTDate(e.created_at)
     if (days[key]) {
       days[key].cost   += e.cost_usd     ?? 0
       days[key].tokens += e.total_tokens ?? 0
@@ -41,11 +42,11 @@ export default async function DashboardPage() {
   const supabase = createClient()
   const admin    = createAdminClient()
   const now      = Date.now()
-  const since30  = new Date(now - 30 * 86400_000).toISOString()
-  const since60  = new Date(now - 60 * 86400_000).toISOString()
-  const since5d  = new Date(now -  5 * 86400_000).toISOString().slice(0, 10)
-  const since10d = new Date(now - 10 * 86400_000).toISOString().slice(0, 10)
-  const since7   = new Date(now -  7 * 86400_000).toISOString()
+  const since30  = tsNDaysAgo(30)   // UTC timestamp for usage_events.created_at queries
+  const since60  = tsNDaysAgo(60)
+  const since7   = tsNDaysAgo(7)
+  const since5d  = daysAgoIST(5)   // IST date for usage_agg.bucket queries
+  const since10d = daysAgoIST(10)
 
   /* ── Identify org ── */
   const { data: { user } } = await supabase.auth.getUser()
@@ -148,11 +149,10 @@ export default async function DashboardPage() {
 
   const dayMap = new Map<string, { cost: number; tokens: number; reqs: number }>()
   for (let i = 4; i >= 0; i--) {
-    const key = new Date(now - i * 86400_000).toISOString().slice(0, 10)
-    dayMap.set(key, { cost: 0, tokens: 0, reqs: 0 })
+    dayMap.set(daysAgoIST(i), { cost: 0, tokens: 0, reqs: 0 })
   }
   for (const e of events30 ?? []) {
-    const day = e.created_at.slice(0, 10)
+    const day = toISTDate(e.created_at)
     if (!dayMap.has(day)) continue
     const entry = dayMap.get(day)!
     entry.cost   += Number(e.cost_usd     ?? 0)

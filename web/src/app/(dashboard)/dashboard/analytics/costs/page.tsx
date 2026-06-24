@@ -1,5 +1,6 @@
 import { createClient }      from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
+import { toISTDate, daysAgoIST, tsNDaysAgo } from '@/lib/dates'
 import { CostsClient }       from './_client'
 import type { DailyRow }     from './_client'
 
@@ -18,10 +19,10 @@ export default async function CostsPage() {
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const since30date = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)  // for bucket (DATE)
-  const since60date = new Date(Date.now() - 60 * 86400_000).toISOString().slice(0, 10)
-  const since30ts   = new Date(Date.now() - 30 * 86400_000).toISOString()               // for created_at (TIMESTAMP)
-  const since60ts   = new Date(Date.now() - 60 * 86400_000).toISOString()
+  const since30date = daysAgoIST(30)   // IST date for usage_agg.bucket
+  const since60date = daysAgoIST(60)
+  const since30ts   = tsNDaysAgo(30)  // UTC ts for usage_events.created_at
+  const since60ts   = tsNDaysAgo(60)
 
   const [
     { data: curr     },
@@ -63,7 +64,7 @@ export default async function CostsPage() {
   if (aggHasCost) {
     // Primary path — read from usage_agg
     for (const r of curr ?? []) {
-      const day = (r.bucket as string).slice(0, 10)
+      const day = toISTDate(r.bucket as string)
       const e   = dayMap.get(day) ?? { cost:0, tokens:0, calls:0, modelMap:new Map(), projMap:new Map() }
       e.cost   += Number(r.cost_usd      ?? 0)
       e.tokens += Number(r.total_tokens  ?? 0)
@@ -75,7 +76,7 @@ export default async function CostsPage() {
   } else {
     // Fallback — read from usage_events
     for (const r of evts ?? []) {
-      const day = r.created_at.slice(0, 10)
+      const day = toISTDate(r.created_at)
       const e   = dayMap.get(day) ?? { cost:0, tokens:0, calls:0, modelMap:new Map(), projMap:new Map() }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
@@ -94,7 +95,7 @@ export default async function CostsPage() {
       ? String((r as Record<string,unknown>).bucket ?? '')
       : String((r as Record<string,unknown>).created_at ?? '')
     if (!rawDay) continue
-    const shifted = new Date(new Date(rawDay).getTime() + 30 * 86400_000).toISOString().slice(0, 10)
+    const shifted = toISTDate(new Date(rawDay).getTime() + 30 * 86400_000)
     prevMap.set(shifted, (prevMap.get(shifted) ?? 0) + Number(r.cost_usd ?? 0))
   }
 

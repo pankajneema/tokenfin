@@ -1,5 +1,6 @@
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
+import { toISTDate, daysAgoIST, tsNDaysAgo } from '@/lib/dates'
 import { AnalyticsClient }    from './_client'
 import type { AnalyticsData, DayData, ModelSlice, ProjectSlice, PlatformSlice, SourceSlice } from './_types'
 
@@ -60,8 +61,10 @@ export default async function AnalyticsPage() {
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const since30 = new Date(Date.now() - 30 * 86400_000).toISOString()
-  const since60 = new Date(Date.now() - 60 * 86400_000).toISOString()
+  const since30     = tsNDaysAgo(30)    // UTC ts for usage_events.created_at
+  const since60     = tsNDaysAgo(60)
+  const since30date = daysAgoIST(30)   // IST date for usage_agg.bucket
+  const since60date = daysAgoIST(60)
 
   /**
    * Strategy: split the two concerns cleanly.
@@ -86,10 +89,10 @@ export default async function AnalyticsPage() {
   ] = await Promise.all([
     admin.from('usage_agg')
       .select('bucket,model,project_id,total_tokens,cost_usd')
-      .eq('org_id', orgId).gte('bucket', since30),
+      .eq('org_id', orgId).gte('bucket', since30date),
     admin.from('usage_agg')
       .select('bucket,model,project_id,total_tokens,cost_usd')
-      .eq('org_id', orgId).gte('bucket', since60).lt('bucket', since30),
+      .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
     admin.from('usage_events')
       .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags')
       .eq('org_id', orgId).gte('created_at', since30),
@@ -118,30 +121,30 @@ export default async function AnalyticsPage() {
 
   if (aggHasCost) {
     for (const r of agg ?? []) {
-      const key = r.bucket.slice(0, 10)
+      const key = toISTDate(r.bucket)   // bucket is IST date string; toISTDate normalises it
       const e   = costMap.get(key) ?? { cost: 0, tokens: 0 }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
       costMap.set(key, e)
     }
     for (const r of aggPrev ?? []) {
-      const shifted = new Date(new Date(r.bucket).getTime() + 30 * 86400_000).toISOString().slice(0, 10)
+      const shifted = toISTDate(new Date(r.bucket).getTime() + 30 * 86400_000)
       const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
       costMapPrev.set(shifted, e)
     }
   } else {
-    // fallback — aggregate cost+tokens from raw events
+    // fallback — aggregate cost+tokens from raw events (bucket by IST date)
     for (const r of evts ?? []) {
-      const key = r.created_at.slice(0, 10)
+      const key = toISTDate(r.created_at)
       const e   = costMap.get(key) ?? { cost: 0, tokens: 0 }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
       costMap.set(key, e)
     }
     for (const r of evtsPrev ?? []) {
-      const shifted = new Date(new Date(r.created_at).getTime() + 30 * 86400_000).toISOString().slice(0, 10)
+      const shifted = toISTDate(new Date(r.created_at).getTime() + 30 * 86400_000)
       const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
@@ -153,11 +156,11 @@ export default async function AnalyticsPage() {
   const callMap     = new Map<string, number>()
   const callMapPrev = new Map<string, number>()
   for (const r of evts ?? []) {
-    const key = r.created_at.slice(0, 10)
+    const key = toISTDate(r.created_at)
     callMap.set(key, (callMap.get(key) ?? 0) + 1)
   }
   for (const r of evtsPrev ?? []) {
-    const shifted = new Date(new Date(r.created_at).getTime() + 30 * 86400_000).toISOString().slice(0, 10)
+    const shifted = toISTDate(new Date(r.created_at).getTime() + 30 * 86400_000)
     callMapPrev.set(shifted, (callMapPrev.get(shifted) ?? 0) + 1)
   }
 
