@@ -107,9 +107,9 @@ export function AcceptInvitationClient({ email, orgName, role, expired }: Props)
 
       {/* Header */}
       <div className="text-center space-y-1">
-        <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">
-          You're invited
-        </h1>
+          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">
+            You&apos;re invited
+          </h1>
         <p className="text-[13.5px] text-[var(--fg-secondary)]">
           Join <span className="font-semibold text-[var(--fg)]">{orgName}</span> on TokenFin
         </p>
