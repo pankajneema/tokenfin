@@ -8,9 +8,16 @@ export const metadata = { title: 'Cost Reports — TokenFin Analytics' }
 
 const DAYS_OF_WEEK = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 
-export default async function CostsPage() {
+export default async function CostsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ days?: string }>
+}) {
   const supabase = createClient()
   const admin    = createAdminClient()
+
+  const { days: daysParam } = await searchParams
+  const days = Math.min(90, Math.max(7, parseInt(daysParam ?? '30') || 30))
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
@@ -19,10 +26,10 @@ export default async function CostsPage() {
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const since30date = daysAgoIST(30)   // IST date for usage_agg.bucket
-  const since60date = daysAgoIST(60)
-  const since30ts   = tsNDaysAgo(30)  // UTC ts for usage_events.created_at
-  const since60ts   = tsNDaysAgo(60)
+  const since30date = daysAgoIST(days)
+  const since60date = daysAgoIST(days * 2)
+  const since30ts   = tsNDaysAgo(days)
+  const since60ts   = tsNDaysAgo(days * 2)
 
   const [
     { data: curr     },
@@ -95,7 +102,7 @@ export default async function CostsPage() {
       ? String((r as Record<string,unknown>).bucket ?? '')
       : String((r as Record<string,unknown>).created_at ?? '')
     if (!rawDay) continue
-    const shifted = toISTDate(new Date(rawDay).getTime() + 30 * 86400_000)
+    const shifted = toISTDate(new Date(rawDay).getTime() + days * 86400_000)
     prevMap.set(shifted, (prevMap.get(shifted) ?? 0) + Number(r.cost_usd ?? 0))
   }
 
@@ -124,5 +131,5 @@ export default async function CostsPage() {
       }
     })
 
-  return <CostsClient rows={rows} />
+  return <CostsClient rows={rows} days={days} />
 }

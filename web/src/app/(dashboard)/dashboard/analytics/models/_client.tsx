@@ -1,5 +1,6 @@
 'use client'
 import { useState, useMemo } from 'react'
+import { useRouter, usePathname } from 'next/navigation'
 import { ArrowUpRight, ArrowDownRight, Download, Check, Filter, ChevronUp, ChevronDown, Cpu } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -27,7 +28,7 @@ export interface ModelRow {
   deprecated?:  boolean
 }
 
-interface Props { models: ModelRow[] }
+interface Props { models: ModelRow[]; days: number }
 
 /* ── Provider color palette for dynamic providers ── */
 const PROVIDER_COLORS: Record<string, string> = {
@@ -83,7 +84,7 @@ function DeltaBadge({ curr, prev, size = 10 }: { curr: number; prev: number; siz
    CSV EXPORT
 ═══════════════════════════════════════════════════════════ */
 function downloadModelsCSV(models: ModelRow[]) {
-  const headers = ['Model','Provider','Tier','Cost 30d ($)','vs Prior (%)','Input Tokens (M)','Output Tokens (M)','API Calls','$/1M tokens']
+  const headers = ['Model','Provider','Tier','Cost ($)','vs Prior (%)','Input Tokens (M)','Output Tokens (M)','LLM Calls','$/1M tokens']
   const lines = models.map(m => {
     const delta = m.costPrev > 0 ? ((m.cost30d - m.costPrev) / m.costPrev * 100).toFixed(1) + '%' : 'N/A'
     return [m.name, m.provider, m.tier, m.cost30d.toFixed(4), delta, m.inputTok.toFixed(4), m.outputTok.toFixed(4), m.calls30d, m.costPer1M.toFixed(3)]
@@ -130,12 +131,24 @@ function EffBadge({ costPer1M }: { costPer1M: number }) {
 /* ═══════════════════════════════════════════════════════════
    PAGE
 ═══════════════════════════════════════════════════════════ */
-export function ModelsClient({ models }: Props) {
+const DAY_OPTIONS = [
+  { label: '7D',  value: 7  },
+  { label: '30D', value: 30 },
+  { label: '90D', value: 90 },
+]
+
+export function ModelsClient({ models, days }: Props) {
+  const router   = useRouter()
+  const pathname = usePathname()
   const [provFil,    setProvFil]    = useState<string>('all')
   const [tierFil,    setTierFil]    = useState<string>('all')
   const [sortKey,    setSortKey]    = useState<SortKey>('cost')
   const [sortDir,    setSortDir]    = useState<SortDir>('desc')
   const [exportDone, setExportDone] = useState(false)
+
+  function setDays(d: number) {
+    router.push(`${pathname}?days=${d}`)
+  }
 
   function handleExport() {
     downloadModelsCSV(filtered)
@@ -144,8 +157,8 @@ export function ModelsClient({ models }: Props) {
   }
 
   const dateRange = (() => {
-    const now = new Date()
-    const start = new Date(now.getTime() - 30 * 86400_000)
+    const now   = new Date()
+    const start = new Date(now.getTime() - days * 86400_000)
     return `${start.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${now.toLocaleDateString('en-US',{month:'short',day:'numeric'})}`
   })()
 
@@ -207,24 +220,43 @@ export function ModelsClient({ models }: Props) {
     <div className="space-y-5">
 
       {/* ── Header ── */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Model</h1>
           <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Cost, token usage, efficiency and latency — {dateRange}</p>
         </div>
-        <button onClick={handleExport}
-          className={cn('flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12.5px] font-semibold border transition-all',
-            exportDone ? 'bg-teal/10 border-teal/30 text-teal' : 'btn-secondary')}>
-          {exportDone ? <><Check size={13} /> Exported!</> : <><Download size={13} /> Export CSV</>}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Date range pills */}
+          <div className="flex items-center gap-1 p-1 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl">
+            {DAY_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setDays(opt.value)}
+                className={cn(
+                  'px-3 py-1 rounded-lg text-[12px] font-semibold transition-all',
+                  days === opt.value
+                    ? 'bg-white dark:bg-[#1e1e3a] text-[var(--fg)] shadow-sm'
+                    : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-secondary)]'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <button onClick={handleExport}
+            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12.5px] font-semibold border transition-all',
+              exportDone ? 'bg-teal/10 border-teal/30 text-teal' : 'btn-secondary')}>
+            {exportDone ? <><Check size={13} /> Exported!</> : <><Download size={13} /> Export CSV</>}
+          </button>
+        </div>
       </div>
 
       {/* ── KPI strip ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label:'Total spend (30d)', value: fmtCost(totalCost),           color:'#D97757' },
+          { label:`Total spend (${days}d)`, value: fmtCost(totalCost),      color:'#D97757' },
           { label:'Total tokens',      value: fmtTokens(totalTokM),         color:'#20B2AA' },
-          { label:'Total calls',       value: totalCalls.toLocaleString(),   color:'#4285F4' },
+          { label:'LLM calls',          value: totalCalls.toLocaleString(),   color:'#4285F4' },
           { label:'Models in use',     value: `${models.length}`,           color:'#8B5CF6' },
         ].map(s => (
           <div key={s.label} className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-4 flex items-center gap-3">

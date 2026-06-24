@@ -1,5 +1,6 @@
 'use client'
 import { useState, useMemo } from 'react'
+import { useRouter, usePathname } from 'next/navigation'
 import { ArrowUpRight, ArrowDownRight, Download, Check, Users, Layers, DollarSign, BarChart3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -24,13 +25,13 @@ export interface ProjectRow {
   pctOfTotal: number
 }
 
-interface Props { projects: ProjectRow[] }
+interface Props { projects: ProjectRow[]; days: number }
 
 /* ═══════════════════════════════════════════════════════════
    CSV EXPORT
 ═══════════════════════════════════════════════════════════ */
 function downloadProjectsCSV(rows: ProjectRow[]) {
-  const headers = ['Project','Team','Cost 30d ($)','vs Prior (%)','Tokens (M)','API Calls','Budget ($)','Budget Used (%)','% of Total']
+  const headers = ['Project','Team','Cost ($)','vs Prior (%)','Tokens (M)','LLM Calls','Budget ($)','Budget Used (%)','% of Total']
   const lines = rows.map(p => {
     const delta   = p.costPrev > 0 ? ((p.cost30d - p.costPrev) / p.costPrev * 100).toFixed(1) + '%' : 'N/A'
     const budgPct = p.budget ? (p.cost30d / p.budget * 100).toFixed(1) + '%' : 'N/A'
@@ -130,10 +131,16 @@ function TreeCard({ p, max }: { p: ProjectRow; max: number }) {
 /* ═══════════════════════════════════════════════════════════
    PAGE
 ═══════════════════════════════════════════════════════════ */
-export function ProjectsClient({ projects }: Props) {
+const DAY_OPTIONS = [{ label:'7D', value:7 }, { label:'30D', value:30 }, { label:'90D', value:90 }]
+
+export function ProjectsClient({ projects, days }: Props) {
+  const router   = useRouter()
+  const pathname = usePathname()
   const [teamFil,    setTeamFil]    = useState<TeamFilter>('all')
   const [viewMode,   setViewMode]   = useState<'treemap'|'table'>('treemap')
   const [exportDone, setExportDone] = useState(false)
+
+  function setDays(d: number) { router.push(`${pathname}?days=${d}`) }
 
   function handleExport() {
     downloadProjectsCSV(filtered)
@@ -143,7 +150,7 @@ export function ProjectsClient({ projects }: Props) {
 
   const dateRange = (() => {
     const now = new Date()
-    const start = new Date(now.getTime() - 30 * 86400_000)
+    const start = new Date(now.getTime() - days * 86400_000)
     return `${start.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${now.toLocaleDateString('en-US',{month:'short',day:'numeric'})}`
   })()
 
@@ -176,16 +183,29 @@ export function ProjectsClient({ projects }: Props) {
     <div className="space-y-5">
 
       {/* ── Header ── */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Project</h1>
           <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Cost leaderboard, team attribution, and budget tracking — {dateRange}</p>
         </div>
-        <button onClick={handleExport}
-          className={cn('flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12.5px] font-semibold border transition-all',
-            exportDone ? 'bg-teal/10 border-teal/30 text-teal' : 'btn-secondary')}>
-          {exportDone ? <><Check size={13} /> Exported!</> : <><Download size={13} /> Export CSV</>}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1 p-1 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl">
+            {DAY_OPTIONS.map(opt => (
+              <button key={opt.value} onClick={() => setDays(opt.value)}
+                className={cn('px-3 py-1 rounded-lg text-[12px] font-semibold transition-all',
+                  days === opt.value
+                    ? 'bg-white dark:bg-[#1e1e3a] text-[var(--fg)] shadow-sm'
+                    : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-secondary)]')}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <button onClick={handleExport}
+            className={cn('flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12.5px] font-semibold border transition-all',
+              exportDone ? 'bg-teal/10 border-teal/30 text-teal' : 'btn-secondary')}>
+            {exportDone ? <><Check size={13} /> Exported!</> : <><Download size={13} /> Export CSV</>}
+          </button>
+        </div>
       </div>
 
       {/* ── KPIs ── */}
@@ -193,7 +213,7 @@ export function ProjectsClient({ projects }: Props) {
         {[
           { label:'Total spend',     value:`$${totalCost.toFixed(2)}`, icon:DollarSign, color:'#D97757' },
           { label:'Active projects', value:`${projects.filter(p=>p.name!=='Uncategorized').length}`,  icon:Layers,    color:'#4285F4' },
-          { label:'Total API calls', value:totalCalls.toLocaleString(), icon:BarChart3,  color:'#20B2AA' },
+          { label:'LLM calls',        value:totalCalls.toLocaleString(), icon:BarChart3,  color:'#20B2AA' },
           { label:'Teams tracked',   value:`${new Set(projects.map(p=>p.team).filter(t=>t!=='—')).size}`, icon:Users, color:'#8B5CF6' },
         ].map(s => {
           const Icon = s.icon

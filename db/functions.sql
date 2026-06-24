@@ -3,18 +3,18 @@
 
 -- ── Aggregate upsert (called fire-and-forget from ingest) ────
 CREATE OR REPLACE FUNCTION upsert_usage_agg(
-  p_bucket     TIMESTAMPTZ,
-  p_project_id UUID,
   p_org_id     UUID,
+  p_project_id UUID,
   p_model      TEXT,
+  p_bucket     DATE,          -- DATE not TIMESTAMPTZ (matches usage_agg.bucket column type)
   p_tokens     BIGINT,
   p_cost       NUMERIC,
-  p_requests   INT
+  p_requests   INT DEFAULT 1
 ) RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
-  INSERT INTO usage_agg (bucket, project_id, org_id, model, total_tokens, cost_usd, request_count)
-  VALUES (p_bucket, p_project_id, p_org_id, p_model, p_tokens, p_cost, p_requests)
-  ON CONFLICT (bucket, project_id, model) DO UPDATE SET
+  INSERT INTO usage_agg (org_id, project_id, model, bucket, total_tokens, cost_usd, request_count)
+  VALUES (p_org_id, p_project_id, p_model, p_bucket, p_tokens, p_cost, p_requests)
+  ON CONFLICT (org_id, project_id, model, bucket) DO UPDATE SET
     total_tokens  = usage_agg.total_tokens  + EXCLUDED.total_tokens,
     cost_usd      = usage_agg.cost_usd      + EXCLUDED.cost_usd,
     request_count = usage_agg.request_count + EXCLUDED.request_count;

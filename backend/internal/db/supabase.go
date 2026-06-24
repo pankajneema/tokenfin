@@ -139,7 +139,9 @@ func (c *Client) UpsertAgg(ctx context.Context, events []*models.UsageEvent) err
 	agg := make(map[key]*aggRow)
 
 	for _, e := range events {
-		bucket := e.CreatedAt.UTC().Format("2006-01-02")
+		// Use IST (UTC+5:30) for date bucketing so Indian users see correct dates
+		ist := time.FixedZone("IST", 5*60*60+30*60)
+		bucket := e.CreatedAt.In(ist).Format("2006-01-02")
 		k := key{e.OrgID, e.ProjectID, e.Model, bucket}
 
 		if _, ok := agg[k]; !ok {

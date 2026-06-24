@@ -29,9 +29,16 @@ function guessProvider(name: string) {
 
 const COLORS = ['#D97757','#E8896A','#10A37F','#F0AC8A','#0D8A6A','#4285F4','#669DF6','#6B7280']
 
-export default async function ModelsAnalyticsPage() {
+export default async function ModelsAnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ days?: string }>
+}) {
   const supabase = createClient()
   const admin    = createAdminClient()
+
+  const { days: daysParam } = await searchParams
+  const days = Math.min(90, Math.max(7, parseInt(daysParam ?? '30') || 30))
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
@@ -40,56 +47,70 @@ export default async function ModelsAnalyticsPage() {
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const since30date = daysAgoIST(30)   // IST date for usage_agg.bucket
-  const since60date = daysAgoIST(60)
-  const since30ts   = tsNDaysAgo(30)   // UTC ts for usage_events.created_at
-  const since60ts   = tsNDaysAgo(60)
+  const sinceDateCurr = daysAgoIST(days)        // IST date for usage_agg.bucket
+  const sinceDatePrev = daysAgoIST(days * 2)
+  const sinceTsCurr   = tsNDaysAgo(days)         // UTC ts for usage_events.created_at
+  const sinceTsPrev   = tsNDaysAgo(days * 2)
 
   const [{ data: curr }, { data: prev }, { data: evts }, { data: evtsPrev }] = await Promise.all([
     admin.from('usage_agg')
       .select('model,total_tokens,cost_usd,request_count')
-      .eq('org_id', orgId).gte('bucket', since30date),
+      .eq('org_id', orgId).gte('bucket', sinceDateCurr),
     admin.from('usage_agg')
       .select('model,total_tokens,cost_usd,request_count')
-      .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
+      .eq('org_id', orgId).gte('bucket', sinceDatePrev).lt('bucket', sinceDateCurr),
+    // usage_events is always used for call counts (source of truth, 1 row = 1 call)
     admin.from('usage_events')
       .select('model,input_tokens,output_tokens,total_tokens,cost_usd')
-      .eq('org_id', orgId).gte('created_at', since30ts),
+      .eq('org_id', orgId).gte('created_at', sinceTsCurr),
     admin.from('usage_events')
       .select('model,input_tokens,output_tokens,total_tokens,cost_usd')
-      .eq('org_id', orgId).gte('created_at', since60ts).lt('created_at', since30ts),
+      .eq('org_id', orgId).gte('created_at', sinceTsPrev).lt('created_at', sinceTsCurr),
   ])
 
-  // If usage_agg has no cost data, fall back to usage_events
+  // Cost/tokens: prefer usage_agg (pre-aggregated), fall back to usage_events
   const aggHasCost = (curr ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
-  const currSource = aggHasCost ? (curr ?? []) : (evts ?? [])
-  const prevSource = aggHasCost ? (prev ?? []) : (evtsPrev ?? [])
+  const costSource     = aggHasCost ? (curr ?? []) : (evts ?? [])
+  const costSourcePrev = aggHasCost ? (prev ?? []) : (evtsPrev ?? [])
 
-  /* ── Aggregate current period by model ── */
+  /* ── Aggregate current period: cost+tokens from agg, calls from events ── */
   const currMap = new Map<string, { inputTok: number; outputTok: number; totalTok: number; cost: number; calls: number }>()
-  for (const r of currSource) {
-    const m  = r.model ?? 'unknown'
-    const e  = currMap.get(m) ?? { inputTok: 0, outputTok: 0, totalTok: 0, cost: 0, calls: 0 }
+
+  // Cost + tokens from agg (or events fallback)
+  for (const r of costSource) {
+    const m   = r.model ?? 'unknown'
+    const e   = currMap.get(m) ?? { inputTok: 0, outputTok: 0, totalTok: 0, cost: 0, calls: 0 }
     const row = r as Record<string,unknown>
     const inTok  = Number(row.input_tokens  ?? 0)
     const outTok = Number(row.output_tokens ?? 0)
     const tot    = Number(row.total_tokens  ?? 0)
     e.inputTok  += inTok
     e.outputTok += outTok
-    // total_tokens is the source of truth; input+output as bonus precision
     e.totalTok  += tot > 0 ? tot : inTok + outTok
     e.cost      += Number(r.cost_usd ?? 0)
-    e.calls     += Number(row.request_count ?? 1)
     currMap.set(m, e)
   }
 
-  /* ── Aggregate prev period by model ── */
+  // Call counts ALWAYS from usage_events (1 row = 1 API call — usage_agg.request_count unreliable)
+  for (const r of evts ?? []) {
+    const m = r.model ?? 'unknown'
+    const e = currMap.get(m) ?? { inputTok: 0, outputTok: 0, totalTok: 0, cost: 0, calls: 0 }
+    e.calls++
+    currMap.set(m, e)
+  }
+
+  /* ── Aggregate prev period ── */
   const prevMap = new Map<string, { cost: number; calls: number }>()
-  for (const r of prevSource) {
+  for (const r of costSourcePrev) {
     const m = r.model ?? 'unknown'
     const e = prevMap.get(m) ?? { cost: 0, calls: 0 }
-    e.cost  += Number(r.cost_usd      ?? 0)
-    e.calls += Number((r as Record<string,unknown>).request_count ?? 1)
+    e.cost += Number(r.cost_usd ?? 0)
+    prevMap.set(m, e)
+  }
+  for (const r of evtsPrev ?? []) {
+    const m = r.model ?? 'unknown'
+    const e = prevMap.get(m) ?? { cost: 0, calls: 0 }
+    e.calls++
     prevMap.set(m, e)
   }
 
@@ -127,5 +148,5 @@ export default async function ModelsAnalyticsPage() {
       }
     })
 
-  return <ModelsClient models={models} />
+  return <ModelsClient models={models} days={days} />
 }

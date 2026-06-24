@@ -1,5 +1,6 @@
 'use client'
 import { useState, useMemo } from 'react'
+import { useRouter, usePathname } from 'next/navigation'
 import {
   Download, Calendar, Check, AlertTriangle,
   FileText, Clock, Mail, RefreshCw, DollarSign, Zap, BarChart3, TrendingUp,
@@ -21,13 +22,13 @@ export interface DailyRow {
   spike:    boolean
 }
 
-interface Props { rows: DailyRow[] }
+interface Props { rows: DailyRow[]; days: number }
 
 /* ═══════════════════════════════════════════════════════════
    CSV EXPORT
 ═══════════════════════════════════════════════════════════ */
 function downloadCSV(rows: DailyRow[]) {
-  const headers = ['Date','Day','Cost (USD)','vs Prior Period','Tokens (M)','API Calls','Top Model','Top Project','Anomaly']
+  const headers = ['Date','Day','Cost (USD)','vs Prior Period','Tokens (M)','LLM Calls','Top Model','Top Project','Anomaly']
   const lines = rows.map(r => [
     r.date, r.dow, r.cost.toFixed(2),
     r.prev > 0 ? ((r.cost - r.prev) / r.prev * 100).toFixed(1) + '%' : 'N/A',
@@ -43,11 +44,16 @@ function downloadCSV(rows: DailyRow[]) {
 /* ═══════════════════════════════════════════════════════════
    PAGE
 ═══════════════════════════════════════════════════════════ */
-export function CostsClient({ rows: initialRows }: Props) {
-  const [period,    setPeriod]    = useState<'mtd'|'last30'|'last90'>('last30')
+const DAY_OPTIONS = [{ label:'7D', value:7 }, { label:'30D', value:30 }, { label:'90D', value:90 }]
+
+export function CostsClient({ rows: initialRows, days }: Props) {
+  const router   = useRouter()
+  const pathname = usePathname()
   const [showSched, setShowSched] = useState(false)
   const [exportDone,setExportDone]= useState(false)
   const [sortAsc,   setSortAsc]   = useState(false)
+
+  function setDays(d: number) { router.push(`${pathname}?days=${d}`) }
 
   const rows = useMemo(() => sortAsc ? [...initialRows] : [...initialRows].reverse(), [initialRows, sortAsc])
 
@@ -84,12 +90,23 @@ export function CostsClient({ rows: initialRows }: Props) {
     <div className="space-y-5">
 
       {/* ── Header ── */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Cost Reports</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Daily spend breakdown · last {initialRows.length} days</p>
+          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Daily spend breakdown · last {days} days</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1 p-1 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl">
+            {DAY_OPTIONS.map(opt => (
+              <button key={opt.value} onClick={() => setDays(opt.value)}
+                className={cn('px-3 py-1 rounded-lg text-[12px] font-semibold transition-all',
+                  days === opt.value
+                    ? 'bg-white dark:bg-[#1e1e3a] text-[var(--fg)] shadow-sm'
+                    : 'text-[var(--fg-tertiary)] hover:text-[var(--fg-secondary)]')}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
           <button onClick={handleExport}
             className={cn('flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12.5px] font-semibold border transition-all',
               exportDone ? 'bg-teal/10 border-teal/30 text-teal' : 'btn-secondary')}>
@@ -98,20 +115,6 @@ export function CostsClient({ rows: initialRows }: Props) {
           <button onClick={() => setShowSched(v => !v)} className="btn-primary">
             <Clock size={13} /> Scheduled reports
           </button>
-        </div>
-      </div>
-
-      {/* ── Period selector ── */}
-      <div className="flex items-center gap-2">
-        <Calendar size={14} className="text-[var(--fg-tertiary)]" />
-        <div className="flex gap-0.5 p-0.5 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl">
-          {([['last30','Last 30 days'],['mtd','MTD']] as const).map(([v,l]) => (
-            <button key={v} onClick={() => setPeriod(v)}
-              className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all',
-                period===v?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-              {l}
-            </button>
-          ))}
         </div>
       </div>
 

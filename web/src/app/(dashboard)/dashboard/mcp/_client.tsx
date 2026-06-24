@@ -434,7 +434,7 @@ function PlatformCard({ platform, onRevoke, onDelete }: {
           {[
             { label: 'Cost 30d',   value: `$${platform.cost30d.toFixed(2)}`,   color: 'text-coral'          },
             { label: 'Tokens 30d', value: fmtTokens(platform.tokens30d),        color: 'text-[var(--blue)]'  },
-            { label: 'API calls',  value: fmtTokens(platform.calls30d),         color: 'text-[var(--fg)]'    },
+            { label: 'LLM calls',  value: fmtTokens(platform.calls30d),         color: 'text-[var(--fg)]'    },
           ].map(s => (
             <div key={s.label} className="bg-[var(--bg-secondary)] rounded-xl px-3 py-2.5 border border-[var(--border)]">
               <p className={cn('text-[15px] font-bold tabular-nums', s.color)}>{s.value}</p>

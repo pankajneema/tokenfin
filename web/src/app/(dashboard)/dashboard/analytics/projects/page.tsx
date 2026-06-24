@@ -9,9 +9,16 @@ export const metadata = { title: 'By Project — TokenFin Analytics' }
 const PROJ_COLORS = ['#D97757','#4285F4','#8B5CF6','#20B2AA','#F59E0B','#6B7280']
 const TEAM_COLORS = ['#8B5CF6','#20B2AA','#F59E0B','#D97757','#4285F4','#6B7280']
 
-export default async function ProjectsAnalyticsPage() {
+export default async function ProjectsAnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ days?: string }>
+}) {
   const supabase = createClient()
   const admin    = createAdminClient()
+
+  const { days: daysParam } = await searchParams
+  const days = Math.min(90, Math.max(7, parseInt(daysParam ?? '30') || 30))
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
@@ -20,10 +27,10 @@ export default async function ProjectsAnalyticsPage() {
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const since30date = daysAgoIST(30)
-  const since60date = daysAgoIST(60)
-  const since30ts   = tsNDaysAgo(30)
-  const since60ts   = tsNDaysAgo(60)
+  const since30date = daysAgoIST(days)
+  const since60date = daysAgoIST(days * 2)
+  const since30ts   = tsNDaysAgo(days)
+  const since60ts   = tsNDaysAgo(days * 2)
 
   const [
     { data: curr     },
@@ -60,7 +67,7 @@ export default async function ProjectsAnalyticsPage() {
       .eq('is_active', true),
   ])
 
-  // If usage_agg has no data, fall back to usage_events
+  // Cost/tokens: prefer usage_agg; calls: always from usage_events (1 row = 1 call)
   const aggHasCost = (curr ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
   const currSource = aggHasCost ? (curr ?? []) : (evts ?? [])
   const prevSource = aggHasCost ? (prev ?? []) : (evtsPrev ?? [])
@@ -124,16 +131,22 @@ export default async function ProjectsAnalyticsPage() {
     }
   }
 
-  /* ── Aggregate current period ── */
+  /* ── Aggregate current period — cost+tokens from agg, calls from events ── */
   const currMap = new Map<string, { cost: number; tokens: number; calls: number; models: Set<string> }>()
   for (const r of currSource) {
     const pid = r.project_id ?? '__none__'
     const e   = currMap.get(pid) ?? { cost: 0, tokens: 0, calls: 0, models: new Set() }
     e.cost   += Number(r.cost_usd     ?? 0)
     e.tokens += Number(r.total_tokens ?? 0)
-    e.calls  += Number((r as Record<string,unknown>).request_count ?? 1)
     const model = (r as Record<string,unknown>).model as string | undefined
     if (model) e.models.add(model)
+    currMap.set(pid, e)
+  }
+  // Calls always from usage_events
+  for (const r of evts ?? []) {
+    const pid = r.project_id ?? '__none__'
+    const e   = currMap.get(pid) ?? { cost: 0, tokens: 0, calls: 0, models: new Set() }
+    e.calls++
     currMap.set(pid, e)
   }
 
@@ -142,8 +155,13 @@ export default async function ProjectsAnalyticsPage() {
   for (const r of prevSource) {
     const pid = r.project_id ?? '__none__'
     const e   = prevMap.get(pid) ?? { cost: 0, calls: 0 }
-    e.cost  += Number(r.cost_usd ?? 0)
-    e.calls += Number((r as Record<string,unknown>).request_count ?? 1)
+    e.cost += Number(r.cost_usd ?? 0)
+    prevMap.set(pid, e)
+  }
+  for (const r of evtsPrev ?? []) {
+    const pid = r.project_id ?? '__none__'
+    const e   = prevMap.get(pid) ?? { cost: 0, calls: 0 }
+    e.calls++
     prevMap.set(pid, e)
   }
 
@@ -172,5 +190,5 @@ export default async function ProjectsAnalyticsPage() {
       }
     })
 
-  return <ProjectsClient projects={projectRows} />
+  return <ProjectsClient projects={projectRows} days={days} />
 }
