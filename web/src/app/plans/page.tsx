@@ -125,7 +125,7 @@ function ContactSalesModal({ onClose, userEmail }: { onClose: () => void; userEm
             </div>
             <div>
               <h2 className="text-[15px] font-bold text-[var(--fg)]">Talk to sales</h2>
-              <p className="text-[12px] text-[var(--fg-secondary)]">We'll reach out within 24 hours</p>
+              <p className="text-[12px] text-[var(--fg-secondary)]">We&apos;ll reach out within 24 hours</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[var(--bg-secondary)] transition-colors">

@@ -197,11 +197,10 @@ export function Sidebar({ user }: { user: User }) {
         'flex items-center gap-2.5 px-4 h-[56px] border-b border-[var(--border)] flex-shrink-0',
         collapsed && 'justify-center px-0'
       )}>
-        <div className="w-7 h-7 bg-coral rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm">
-          <Zap size={14} className="text-white" strokeWidth={2.5} />
-        </div>
-        {!collapsed && (
-          <span className="font-bold text-[15px] text-[var(--fg)] tracking-tight">TokenFin</span>
+        {collapsed ? (
+          <img src="/favicon.svg" alt="TokenFin" className="w-7 h-7 flex-shrink-0" />
+        ) : (
+          <img src="/logo.svg" alt="TokenFin" className="h-7 w-auto flex-shrink-0" />
         )}
       </div>
 
