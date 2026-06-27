@@ -5,6 +5,10 @@ import { useRouter } from 'next/navigation'
 import { Eye, EyeOff, ArrowRight, AlertCircle, Check, ShieldCheck, Mail } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+// CAPTCHA disabled for now (turned off in Supabase). Re-enable by uncommenting
+// the import + state + <Captcha/> and setting NEXT_PUBLIC_CAPTCHA_SITE_KEY.
+// import { useRef } from 'react'
+// import { Captcha, captchaEnabled, type CaptchaHandle } from '@/components/auth/captcha'
 
 /* ── SVG logos ─────────────────────────────────────────────────── */
 function GithubIcon({ className }: { className?: string }) {
@@ -104,6 +108,8 @@ export default function SignupPage() {
 
   const [emailTouched, setEmailTouched] = useState(false)
   const [nameTouched,  setNameTouched]  = useState(false)
+  // const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  // const captchaRef = useRef<CaptchaHandle>(null)
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
   const nameValid  = name.trim().length >= 2
@@ -411,6 +417,8 @@ export default function SignupPage() {
             </div>
           )}
         </Field>
+
+        {/* <Captcha ref={captchaRef} onToken={setCaptchaToken} /> */}
 
         {/* Submit */}
         <button

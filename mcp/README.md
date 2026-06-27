@@ -42,7 +42,7 @@ Config file location:
       "args": ["-y", "@tokenfin/mcp"],
       "env": {
         "TOKENFIN_API_KEY": "tf_live_your_key_here",
-        "TOKENFIN_BASE_URL": "http://localhost:3000"
+        "TOKENFIN_BASE_URL": "https://tokenfin.curiousdevs.com"
       }
     }
   }
@@ -65,7 +65,7 @@ Create or edit `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json` 
       "args": ["-y", "@tokenfin/mcp"],
       "env": {
         "TOKENFIN_API_KEY": "tf_live_your_key_here",
-        "TOKENFIN_BASE_URL": "http://localhost:3000"
+        "TOKENFIN_BASE_URL": "https://tokenfin.curiousdevs.com"
       }
     }
   }
@@ -86,7 +86,7 @@ Add to your `~/.config/opencode/config.json`:
       "command": ["npx", "-y", "@tokenfin/mcp"],
       "environment": {
         "TOKENFIN_API_KEY": "tf_live_your_key_here",
-        "TOKENFIN_BASE_URL": "http://localhost:3000"
+        "TOKENFIN_BASE_URL": "https://tokenfin.curiousdevs.com"
       }
     }
   }
@@ -107,7 +107,7 @@ Add to your project's `.claude/settings.json` or global `~/.claude/settings.json
       "args": ["-y", "@tokenfin/mcp"],
       "env": {
         "TOKENFIN_API_KEY": "tf_live_your_key_here",
-        "TOKENFIN_BASE_URL": "http://localhost:3000"
+        "TOKENFIN_BASE_URL": "https://tokenfin.curiousdevs.com"
       }
     }
   }
@@ -122,7 +122,7 @@ claude mcp add tokenfin npx -- -y @tokenfin/mcp
 Then set env vars:
 ```bash
 export TOKENFIN_API_KEY=tf_live_your_key_here
-export TOKENFIN_BASE_URL=http://localhost:3000
+export TOKENFIN_BASE_URL=https://tokenfin.curiousdevs.com
 ```
 
 ---
@@ -139,7 +139,7 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
       "args": ["-y", "@tokenfin/mcp"],
       "env": {
         "TOKENFIN_API_KEY": "tf_live_your_key_here",
-        "TOKENFIN_BASE_URL": "http://localhost:3000"
+        "TOKENFIN_BASE_URL": "https://tokenfin.curiousdevs.com"
       }
     }
   }
@@ -157,7 +157,7 @@ npm install
 npm run build
 
 # Run the server
-TOKENFIN_API_KEY=tf_live_... TOKENFIN_BASE_URL=http://localhost:3000 node dist/index.js
+TOKENFIN_API_KEY=tf_live_... TOKENFIN_BASE_URL=https://tokenfin.curiousdevs.com node dist/index.js
 ```
 
 Point your tool config at the local binary:
@@ -169,7 +169,7 @@ Point your tool config at the local binary:
       "args": ["/absolute/path/to/tokenfin/mcp/dist/index.js"],
       "env": {
         "TOKENFIN_API_KEY": "tf_live_...",
-        "TOKENFIN_BASE_URL": "http://localhost:3000"
+        "TOKENFIN_BASE_URL": "https://tokenfin.curiousdevs.com"
       }
     }
   }
@@ -183,7 +183,7 @@ Point your tool config at the local binary:
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `TOKENFIN_API_KEY` | ✅ | — | API key from Dashboard → API Keys |
-| `TOKENFIN_BASE_URL` | — | `http://localhost:3000` | TokenFin instance URL |
+| `TOKENFIN_BASE_URL` | — | `https://tokenfin.curiousdevs.com` | TokenFin instance URL |
 
 ---
 

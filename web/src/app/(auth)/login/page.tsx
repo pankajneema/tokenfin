@@ -5,6 +5,10 @@ import { useRouter } from 'next/navigation'
 import { Eye, EyeOff, ArrowRight, AlertCircle, ShieldCheck } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+// CAPTCHA disabled for now (turned off in Supabase). To re-enable: uncomment the
+// import + state + <Captcha/> below and set NEXT_PUBLIC_CAPTCHA_SITE_KEY.
+// import { useRef } from 'react'
+// import { Captcha, captchaEnabled, type CaptchaHandle } from '@/components/auth/captcha'
 
 /* ── SVG logos ─────────────────────────────────────────────────── */
 function GithubIcon({ className }: { className?: string }) {
@@ -114,6 +118,8 @@ export default function LoginPage() {
   const [socialLoading, setSocialLoading] = useState<'github' | 'google' | null>(null)
   const [error,    setError]    = useState<string | null>(null)
   const [emailTouched, setEmailTouched] = useState(false)
+  // const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  // const captchaRef = useRef<CaptchaHandle>(null)
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
   const emailState = emailTouched
@@ -282,6 +288,8 @@ export default function LoginPage() {
           onChange={() => setRemember(v => !v)}
           label="Keep me signed in for 30 days"
         />
+
+        {/* <Captcha ref={captchaRef} onToken={setCaptchaToken} /> */}
 
         {/* Submit */}
         <button

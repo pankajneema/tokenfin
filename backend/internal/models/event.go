@@ -27,6 +27,13 @@ type UsageEvent struct {
 	CreatedAt    time.Time         `json:"created_at"`
 	Tags         map[string]string `json:"tags,omitempty"`
 	Metadata     map[string]any    `json:"metadata,omitempty"`
+
+	// Savings (TokenFin Saver / gateway). Zero on the plain ingest path.
+	InputTokensSaved  int            `json:"input_tokens_saved"`
+	OutputTokensSaved int            `json:"output_tokens_saved"`
+	BaselineCostUSD   float64        `json:"baseline_cost_usd"`
+	Optimizations     map[string]any `json:"optimizations,omitempty"`
+	WasHoldout        bool           `json:"was_holdout"`
 }
 
 // APIKey holds the resolved identity for a raw API key.

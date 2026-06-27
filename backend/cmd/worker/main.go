@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -62,11 +63,20 @@ func main() {
 	// Not strictly required — ingest fails open if limits aren't in Redis yet.
 	time.Sleep(500 * time.Millisecond)
 
-	// ── Consumer — DB writer ──────────────────────────────────
+	// ── Consumers — DB writers ────────────────────────────────
 	// Reads from usage.events.raw stream → bulk-inserts to Supabase → ACKs.
-	// Add more instances with unique names ("worker-1", …) to scale horizontally.
-	consumer := worker.NewConsumer("worker-0", redisClient, dbClient, log)
-	go consumer.Run(ctx)
+	// Run N parallel consumers in the same group; Redis load-balances messages
+	// across them so DB write throughput scales near-linearly. Each needs a
+	// unique name so their pending-entry lists (PEL) stay independent.
+	concurrency := cfg.WorkerConcurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	log.Info("starting consumers", "concurrency", concurrency)
+	for i := 0; i < concurrency; i++ {
+		c := worker.NewConsumer(fmt.Sprintf("worker-%d", i), redisClient, dbClient, log)
+		go c.Run(ctx)
+	}
 
 	// ── AlertConsumer — write notifications from alert stream ─
 	// Reads from usage.alerts stream → writes to notifications table.

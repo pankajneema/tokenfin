@@ -123,6 +123,60 @@ async function checkLimitsAndNotify(
   }
 }
 
+/**
+ * Evaluate active monthly org-scoped spend limits and decide whether this
+ * request should be allowed, throttled, or blocked.
+ *   - spend >= block_at%    → 'block'    (hard stop, 403)
+ *   - spend >= throttle_at% → 'throttle' (back-pressure, 429)
+ * Returns the worst (highest-severity) decision across all matching limits.
+ */
+async function evaluateSpendLimit(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string
+): Promise<{ action: 'allow' | 'throttle' | 'block'; pct: number; budget: number }> {
+  const { data: limits } = await admin
+    .from('limits')
+    .select('budget_usd, throttle_at, block_at')
+    .eq('org_id', orgId)
+    .eq('scope', 'org')
+    .eq('period', 'monthly')
+    .eq('is_active', true)
+
+  if (!limits?.length) return { action: 'allow', pct: 0, budget: 0 }
+
+  const monthStart = new Date()
+  monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+  const { data: aggRows } = await admin
+    .from('usage_agg')
+    .select('cost_usd')
+    .eq('org_id', orgId)
+    .gte('bucket', monthStart.toISOString().slice(0, 10))
+
+  const totalSpend = (aggRows ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+
+  let action: 'allow' | 'throttle' | 'block' = 'allow'
+  let worstPct = 0
+  let worstBudget = 0
+  const sev = { allow: 0, throttle: 1, block: 2 }
+
+  for (const limit of limits) {
+    const budget = Number(limit.budget_usd ?? 0)
+    if (budget <= 0) continue
+    const pct        = (totalSpend / budget) * 100
+    const throttleAt = Number(limit.throttle_at ?? 90)
+    const blockAt    = Number(limit.block_at ?? 100)
+
+    let next: 'allow' | 'throttle' | 'block' = 'allow'
+    if (pct >= blockAt) next = 'block'
+    else if (pct >= throttleAt) next = 'throttle'
+
+    if (sev[next] > sev[action]) action = next
+    if (pct > worstPct) { worstPct = pct; worstBudget = budget }
+  }
+
+  return { action, pct: worstPct, budget: worstBudget }
+}
+
 /* ── Direct Supabase ingest (fallback) ── */
 async function directIngest(apiKey: string, body: Record<string, unknown>) {
   const admin = createAdminClient()
@@ -139,6 +193,16 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   if (!keyRow.is_active) return NextResponse.json({ error: 'API key is inactive' }, { status: 403 })
   if (keyRow.expires_at && new Date(keyRow.expires_at) < new Date())
     return NextResponse.json({ error: 'API key expired' }, { status: 403 })
+
+  // 1b. Scope check — ingest writes usage, so the key must carry a write scope.
+  // (Legacy keys with no scopes recorded are allowed through for compatibility.)
+  const scopes = (keyRow.scopes as string[] | null) ?? []
+  if (scopes.length > 0 && !scopes.includes('write') && !scopes.includes('ingest')) {
+    return NextResponse.json(
+      { error: 'API key lacks the "write" scope required to ingest usage' },
+      { status: 403 }
+    )
+  }
 
   // 2. Rate limit — per API key, plan-aware
   const { data: org } = await admin
@@ -174,6 +238,21 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   // Use IST (UTC+5:30) for date bucketing so Indian users see correct dates
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000
   const bucket = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10)
+
+  // 3b. Enforce monthly spend limits BEFORE recording the event.
+  const limitState = await evaluateSpendLimit(admin, orgId)
+  if (limitState.action === 'block') {
+    return NextResponse.json(
+      { error: 'Monthly spend limit reached — ingestion is blocked', pct: Math.round(limitState.pct) },
+      { status: 403 }
+    )
+  }
+  if (limitState.action === 'throttle') {
+    return NextResponse.json(
+      { error: 'Monthly spend throttle threshold reached — slow down', pct: Math.round(limitState.pct) },
+      { status: 429, headers: { 'Retry-After': '60' } }
+    )
+  }
 
   // Resolve project_id — usage_events.project_id is NOT NULL.
   // If not provided in body or API key, fall back to the org's first project.
@@ -223,16 +302,28 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
     p_requests:      1,
   })
 
-  // Fallback: manual upsert if RPC doesn't exist
+  // Fallback: increment manually if the RPC is unavailable.
+  // NOTE: a plain .upsert() is last-write-wins and would OVERWRITE the day's
+  // running totals — so we read the existing row and add to it instead.
   if (aggErr) {
+    console.error('[ingest direct] upsert_usage_agg RPC failed, using fallback:', aggErr)
+    const { data: existing } = await admin
+      .from('usage_agg')
+      .select('total_tokens, cost_usd, request_count')
+      .eq('org_id', orgId)
+      .eq('project_id', resolvedProjectId)
+      .eq('model', model)
+      .eq('bucket', bucket)
+      .maybeSingle()
+
     await admin.from('usage_agg').upsert({
       org_id:        orgId,
       project_id:    resolvedProjectId,
       model,
       bucket,
-      total_tokens:  totalTok,
-      cost_usd:      costUsd,
-      request_count: 1,
+      total_tokens:  (existing?.total_tokens  ?? 0) + totalTok,
+      cost_usd:      (existing?.cost_usd       ?? 0) + costUsd,
+      request_count: (existing?.request_count ?? 0) + 1,
     }, {
       onConflict: 'org_id,project_id,model,bucket',
       ignoreDuplicates: false,

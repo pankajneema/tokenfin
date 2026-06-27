@@ -21,12 +21,28 @@ type Client struct {
 }
 
 func New(baseURL, serviceKey string) *Client {
+	// Tuned transport — the Go default caps MaxIdleConnsPerHost at 2, which
+	// serializes all concurrent writes/reads to Supabase over two sockets and
+	// is the single biggest throughput ceiling. Raise the pool so many worker
+	// consumers can write in parallel and keep connections warm (avoids a TLS
+	// handshake per call).
+	transport := &http.Transport{
+		MaxIdleConns:        256,
+		MaxIdleConnsPerHost: 256,
+		MaxConnsPerHost:     256,
+		IdleConnTimeout:     90 * time.Second,
+		ForceAttemptHTTP2:   true,
+	}
 	return &Client{
 		baseURL: baseURL,
 		key:     serviceKey,
-		http:    &http.Client{Timeout: 10 * time.Second},
+		http:    &http.Client{Timeout: 15 * time.Second, Transport: transport},
 	}
 }
+
+// maxWriteRetries bounds transient-failure retries for write calls (POST/RPC).
+// Reads are not retried here — the worker retries whole batches on failure.
+const maxWriteRetries = 3
 
 // ─── Limits ───────────────────────────────────────────────────────────────────
 
@@ -125,6 +141,9 @@ type aggRow struct {
 	TotalTokens  int     `json:"p_tokens"`
 	CostUSD      float64 `json:"p_cost"`
 	RequestCount int     `json:"p_requests"`
+	TokensSaved  int     `json:"p_tokens_saved"`
+	CostSaved    float64 `json:"p_cost_saved"`
+	HoldoutCount int     `json:"p_holdout"`
 }
 
 // UpsertAgg groups events into daily buckets and calls the batch RPC.
@@ -155,11 +174,17 @@ func (c *Client) UpsertAgg(ctx context.Context, events []*models.UsageEvent) err
 		agg[k].TotalTokens += e.TotalTokens
 		agg[k].CostUSD += e.CostUSD
 		agg[k].RequestCount++
+		agg[k].TokensSaved += e.InputTokensSaved + e.OutputTokensSaved
+		agg[k].CostSaved += e.BaselineCostUSD - e.CostUSD
+		if e.WasHoldout {
+			agg[k].HoldoutCount++
+		}
 	}
 
 	rows := make([]*aggRow, 0, len(agg))
 	for _, row := range agg {
 		row.CostUSD = math.Round(row.CostUSD*1e8) / 1e8 // 8 decimal precision
+		row.CostSaved = math.Round(row.CostSaved*1e8) / 1e8
 		rows = append(rows, row)
 	}
 
@@ -288,6 +313,26 @@ func (c *Client) post(ctx context.Context, url string, body any) error {
 	return c.send(ctx, http.MethodPost, url, body)
 }
 
+// PromptCapture is one full-prompt record (opt-in; see migration 014).
+type PromptCapture struct {
+	OrgID        string  `json:"org_id"`
+	ProjectID    string  `json:"project_id,omitempty"`
+	UserID       string  `json:"user_id,omitempty"`
+	Model        string  `json:"model"`
+	PromptHash   string  `json:"prompt_hash,omitempty"`
+	PromptText   string  `json:"prompt_text"`
+	ResponseText string  `json:"response_text,omitempty"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+}
+
+// InsertPromptCapture writes one full-prompt record.
+func (c *Client) InsertPromptCapture(ctx context.Context, p *PromptCapture) error {
+	url := c.baseURL + "/rest/v1/prompt_captures"
+	return c.postArray(ctx, url, []*PromptCapture{p})
+}
+
 // postArray sends an array body — used for bulk inserts.
 func (c *Client) postArray(ctx context.Context, url string, body any) error {
 	return c.send(ctx, http.MethodPost, url, body)
@@ -299,24 +344,44 @@ func (c *Client) send(ctx context.Context, method, url string, body any) error {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	c.setHeaders(req)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Prefer", "return=minimal") // skip response body — faster
+	// Retry transient failures (network error or 5xx) with exponential backoff.
+	// 4xx are caller/data errors — never retried. The request body is buffered
+	// so it can be replayed on each attempt.
+	var lastErr error
+	for attempt := 0; attempt <= maxWriteRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(1<<uint(attempt-1)) * 100 * time.Millisecond):
+			}
+		}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s: %w", method, err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(b))
+		if err != nil {
+			return err
+		}
+		c.setHeaders(req)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Prefer", "return=minimal") // skip response body — faster
 
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("%s %s → %d", method, url, resp.StatusCode)
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", method, err)
+			continue // network error — retry
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("%s %s → %d", method, url, resp.StatusCode)
+			continue // server error — retry
+		}
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("%s %s → %d", method, url, resp.StatusCode) // client error — fail fast
+		}
+		return nil // success
 	}
-	return nil
+	return fmt.Errorf("%s exhausted retries: %w", method, lastErr)
 }
 
 func (c *Client) setHeaders(req *http.Request) {

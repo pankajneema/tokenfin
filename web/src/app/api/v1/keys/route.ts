@@ -14,6 +14,17 @@ function generateApiKey(projectId: string, env: string): string {
   return `tfk_${envShort}_${segment}_${secret}`
 }
 
+/**
+ * maskKey returns a safe display string for a raw key — the meaningful
+ * prefix (env + project segment) plus the last 4 chars. The full key is
+ * shown to the creator exactly ONCE (in the POST response) and is never
+ * stored or returned again. Storing the raw key would defeat key_hash.
+ */
+function maskKey(raw: string): string {
+  const head = raw.split('_').slice(0, 3).join('_') // e.g. tfk_prod_abc1
+  return `${head}_…${raw.slice(-4)}`
+}
+
 /* GET /api/v1/keys?org_id=xxx */
 export async function GET(req: NextRequest) {
   const orgId = req.nextUrl.searchParams.get('org_id')
@@ -67,7 +78,7 @@ export async function POST(req: NextRequest) {
   const { org_id, project_id, name, created_by, user_id, team_id, env, scopes, expires_at } = parsed.data
   const rawKey    = generateApiKey(project_id, env)
   const keyHash   = crypto.createHash('sha256').update(rawKey).digest('hex')
-  const keyPrefix = rawKey   // store full key so users can copy it anytime from the list
+  const keyPrefix = maskKey(rawKey)   // store ONLY a masked display value — never the raw key
 
   // ── Validation: if team_id given, verify member belongs to that team ──
   if (team_id) {

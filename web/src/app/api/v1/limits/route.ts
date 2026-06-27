@@ -35,6 +35,15 @@ export async function POST(req: NextRequest) {
     throttle_at: z.number().int().min(1).max(100).default(90),
     block_at:    z.number().int().min(1).max(100).default(100),
   })
+    .refine(d => d.warn_at <= d.throttle_at && d.throttle_at <= d.block_at, {
+      message: 'Thresholds must satisfy warn_at ≤ throttle_at ≤ block_at', path: ['throttle_at'],
+    })
+    .refine(d => d.scope !== 'project' || !!d.project_id, {
+      message: 'project_id is required when scope is "project"', path: ['project_id'],
+    })
+    .refine(d => d.scope !== 'team' || !!d.team_id, {
+      message: 'team_id is required when scope is "team"', path: ['team_id'],
+    })
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
@@ -61,10 +70,26 @@ export async function PATCH(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const { data: limRow } = await db().from('limits').select('org_id').eq('id', parsed.data.id).maybeSingle()
+  const { data: limRow } = await db()
+    .from('limits')
+    .select('org_id, warn_at, throttle_at, block_at')
+    .eq('id', parsed.data.id)
+    .maybeSingle()
   if (!limRow) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const guard = await requirePermission(limRow.org_id, 'limits:write')
   if (guard instanceof NextResponse) return guard
+
+  // Validate the merged thresholds (warn ≤ throttle ≤ block) using existing
+  // values for any field not being changed in this request.
+  const warn     = parsed.data.warn_at     ?? limRow.warn_at     ?? 70
+  const throttle = parsed.data.throttle_at ?? limRow.throttle_at ?? 90
+  const block    = parsed.data.block_at    ?? limRow.block_at    ?? 100
+  if (!(warn <= throttle && throttle <= block)) {
+    return NextResponse.json(
+      { error: 'Thresholds must satisfy warn_at ≤ throttle_at ≤ block_at' },
+      { status: 422 }
+    )
+  }
 
   const { id, ...fields } = parsed.data
   const { data, error } = await db().from('limits').update(fields).eq('id', id).select().single()

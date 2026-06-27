@@ -98,14 +98,67 @@ export default async function PromptsAnalyticsPage() {
     ? Math.round(avgLatAll.reduce((s, v) => s + v, 0) / avgLatAll.length)
     : null
 
+  // Captured full prompts (opt-in via gateway CAPTURE_PROMPTS=1; migration 014).
+  const { data: captured } = await admin
+    .from('prompt_captures')
+    .select('id, model, prompt_text, response_text, input_tokens, output_tokens, cost_usd, created_at')
+    .eq('org_id', orgId)
+    .order('created_at', { ascending: false })
+    .limit(50)
+
   return (
-    <PromptsClient
-      patterns={patterns}
-      orgId={orgId}
-      totalRequests={totalRequests}
-      hashedRequests={hashedRequests}
-      totalCost={+totalCost.toFixed(4)}
-      avgLatencyMs={globalAvgLatency}
-    />
+    <>
+      <PromptsClient
+        patterns={patterns}
+        orgId={orgId}
+        totalRequests={totalRequests}
+        hashedRequests={hashedRequests}
+        totalCost={+totalCost.toFixed(4)}
+        avgLatencyMs={globalAvgLatency}
+      />
+      <CapturedPrompts rows={captured ?? []} />
+    </>
+  )
+}
+
+const clipText = (s: string | null, n: number) => !s ? '' : s.length > n ? s.slice(0, n) + '…' : s
+const usd = (n: number) => n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`
+
+function CapturedPrompts({ rows }: { rows: Array<{ id: string; model: string; prompt_text: string; response_text: string | null; input_tokens: number; output_tokens: number; cost_usd: number; created_at: string }> }) {
+  return (
+    <div className="mt-8">
+      <div className="mb-1 text-[15px] font-bold text-[var(--fg)]">Captured prompts</div>
+      <p className="mb-3 text-[12.5px] text-[var(--fg-secondary)]">
+        Full prompt text routed through the gateway.{rows.length === 0 ? ' Opt-in: run the gateway with CAPTURE_PROMPTS=1.' : ''}
+      </p>
+      {rows.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-[var(--border)] p-8 text-center text-[12.5px] text-[var(--fg-tertiary)]">
+          No captured prompts yet.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {rows.map(r => (
+            <details key={r.id} className="rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
+              <summary className="flex cursor-pointer items-center justify-between text-[12.5px]">
+                <span className="font-medium text-[var(--fg)]">{r.model}</span>
+                <span className="text-[var(--fg-tertiary)]">{r.input_tokens + r.output_tokens} tok · {usd(Number(r.cost_usd))} · {new Date(r.created_at).toLocaleString()}</span>
+              </summary>
+              <div className="mt-3 space-y-2">
+                <div>
+                  <div className="mb-1 text-[11px] font-semibold uppercase text-[var(--fg-tertiary)]">Prompt</div>
+                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-[var(--bg-tertiary)] p-3 font-mono text-[11px] text-[var(--fg)]">{clipText(r.prompt_text, 8000)}</pre>
+                </div>
+                {r.response_text && (
+                  <div>
+                    <div className="mb-1 text-[11px] font-semibold uppercase text-[var(--fg-tertiary)]">Response</div>
+                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-[var(--bg-tertiary)] p-3 font-mono text-[11px] text-[var(--fg)]">{clipText(r.response_text, 8000)}</pre>
+                  </div>
+                )}
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

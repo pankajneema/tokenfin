@@ -6,8 +6,8 @@ import { usePathname } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import {
   Zap, LayoutDashboard, BarChart3,
-  Layers, Users, Key, Shield, Bell, GitBranch, Settings,
-  ChevronLeft, ChevronRight, ChevronDown, HelpCircle, BookOpen, Puzzle,
+  Layers, Users, UserPlus, Key, Shield, Bell, GitBranch, Settings,
+  ChevronLeft, ChevronRight, ChevronDown, HelpCircle, BookOpen, Puzzle, Gauge, Plug,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -28,8 +28,10 @@ const NAV_GROUPS: NavGroup[] = [
   {
     items: [
       { label: 'Overview', href: '/dashboard',  icon: LayoutDashboard },
+      { label: 'My Usage', href: '/dashboard/my-usage', icon: Gauge },
       { label: 'Projects', href: '/dashboard/projects', icon: Layers },
       { label: 'Teams',    href: '/dashboard/teams',    icon: Users },
+      { label: 'Provision', href: '/dashboard/provision', icon: UserPlus },
     ],
   },
   {
@@ -44,6 +46,7 @@ const NAV_GROUPS: NavGroup[] = [
           { label: 'By Project',   href: '/dashboard/analytics/projects' },
           { label: 'Cost Reports', href: '/dashboard/analytics/costs'    },
           { label: 'Prompts',      href: '/dashboard/analytics/prompts'  },
+          { label: 'Savings',      href: '/dashboard/analytics/savings'  },
         ],
       },
     ],
@@ -61,6 +64,8 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'More',
     items: [
       { label: 'MCP',          href: '/dashboard/mcp',          icon: Puzzle },
+      { label: 'MCP Setup',    href: '/dashboard/mcp/connect',  icon: Plug },
+      { label: 'Gateway',      href: '/dashboard/gateway',      icon: Gauge },
       { label: 'Integrations', href: '/dashboard/integrations', icon: GitBranch },
       { label: 'Settings',     href: '/dashboard/settings',     icon: Settings },
     ],

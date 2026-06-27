@@ -384,7 +384,7 @@ function CreateKeyModal({
               <Shield size={24} className="text-teal" />
             </div>
             <h3 className="text-[16px] font-bold text-[var(--fg)] mb-1">Key created</h3>
-            <p className="text-[12.5px] text-[var(--fg-secondary)] mb-5">Copy your key below. You can also copy it anytime from the Keys list.</p>
+            <p className="text-[12.5px] text-[var(--fg-secondary)] mb-5">Copy your key now and store it securely — for your protection it will <span className="font-semibold text-[var(--fg)]">never be shown again</span>.</p>
 
             <div className="bg-[var(--bg-secondary)] rounded-xl p-3 mb-4 text-left">
               <p className="text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider mb-2">Your API key</p>
@@ -674,7 +674,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
                     <button
                       onClick={() => copyPrefix(k.keyPrefix, k.id)}
                       className="text-[var(--fg-tertiary)] hover:text-coral transition-colors flex-shrink-0"
-                      title="Copy API key">
+                      title="Copy key prefix (full key is shown only at creation)">
                       {copiedId === k.id ? <Check size={12} className="text-teal" /> : <Copy size={12} />}
                     </button>
                   </div>
@@ -750,8 +750,9 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
 
                         <button
                           onClick={() => { copyPrefix(k.keyPrefix, k.id); setActionMenu(null) }}
+                          /* copies the masked prefix for identification, not the secret */
                           className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] font-medium text-[var(--fg)] hover:bg-[var(--bg-hover)] transition-colors">
-                          <Copy size={13} /> Copy key
+                          <Copy size={13} /> Copy prefix
                         </button>
 
                         {can(role, 'keys:delete') && (

@@ -36,8 +36,15 @@ function relTime(isoStr: string): string {
 
 async function getOrgId(userId: string) {
   const admin = createAdminClient()
+  // Order by joined_at so multi-org users resolve to the same primary org the
+  // rest of the dashboard uses (see getUserOrgId in lib/api/auth.ts).
   const { data } = await admin
-    .from('members').select('org_id').eq('user_id', userId).limit(1).single()
+    .from('members')
+    .select('org_id')
+    .eq('user_id', userId)
+    .order('joined_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
   return data?.org_id ?? null
 }
 

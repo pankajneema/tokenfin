@@ -40,6 +40,12 @@ export async function POST(req: NextRequest) {
       inapp:   z.boolean().default(true),
     }).default({ email: true, slack: false, webhook: false, inapp: true }),
   })
+    .refine(d => d.trigger_type !== 'threshold' || typeof d.threshold === 'number', {
+      message: 'threshold (a number) is required for threshold alerts', path: ['threshold'],
+    })
+    .refine(d => d.channels.email || d.channels.slack || d.channels.webhook || d.channels.inapp, {
+      message: 'at least one channel must be enabled', path: ['channels'],
+    })
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
