@@ -62,7 +62,7 @@ export function McpConnectClient({ orgId, userId, projects }: { orgId: string; u
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--green-bg)]"><Puzzle size={20} className="text-teal" /></div>
         <div>
           <h1 className="text-[19px] font-bold text-[var(--fg)]">Connect an MCP client</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)]">Generate a key and copy-paste config — usage is tracked automatically.</p>
+          <p className="text-[13px] text-[var(--fg-secondary)]">One setup for both <strong>analytics</strong> (spend, models, budgets) and <strong>token saving</strong> (compress / retrieve). Generate a key and copy-paste the config.</p>
         </div>
       </div>
 
