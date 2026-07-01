@@ -45,8 +45,8 @@ export function McpConnectClient({ orgId, userId, projects }: { orgId: string; u
       const res = await fetch('/api/v1/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Least privilege: MCP keys are READ-ONLY — the server exposes no write tools.
-        body: JSON.stringify({ org_id: orgId, project_id: projectId, env: 'production', scopes: ['read'], name: `MCP: ${selected.name}`, created_by: userId, user_id: userId }),
+        // read = analytics + compress/retrieve; write = record_usage auto-sync.
+        body: JSON.stringify({ org_id: orgId, project_id: projectId, env: 'production', scopes: ['read', 'write'], name: `MCP: ${selected.name}`, created_by: userId, user_id: userId }),
       })
       const data = await res.json()
       if (!res.ok) { setError(typeof data.error === 'string' ? data.error : 'Failed to create key'); return }
@@ -61,8 +61,8 @@ export function McpConnectClient({ orgId, userId, projects }: { orgId: string; u
       <div className="mb-6 flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--green-bg)]"><Puzzle size={20} className="text-teal" /></div>
         <div>
-          <h1 className="text-[19px] font-bold text-[var(--fg)]">Connect an MCP client</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)]">One setup for both <strong>analytics</strong> (spend, models, budgets) and <strong>token saving</strong> (compress / retrieve). Generate a key and copy-paste the config.</p>
+          <h1 className="text-[19px] font-bold text-[var(--fg)]">Connect via MCP</h1>
+          <p className="text-[13px] text-[var(--fg-secondary)]">One connection does it all — <strong>analytics</strong>, <strong>token saving</strong> (compress/retrieve), and <strong>auto-sync</strong> of usage &amp; prompts. Generate a key and paste the config; your client handles the rest.</p>
         </div>
       </div>
 
@@ -92,7 +92,7 @@ export function McpConnectClient({ orgId, userId, projects }: { orgId: string; u
         ) : (
           <div className="space-y-3">
             <div className="rounded-xl bg-[var(--green-bg)] p-3 text-[12.5px] text-teal">
-              ✓ Read-only key created. Copy the config into <code className="font-mono">{selected.file}</code>, then restart {selected.name}.
+              ✓ Key created. Copy the config into <code className="font-mono">{selected.file}</code>, then restart {selected.name}.
               The key is shown only once.
             </div>
             <div className="relative rounded-xl bg-[var(--bg-tertiary)] p-3">
@@ -101,7 +101,7 @@ export function McpConnectClient({ orgId, userId, projects }: { orgId: string; u
               </button>
               <pre className="overflow-x-auto whitespace-pre font-mono text-[11px] leading-relaxed text-[var(--fg)]">{configFor(tool, endpoint, rawKey)}</pre>
             </div>
-            <p className="text-[11px] text-[var(--fg-tertiary)]">Endpoint: <code className="font-mono">{endpoint}</code> · Streamable HTTP · Bearer auth · read-only</p>
+            <p className="text-[11px] text-[var(--fg-tertiary)]">Endpoint: <code className="font-mono">{endpoint}</code> · Streamable HTTP · Bearer auth</p>
             <button onClick={() => setRawKey('')} className="btn-secondary">Connect another</button>
           </div>
         )}

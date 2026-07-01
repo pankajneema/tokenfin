@@ -1,8 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/server'
 import { compressContent } from './compress'
 import { ccrPut, ccrGet } from './ccr'
-import { inputPrice } from './pricing'
+import { inputPrice, computeCost } from './pricing'
 import type { KeyCtx } from './types'
+
+const istBucket = () => new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10)
 
 // Executes a single MCP tool, scoped to the caller's org. Every query filters by
 // ctx.orgId — the authorization boundary.
@@ -82,6 +84,51 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
     case 'retrieve': {
       const content = await ccrGet(String(args.hash ?? ''), ctx.orgId)
       return content == null ? { found: false, note: 'Original not found or expired.' } : { found: true, content }
+    }
+    case 'record_usage': {
+      const model = String(args.model ?? '')
+      if (!model) throw new Error('model is required')
+      const inTok  = Math.max(0, Math.floor(Number(args.input_tokens) || 0))
+      const outTok = Math.max(0, Math.floor(Number(args.output_tokens) || 0))
+      const cost   = typeof args.cost_usd === 'number' ? args.cost_usd : computeCost(model, inTok, outTok)
+      const bucket = istBucket()
+
+      await admin.from('usage_events').insert({
+        org_id: ctx.orgId, project_id: ctx.projectId, model,
+        input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok,
+        cost_usd: cost, tags: { source: 'mcp' }, metadata: { mcp: true },
+      })
+
+      // Roll into daily aggregates (analytics tools read usage_agg). Prefer the
+      // RPC; fall back to a read-modify-write increment if it's unavailable.
+      const { error } = await admin.rpc('upsert_usage_agg', {
+        p_org_id: ctx.orgId, p_project_id: ctx.projectId, p_model: model,
+        p_bucket: bucket, p_tokens: inTok + outTok, p_cost: cost, p_requests: 1,
+      })
+      if (error) {
+        const { data: ex } = await admin.from('usage_agg')
+          .select('total_tokens, cost_usd, request_count')
+          .eq('org_id', ctx.orgId).eq('project_id', ctx.projectId).eq('model', model).eq('bucket', bucket).maybeSingle()
+        await admin.from('usage_agg').upsert({
+          org_id: ctx.orgId, project_id: ctx.projectId, model, bucket,
+          total_tokens: (ex?.total_tokens ?? 0) + inTok + outTok,
+          cost_usd: (ex?.cost_usd ?? 0) + cost,
+          request_count: (ex?.request_count ?? 0) + 1,
+        }, { onConflict: 'org_id,project_id,model,bucket' })
+      }
+
+      // Optional prompt capture (best-effort; needs migration 014).
+      let captured = false
+      if (typeof args.prompt === 'string' && args.prompt) {
+        const { error: capErr } = await admin.from('prompt_captures').insert({
+          org_id: ctx.orgId, project_id: ctx.projectId, model,
+          prompt_text: String(args.prompt).slice(0, 100_000),
+          response_text: typeof args.response === 'string' ? args.response.slice(0, 100_000) : null,
+          input_tokens: inTok, output_tokens: outTok, cost_usd: cost,
+        })
+        captured = !capErr
+      }
+      return { recorded: true, model, total_tokens: inTok + outTok, cost_usd: cost, bucket, prompt_captured: captured }
     }
     case 'savings_stats': {
       const { data } = await admin.from('usage_events')

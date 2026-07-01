@@ -65,7 +65,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: 'MCP',          href: '/dashboard/mcp',          icon: Puzzle },
       { label: 'MCP Setup',    href: '/dashboard/mcp/connect',  icon: Plug },
-      { label: 'Gateway',      href: '/dashboard/gateway',      icon: Gauge },
       { label: 'Integrations', href: '/dashboard/integrations', icon: GitBranch },
       { label: 'Settings',     href: '/dashboard/settings',     icon: Settings },
     ],
