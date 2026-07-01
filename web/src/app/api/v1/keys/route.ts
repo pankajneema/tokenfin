@@ -110,8 +110,13 @@ export async function POST(req: NextRequest) {
       .maybeSingle()
 
     if (existing) {
+      const ex = existing as { id: string; name: string }
       return NextResponse.json(
-        { error: `This member already has an active key for this project ("${(existing as { name: string }).name}"). Revoke it first.` },
+        {
+          error: `This member already has an active key for this project ("${ex.name}"). Revoke it first.`,
+          existingKeyId: ex.id,
+          existingKeyName: ex.name,
+        },
         { status: 409 }
       )
     }

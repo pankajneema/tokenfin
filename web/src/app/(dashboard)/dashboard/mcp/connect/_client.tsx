@@ -33,12 +33,13 @@ export function McpConnectClient({ orgId, userId, projects }: { orgId: string; u
   const [error, setError] = useState('')
   const [rawKey, setRawKey] = useState('')
   const [copied, setCopied] = useState('')
+  const [conflictKeyId, setConflictKeyId] = useState<string | null>(null)
 
   const selected = TOOLS.find(t => t.id === tool)!
   const endpoint = (process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')) + '/api/mcp'
 
   async function connect() {
-    setError(''); setRawKey('')
+    setError(''); setRawKey(''); setConflictKeyId(null)
     if (!projectId) { setError('Pick a project'); return }
     setBusy(true)
     try {
@@ -49,8 +50,30 @@ export function McpConnectClient({ orgId, userId, projects }: { orgId: string; u
         body: JSON.stringify({ org_id: orgId, project_id: projectId, env: 'production', scopes: ['read', 'write'], name: `MCP: ${selected.name}`, created_by: userId, user_id: userId }),
       })
       const data = await res.json()
+      if (res.status === 409 && data.existingKeyId) {
+        // Existing active key blocks a new one; the old secret can't be re-shown,
+        // so offer a one-click revoke + regenerate.
+        setConflictKeyId(data.existingKeyId)
+        setError(`An active key already exists for this project ("${data.existingKeyName ?? 'existing'}"). The old secret can't be shown again — revoke it and generate a fresh one.`)
+        return
+      }
       if (!res.ok) { setError(typeof data.error === 'string' ? data.error : 'Failed to create key'); return }
       setRawKey(data.raw_key)
+    } catch { setError('Network error') } finally { setBusy(false) }
+  }
+
+  async function revokeAndRegenerate() {
+    if (!conflictKeyId) return
+    setBusy(true); setError('')
+    try {
+      const res = await fetch('/api/v1/keys', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: conflictKeyId, is_active: false }),
+      })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d.error ?? 'Failed to revoke'); return }
+      setConflictKeyId(null)
+      await connect() // now the slot is free
     } catch { setError('Network error') } finally { setBusy(false) }
   }
 
@@ -85,7 +108,11 @@ export function McpConnectClient({ orgId, userId, projects }: { orgId: string; u
 
         {error && <p className="text-[12.5px] text-red-500">{error}</p>}
 
-        {!rawKey ? (
+        {conflictKeyId ? (
+          <button onClick={revokeAndRegenerate} disabled={busy} className="btn-primary w-full justify-center disabled:opacity-60">
+            {busy ? <><Loader2 size={15} className="animate-spin" /> Revoking &amp; generating…</> : 'Revoke old key & generate new config'}
+          </button>
+        ) : !rawKey ? (
           <button onClick={connect} disabled={busy || !projectId} className="btn-primary w-full justify-center disabled:opacity-60">
             {busy ? <><Loader2 size={15} className="animate-spin" /> Generating…</> : 'Generate key & config'}
           </button>
