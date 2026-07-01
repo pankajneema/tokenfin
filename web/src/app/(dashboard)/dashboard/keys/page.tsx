@@ -87,7 +87,7 @@ export default async function KeysPage() {
     admin.auth.admin.listUsers({ perPage: 1000 }),
     admin
       .from('usage_events')
-      .select('project_id, cost_usd')
+      .select('api_key_id, cost_usd')
       .eq('org_id', orgId)
       .gte('created_at', since30),
     admin
@@ -101,12 +101,14 @@ export default async function KeysPage() {
       .order('name'),
   ])
 
-  /* ── Per-project usage map ── */
+  /* ── Per-KEY usage map (attributed by api_key_id, not project) ── */
   const usageMap: Record<string, { reqs: number; cost: number }> = {}
   for (const e of usage ?? []) {
-    if (!usageMap[e.project_id]) usageMap[e.project_id] = { reqs: 0, cost: 0 }
-    usageMap[e.project_id].reqs++
-    usageMap[e.project_id].cost += e.cost_usd ?? 0
+    const kid = (e as { api_key_id: string | null }).api_key_id
+    if (!kid) continue // events not attributed to a key don't count toward any key
+    if (!usageMap[kid]) usageMap[kid] = { reqs: 0, cost: 0 }
+    usageMap[kid].reqs++
+    usageMap[kid].cost += e.cost_usd ?? 0
   }
 
   /* ── User display name map ── */
@@ -122,7 +124,7 @@ export default async function KeysPage() {
 
   const keys: ApiKeyRow[] = (rawKeys ?? []).map(k => {
     const proj   = k.projects as unknown as { name: string } | null
-    const u      = usageMap[k.project_id] ?? { reqs: 0, cost: 0 }
+    const u      = usageMap[k.id] ?? { reqs: 0, cost: 0 }
     const uid    = (k as Record<string, unknown>).user_id  as string | null ?? null
     const tid    = (k as Record<string, unknown>).team_id  as string | null ?? null
     return {

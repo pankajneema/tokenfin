@@ -13,12 +13,13 @@ export async function authenticate(req: NextRequest): Promise<KeyCtx | null> {
   const keyHash = crypto.createHash('sha256').update(raw).digest('hex')
   const { data } = await createAdminClient()
     .from('api_keys')
-    .select('org_id, project_id, is_active, expires_at, scopes')
+    .select('id, org_id, project_id, is_active, expires_at, scopes')
     .eq('key_hash', keyHash)
     .maybeSingle()
   if (!data || !data.is_active) return null
   if (data.expires_at && new Date(data.expires_at) < new Date()) return null
   return {
+    keyId: data.id as string,
     orgId: data.org_id as string,
     projectId: (data.project_id as string | null) ?? null,
     scopes: (data.scopes as string[] | null) ?? [],

@@ -38,37 +38,39 @@ export default async function McpPage() {
       .select('id, name')
       .eq('org_id', orgId),
     admin
-      .from('usage_agg')
-      .select('project_id, model, total_tokens, cost_usd, request_count')
+      .from('usage_events')
+      .select('api_key_id, model, total_tokens, cost_usd')
       .eq('org_id', orgId)
-      .gte('bucket', since),
+      .gte('created_at', since)
+      .limit(100_000),
   ])
 
   // Build project name lookup
   const projNames = new Map<string, string>((projects ?? []).map(p => [p.id, p.name]))
 
-  // Aggregate usage per project+model
+  // Aggregate usage per KEY + model (attributed by api_key_id, not project).
   type UsageAgg = Map<string, { tokens: number; cost: number; calls: number; models: Map<string, { tokens: number; cost: number; calls: number }> }>
-  const projUsage: UsageAgg = new Map()
+  const keyUsage: UsageAgg = new Map()
 
   for (const row of usageRows ?? []) {
-    const pid = row.project_id
-    if (!projUsage.has(pid)) projUsage.set(pid, { tokens: 0, cost: 0, calls: 0, models: new Map() })
-    const pu = projUsage.get(pid)!
+    const kid = (row as { api_key_id: string | null }).api_key_id
+    if (!kid) continue // unattributed events count toward no key
+    if (!keyUsage.has(kid)) keyUsage.set(kid, { tokens: 0, cost: 0, calls: 0, models: new Map() })
+    const pu = keyUsage.get(kid)!
     pu.tokens += row.total_tokens ?? 0
     pu.cost   += Number(row.cost_usd ?? 0)
-    pu.calls  += row.request_count ?? 0
+    pu.calls  += 1 // one usage_event = one call
 
     const prev = pu.models.get(row.model) ?? { tokens: 0, cost: 0, calls: 0 }
     pu.models.set(row.model, {
       tokens: prev.tokens + (row.total_tokens ?? 0),
       cost:   prev.cost   + Number(row.cost_usd ?? 0),
-      calls:  prev.calls  + (row.request_count ?? 0),
+      calls:  prev.calls  + 1,
     })
   }
 
   const platforms: PlatformRow[] = (keys ?? []).map(k => {
-    const pu  = projUsage.get(k.project_id) ?? { tokens: 0, cost: 0, calls: 0, models: new Map() }
+    const pu  = keyUsage.get(k.id) ?? { tokens: 0, cost: 0, calls: 0, models: new Map() }
     const models: PlatformModel[] = Array.from(pu.models.entries())
       .map(([model, u]) => ({ model, tokens30d: u.tokens, cost30d: u.cost, calls30d: u.calls }))
       .sort((a, b) => b.cost30d - a.cost30d)

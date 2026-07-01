@@ -278,6 +278,7 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   const { error: evtErr } = await admin.from('usage_events').insert({
     org_id:        orgId,
     project_id:    resolvedProjectId,
+    api_key_id:    keyRow.id,   // attribute usage to the key that sent it
     model,
     input_tokens:  effectiveInput,
     output_tokens: effectiveOutput,
