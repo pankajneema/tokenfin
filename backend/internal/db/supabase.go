@@ -313,6 +313,23 @@ func (c *Client) post(ctx context.Context, url string, body any) error {
 	return c.send(ctx, http.MethodPost, url, body)
 }
 
+// ModelRoute is an active eval-informed routing rule (migration 021).
+type ModelRoute struct {
+	OrgID     string `json:"org_id"`
+	FromModel string `json:"from_model"`
+	ToModel   string `json:"to_model"`
+}
+
+// LoadModelRoutes returns all active routes across orgs (the gateway caches them).
+func (c *Client) LoadModelRoutes(ctx context.Context) ([]ModelRoute, error) {
+	url := c.baseURL + "/rest/v1/model_routes?is_active=eq.true&select=org_id,from_model,to_model"
+	var rows []ModelRoute
+	if err := c.get(ctx, url, &rows); err != nil {
+		return nil, fmt.Errorf("load model routes: %w", err)
+	}
+	return rows, nil
+}
+
 // PromptCapture is one full-prompt record (opt-in; see migration 014).
 type PromptCapture struct {
 	OrgID        string  `json:"org_id"`

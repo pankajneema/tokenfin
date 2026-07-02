@@ -50,6 +50,7 @@ func main() {
 	holdout := envFloat("HEADROOM_HOLDOUT", 0.05)
 
 	capturePrompts := os.Getenv("CAPTURE_PROMPTS") == "1"
+	routing := os.Getenv("HEADROOM_ROUTING") == "1"
 
 	svc := gateway.NewService(authSvc, redisClient, dbClient, gateway.Config{
 		AnthropicUpstream: os.Getenv("GATEWAY_ANTHROPIC_UPSTREAM"),
@@ -57,7 +58,15 @@ func main() {
 		VerbosityLevel:    verbosity,
 		HoldoutRate:       holdout,
 		CapturePrompts:    capturePrompts,
+		Routing:           routing,
 	}, log)
+
+	// Eval-informed routing: keep the route cache warm.
+	if routing {
+		rctx, rcancel := context.WithCancel(context.Background())
+		defer rcancel()
+		go svc.RefreshRoutesLoop(rctx)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {

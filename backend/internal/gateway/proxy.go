@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tokenfin/backend/internal/auth"
@@ -51,7 +52,11 @@ type Service struct {
 	verbosity   int
 	holdoutRate float64
 	capture     bool
+	routing     bool
 	rng         *rand.Rand
+
+	mu     sync.RWMutex
+	routes map[string]map[string]string // orgID → fromModel → toModel
 }
 
 type Config struct {
@@ -60,6 +65,7 @@ type Config struct {
 	VerbosityLevel    int
 	HoldoutRate       float64
 	CapturePrompts    bool
+	Routing           bool
 }
 
 func NewService(authSvc *auth.Service, rc *redis.Client, dbc *db.Client, cfg Config, log *slog.Logger) *Service {
@@ -80,7 +86,9 @@ func NewService(authSvc *auth.Service, rc *redis.Client, dbc *db.Client, cfg Con
 		verbosity:   cfg.VerbosityLevel,
 		holdoutRate: cfg.HoldoutRate,
 		capture:     cfg.CapturePrompts,
+		routing:     cfg.Routing,
 		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		routes:      map[string]map[string]string{},
 	}
 }
 
@@ -118,7 +126,16 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	holdout := s.rng.Float64() < s.holdoutRate
 	outBody := original
 	var optimizations []string
-	model := extractModel(original)
+	originalModel := extractModel(original)
+	routedModel := originalModel
+
+	// Eval-informed routing: rewrite to the approved cheaper model (same provider).
+	if s.routing && !holdout && apiKey != nil {
+		if to := s.routeFor(apiKey.OrgID, originalModel); to != "" && to != originalModel {
+			routedModel = to
+		}
+	}
+	routed := routedModel != originalModel
 
 	streaming := isStream(original)
 
@@ -126,6 +143,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var parsed map[string]any
 		if json.Unmarshal(original, &parsed) == nil {
 			optimizations = shapeAnthropic(parsed, s.verbosity)
+			if routed {
+				parsed["model"] = routedModel
+				optimizations = append(optimizations, "model_routing")
+			}
 
 			// CCR input compression is only safe on non-streaming requests
 			// (the retrieve round-trip must buffer the response). Streaming
@@ -146,13 +167,20 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if reb, err := json.Marshal(parsed); err == nil {
 				outBody = reb
 			} else {
-				optimizations, ccrActive = nil, false // marshal failed → fail open
+				optimizations = nil // marshal failed → fail open
+				ccrActive = false
 			}
 
 			if ccrActive {
-				s.handleCCR(w, r, parsed, original, upstreamURL, apiKey, model, optimizations, holdout)
+				s.handleCCR(w, r, parsed, original, upstreamURL, apiKey, originalModel, optimizations, holdout)
 				return
 			}
+		}
+	} else if routed {
+		// Non-Anthropic (or otherwise unparsed) path — rewrite the model generically.
+		if reb := rewriteModel(outBody, routedModel); reb != nil {
+			outBody = reb
+			optimizations = append(optimizations, "model_routing")
 		}
 	}
 
@@ -200,18 +228,21 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Record asynchronously — never on the response path.
 	if apiKey != nil && resp.StatusCode < 300 {
 		inTok, outTok := parseUsage(capture.Bytes())
-		if m := extractModel(capture.Bytes()); m != "" {
-			model = m
-		}
-		go s.record(apiKey, model, original, outBody, capture.Bytes(), inTok, outTok, optimizations, holdout)
+		go s.record(apiKey, originalModel, original, outBody, capture.Bytes(), inTok, outTok, optimizations, holdout)
 	}
 }
 
 // record builds the usage event (with savings) and publishes to the stream the
-// worker already drains into usage_events / usage_agg.
-func (s *Service) record(key *models.APIKey, model string, original, sent, resp []byte, inTok, outTok int, opts []string, holdout bool) {
-	if model == "" {
-		model = "unknown"
+// worker already drains into usage_events / usage_agg. `originalModel` is what
+// the client asked for (baseline); the actual model billed is read from the
+// response — so model-routing savings show as baseline(original) − actual(routed).
+func (s *Service) record(key *models.APIKey, originalModel string, original, sent, resp []byte, inTok, outTok int, opts []string, holdout bool) {
+	if originalModel == "" {
+		originalModel = "unknown"
+	}
+	actualModel := originalModel
+	if m := extractModel(resp); m != "" {
+		actualModel = m
 	}
 	// Baseline input = what the ORIGINAL (un-optimized) request would have cost.
 	baselineInEst := estimateTokens(string(original))
@@ -225,8 +256,8 @@ func (s *Service) record(key *models.APIKey, model string, original, sent, resp 
 	if inTok == 0 {
 		inTok = sentInEst
 	}
-	cost := pricing.Calculate(model, inTok, outTok)
-	baselineCost := pricing.Calculate(model, inTok+inputSaved, outTok)
+	cost := pricing.Calculate(actualModel, inTok, outTok)                    // billed (routed) model
+	baselineCost := pricing.Calculate(originalModel, inTok+inputSaved, outTok) // requested model + uncompressed input
 
 	optMap := map[string]any{"holdout": holdout}
 	for _, o := range opts {
@@ -237,7 +268,7 @@ func (s *Service) record(key *models.APIKey, model string, original, sent, resp 
 		ID:                newID(),
 		OrgID:             key.OrgID,
 		ProjectID:         key.ProjectID,
-		Model:             model,
+		Model:             actualModel,
 		InputTokens:       inTok,
 		OutputTokens:      outTok,
 		TotalTokens:       inTok + outTok,
@@ -265,7 +296,7 @@ func (s *Service) record(key *models.APIKey, model string, original, sent, resp 
 	if s.capture && s.db != nil {
 		pc := &db.PromptCapture{
 			OrgID: key.OrgID, ProjectID: key.ProjectID,
-			Model: model, PromptText: extractPromptText(original), ResponseText: extractResponseText(resp),
+			Model: actualModel, PromptText: extractPromptText(original), ResponseText: extractResponseText(resp),
 			InputTokens: inTok, OutputTokens: outTok, CostUSD: cost,
 		}
 		if h, ok := optMap["prompt_hash"].(string); ok {
@@ -367,7 +398,7 @@ func clip(s string) string {
 // resolve any headroom_retrieve tool call inline (one round), return the final
 // response. Compression already happened in `parsed`; `original` is the
 // uncompressed body (for measuring savings).
-func (s *Service) handleCCR(w http.ResponseWriter, r *http.Request, parsed map[string]any, original []byte, url string, apiKey *models.APIKey, model string, opts []string, holdout bool) {
+func (s *Service) handleCCR(w http.ResponseWriter, r *http.Request, parsed map[string]any, original []byte, url string, apiKey *models.APIKey, originalModel string, opts []string, holdout bool) {
 	firstBody, _ := json.Marshal(parsed)
 
 	respMap, raw, status, err := s.forwardJSON(r, url, firstBody)
@@ -412,10 +443,7 @@ func (s *Service) handleCCR(w http.ResponseWriter, r *http.Request, parsed map[s
 
 	if apiKey != nil && status < 300 {
 		in, out := parseUsage(finalRaw)
-		if m := extractModel(finalRaw); m != "" {
-			model = m
-		}
-		go s.record(apiKey, model, original, firstBody, finalRaw, in, out, opts, holdout)
+		go s.record(apiKey, originalModel, original, firstBody, finalRaw, in, out, opts, holdout)
 	}
 	_ = respMap
 }

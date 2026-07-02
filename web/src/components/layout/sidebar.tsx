@@ -8,6 +8,7 @@ import {
   Zap, LayoutDashboard, BarChart3,
   Layers, Users, UserPlus, Key, Shield, Bell, GitBranch, Settings,
   ChevronLeft, ChevronRight, ChevronDown, HelpCircle, BookOpen, Puzzle, Gauge, Plug,
+  Waypoints, ShieldCheck, Database, GitCompare, ClipboardCheck, Scale,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -49,6 +50,17 @@ const NAV_GROUPS: NavGroup[] = [
           { label: 'Savings',      href: '/dashboard/analytics/savings'  },
         ],
       },
+    ],
+  },
+  {
+    label: 'Beta',
+    items: [
+      { label: 'Traces',      href: '/dashboard/traces',      icon: Waypoints },
+      { label: 'Evals',       href: '/dashboard/evals',       icon: ShieldCheck },
+      { label: 'Quality × Cost', href: '/dashboard/analytics/quality-cost', icon: Scale },
+      { label: 'Datasets',    href: '/dashboard/datasets',    icon: Database },
+      { label: 'Pairwise',    href: '/dashboard/pairwise',    icon: GitCompare },
+      { label: 'Annotations', href: '/dashboard/annotations', icon: ClipboardCheck },
     ],
   },
   {

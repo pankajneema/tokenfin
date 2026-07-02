@@ -2,6 +2,8 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { compressContent } from './compress'
 import { ccrPut, ccrGet } from './ccr'
 import { inputPrice, computeCost } from './pricing'
+import { judgeFaithfulness, judgeCorrectness } from '@/lib/eval/judge'
+import { resolveJudge } from '@/lib/eval/config'
 import type { KeyCtx } from './types'
 
 const istBucket = () => new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10)
@@ -141,6 +143,31 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
         cost_saved_usd: +rows.reduce((s, r) => s + Number(r.baseline_cost_usd ?? 0), 0).toFixed(4),
         compressions: rows.length,
       }
+    }
+
+    // ── Evaluation ──
+    case 'evaluate': {
+      const evaluator = args.evaluator === 'correctness' ? 'correctness' : 'faithfulness'
+      const answer = String(args.answer ?? '')
+      if (!answer) throw new Error('answer is required')
+      const cfg = await resolveJudge(ctx.orgId)
+      if (!cfg.key) throw new Error('No eval key configured for this org (set one in Evals settings).')
+      const r = evaluator === 'faithfulness'
+        ? await judgeFaithfulness(cfg, answer, String(args.context ?? ''))
+        : await judgeCorrectness(cfg, String(args.question ?? ''), answer, String(args.reference ?? ''))
+      await admin.from('eval_scores').insert({
+        org_id: ctx.orgId, evaluator, target_type: 'span', target_id: null,
+        score: r.score, passed: r.passed, rationale: r.rationale, judge_model: r.judgeModel,
+      })
+      return { evaluator, score: r.score, passed: r.passed, rationale: r.rationale }
+    }
+    case 'get_eval_summary': {
+      const { data } = await admin.from('eval_scores')
+        .select('evaluator, score, passed').eq('org_id', ctx.orgId).eq('evaluator', 'faithfulness').gte('created_at', since)
+      const rows = (data ?? []).filter(r => r.score != null)
+      const mean = rows.length ? +(rows.reduce((s, r) => s + Number(r.score), 0) / rows.length).toFixed(3) : null
+      const hallucinationRate = rows.length ? +(rows.filter(r => r.passed === false).length / rows.length).toFixed(3) : null
+      return { period_days: days, scored: rows.length, mean_faithfulness: mean, hallucination_rate: hallucinationRate }
     }
 
     default:

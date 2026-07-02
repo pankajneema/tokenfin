@@ -65,6 +65,29 @@ export const TOOLS = [
     annotations: { title: 'Savings stats', readOnlyHint: true, openWorldHint: false },
   },
   // ── Auto-sync: report usage (+ optional prompt) after each model call ──
+  // ── Evaluation (quality / hallucination) ──
+  {
+    name: 'evaluate',
+    description: 'Score an answer. evaluator "faithfulness" checks grounding against context (hallucination); "correctness" compares to a reference. Returns a 0–1 score.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        evaluator: { type: 'string', enum: ['faithfulness', 'correctness'] },
+        answer: { type: 'string' },
+        context: { type: 'string', description: 'for faithfulness' },
+        question: { type: 'string', description: 'for correctness' },
+        reference: { type: 'string', description: 'for correctness' },
+      },
+      required: ['evaluator', 'answer'], additionalProperties: false,
+    },
+    annotations: { title: 'Evaluate answer', readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'get_eval_summary',
+    description: 'Hallucination rate and mean faithfulness over the last N days (default 30).',
+    inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 365 } }, additionalProperties: false },
+    annotations: { title: 'Eval summary', readOnlyHint: true, openWorldHint: false },
+  },
   {
     name: 'record_usage',
     description: 'Report an LLM call so TokenFin syncs token usage and cost. Call this once after each model response. Optionally include the prompt/response text to capture it for prompt analytics. Cost is computed automatically if omitted.',
