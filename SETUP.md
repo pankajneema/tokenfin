@@ -362,20 +362,20 @@ make dev
 cd web && npm run dev
 ```
 
-The app starts on **http://localhost:3000**.
+The app starts on **https://tokenfin.curiousdevs.com**.
 
 Expected output:
 
 ```
 ▲ Next.js 14.x.x
-- Local:        http://localhost:3000
+- Local:        https://tokenfin.curiousdevs.com
 - Environments: .env.local
 ✓ Ready in 2.1s
 ```
 
 ### Verify the web app
 
-Open http://localhost:3000 in your browser. You should see the login page.
+Open https://tokenfin.curiousdevs.com in your browser. You should see the login page.
 
 Sign up with an email address and complete the onboarding wizard:
 1. Create your organisation
@@ -439,7 +439,7 @@ import { createTokenFin } from '@tokenfin/sdk'
 
 const tf = createTokenFin({
   apiKey:  'tf_live_your_key',
-  baseUrl: 'http://localhost:3000',  // point at local Next.js
+  baseUrl: 'https://tokenfin.curiousdevs.com',  // point at local Next.js
   debug:   true,
 })
 
@@ -493,7 +493,7 @@ from tokenfin import TokenFinClient
 
 tf = TokenFinClient(
     api_key="tf_live_your_key",
-    base_url="http://localhost:3000",   # point at local Next.js
+    base_url="https://tokenfin.curiousdevs.com",   # point at local Next.js
     debug=True,
 )
 
@@ -512,7 +512,7 @@ import asyncio
 from tokenfin import AsyncTokenFinClient
 
 async def main():
-    tf = AsyncTokenFinClient(api_key="tf_live_your_key", base_url="http://localhost:3000")
+    tf = AsyncTokenFinClient(api_key="tf_live_your_key", base_url="https://tokenfin.curiousdevs.com")
     await tf.track(model="gpt-4o", input_tokens=100, output_tokens=50)
     await tf.flush()
 
@@ -591,14 +591,14 @@ Run this sequence to confirm the full pipeline is operational:
 
 ### 1. Create an API key
 
-1. Open http://localhost:3000 and log in.
+1. Open https://tokenfin.curiousdevs.com and log in.
 2. Go to **Settings → API Keys → New Key**.
 3. Select your project and copy the key (`tf_live_...`).
 
 ### 2. Send a test event
 
 ```bash
-curl -X POST http://localhost:3000/api/v1/ingest \
+curl -X POST https://tokenfin.curiousdevs.com/api/v1/ingest \
   -H "Authorization: Bearer tf_live_your_key" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","input_tokens":800,"output_tokens":120,"tags":{"env":"dev"}}'
@@ -624,7 +624,7 @@ Look for:
 
 ### 4. Check the dashboard
 
-Open http://localhost:3000/dashboard — within a few seconds you should see:
+Open https://tokenfin.curiousdevs.com/dashboard — within a few seconds you should see:
 
 - The KPI cards update with token count and cost.
 - The recent events table shows your test event.
