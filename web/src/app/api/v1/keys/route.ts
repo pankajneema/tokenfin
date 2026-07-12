@@ -3,6 +3,7 @@ import type { NextRequest }                                     from 'next/serve
 import { createAdminClient }                                    from '@/lib/supabase/server'
 import { requireOrgMember, requirePermission, requireResourceOwner, dbError } from '@/lib/api/auth'
 import crypto                                                    from 'crypto'
+import { sealKey }                                               from '@/lib/crypto/key-reveal'
 import { z }                                                     from 'zod'
 
 function db() { return createAdminClient() }
@@ -141,6 +142,9 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Encrypt the raw key so it can be copied again later (migration 022).
+  const sealed = sealKey(rawKey)
+
   // ── Insert — gracefully handles missing columns if migrations haven't run ──
   const insertPayload: Record<string, unknown> = {
     org_id, project_id, name, created_by,
@@ -148,6 +152,9 @@ export async function POST(req: NextRequest) {
     team_id: team_id ?? null,
     key_hash:   keyHash,
     key_prefix: keyPrefix,
+    key_enc_cipher: sealed.ciphertext,
+    key_enc_iv:     sealed.iv,
+    key_enc_tag:    sealed.authTag,
     env, scopes, expires_at: expires_at ?? null,
   }
 
@@ -158,8 +165,9 @@ export async function POST(req: NextRequest) {
     .single()
 
   // Graceful fallback if migrations 005/006 haven't been applied yet
-  if (error && (error.message?.includes('user_id') || error.message?.includes('team_id') || (error as { code?: string }).code === '42703')) {
-    const { user_id: _u, team_id: _t, ...basePayload } = insertPayload
+  if (error && (error.message?.includes('user_id') || error.message?.includes('team_id') || error.message?.includes('key_enc') || (error as { code?: string }).code === '42703')) {
+    // Drop columns that may not exist if migrations haven't run (user/team + encrypted key).
+    const { user_id: _u, team_id: _t, key_enc_cipher: _c, key_enc_iv: _i, key_enc_tag: _g, ...basePayload } = insertPayload
     const res2 = await db()
       .from('api_keys')
       .insert(basePayload)

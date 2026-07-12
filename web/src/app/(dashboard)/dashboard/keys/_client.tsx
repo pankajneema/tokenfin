@@ -518,8 +518,21 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
     }
   }
 
-  function copyPrefix(prefix: string, id: string) {
-    navigator.clipboard.writeText(prefix)
+  // Copy the REAL, ready-to-use key (decrypted server-side). Falls back to the
+  // masked prefix only for legacy keys created before copy-anytime.
+  async function copyPrefix(prefix: string, id: string) {
+    let toCopy = prefix
+    try {
+      const res = await fetch('/api/v1/keys/reveal-full', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
+      })
+      if (res.ok) {
+        toCopy = (await res.json()).key
+      } else if (res.status === 410) {
+        alert('This key was created before copy-anytime — regenerate it to get a copyable key.')
+      }
+    } catch { /* fall back to prefix */ }
+    await navigator.clipboard.writeText(toCopy)
     setCopiedId(id)
     setTimeout(() => setCopiedId(null), 2000)
   }
@@ -751,7 +764,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
 
                         <button
                           onClick={() => { copyPrefix(k.keyPrefix, k.id); setActionMenu(null) }}
-                          /* copies the masked prefix for identification, not the secret */
+                          /* copies the real key (decrypted server-side) */
                           className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] font-medium text-[var(--fg)] hover:bg-[var(--bg-hover)] transition-colors">
                           <Copy size={13} /> Copy masked prefix
                         </button>
