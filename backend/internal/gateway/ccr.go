@@ -1,11 +1,11 @@
 package gateway
 
-// CCR request rewriting + the headroom_retrieve tool. Compression replaces bulky
+// CCR request rewriting + the tokenfin_retrieve tool. Compression replaces bulky
 // tool_result content with a summary + <<ccr:HASH>> marker and injects a tool the
 // model can call to get the original back. The proxy resolves that tool call
 // inline (buffered path) so the client never sees the machinery.
 
-const ccrToolName = "headroom_retrieve"
+const ccrToolName = "tokenfin_retrieve"
 
 // ccrToolDef returns the Anthropic-format tool definition.
 func ccrToolDef() map[string]any {
@@ -73,13 +73,13 @@ func injectRetrieveTool(body map[string]any) {
 	body["tools"] = append(tools, ccrToolDef())
 }
 
-// anthropicToolUse is a parsed headroom_retrieve call from a response.
+// anthropicToolUse is a parsed tokenfin_retrieve call from a response.
 type anthropicToolUse struct {
 	ID   string
 	Hash string
 }
 
-// parseRetrieveCalls extracts headroom_retrieve tool_use blocks from a buffered
+// parseRetrieveCalls extracts tokenfin_retrieve tool_use blocks from a buffered
 // Anthropic (non-stream) response body.
 func parseRetrieveCalls(resp map[string]any) []anthropicToolUse {
 	var calls []anthropicToolUse

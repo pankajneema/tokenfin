@@ -46,11 +46,11 @@ func main() {
 	dbClient := db.New(cfg.SupabaseURL, cfg.SupabaseKey)
 	authSvc := auth.NewService(dbClient, redisClient)
 
-	verbosity := envInt("HEADROOM_VERBOSITY_LEVEL", 2)
-	holdout := envFloat("HEADROOM_HOLDOUT", 0.05)
+	verbosity := envInt("TOKENFIN_VERBOSITY_LEVEL", 2)
+	holdout := envFloat("TOKENFIN_HOLDOUT", 0.05)
 
 	capturePrompts := os.Getenv("CAPTURE_PROMPTS") == "1"
-	routing := os.Getenv("HEADROOM_ROUTING") == "1"
+	routing := os.Getenv("TOKENFIN_ROUTING") == "1"
 
 	svc := gateway.NewService(authSvc, redisClient, dbClient, gateway.Config{
 		AnthropicUpstream: os.Getenv("GATEWAY_ANTHROPIC_UPSTREAM"),

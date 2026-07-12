@@ -1,6 +1,6 @@
 package gateway
 
-// Output shaping — the cache-safe, request-side levers from Headroom.
+// Output shaping — TokenFin's cache-safe, request-side output levers.
 //
 //  Lever A: verbosity steering — append a terse-style instruction to the TAIL
 //           of the system prompt. Tail, never head: a byte change before a
@@ -17,7 +17,7 @@ package gateway
 //   - Steering is byte-stable + idempotent (sentinel-tagged) so repeated
 //     requests keep an identical prefix.
 
-const steeringSentinel = "[headroom:vstyle]"
+const steeringSentinel = "[tokenfin:vstyle]"
 
 // Verbosity level text. L2 is the default — matches the project's own
 // output-shaping policy.

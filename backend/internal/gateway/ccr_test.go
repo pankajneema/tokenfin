@@ -63,7 +63,7 @@ func TestCompressRequestInjectsToolAndCaches(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("headroom_retrieve tool not injected")
+		t.Error("tokenfin_retrieve tool not injected")
 	}
 	// idempotent — running again must not add a second tool
 	compressRequest(body)

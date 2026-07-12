@@ -152,7 +152,7 @@ func (c *Client) CCRGet(ctx context.Context, hash string) (string, error) {
 
 // ─── Key builders — single source of truth for Redis key names ───────────────
 
-func ccrK(hash string) string                { return "hr:ccr:" + hash }
+func ccrK(hash string) string                { return "tf:ccr:" + hash }
 func apiKeyK(hash string) string             { return "apikey:" + hash }
 func usageTokenK(orgID, month string) string { return fmt.Sprintf("org:%s:usage:tokens:%s", orgID, month) }
 func usageCostK(orgID, month string) string  { return fmt.Sprintf("org:%s:usage:cost:%s", orgID, month) }

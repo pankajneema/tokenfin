@@ -22,7 +22,7 @@ func marshalNoEscape(v any) ([]byte, error) {
 
 // CCR — Compress-Cache-Retrieve. Reversible compression of bulky tool-result
 // content. The original is cached (Redis) under a hash; the compressed form
-// carries a <<ccr:HASH>> marker so the model (via the headroom_retrieve tool)
+// carries a <<ccr:HASH>> marker so the model (via the tokenfin_retrieve tool)
 // can fetch the full version on demand. Nothing is ever irreversibly lost.
 
 const (
@@ -55,7 +55,7 @@ func compressContent(s string) (out, hash string, saved int, ok bool) {
 			"kept":          kept,
 			"total_items":   len(arr),
 			"dropped_items": len(arr) - ccrKeepItems,
-			"note":          "Truncated to save tokens. Call headroom_retrieve with the hash above for all items.",
+			"note":          "Truncated to save tokens. Call tokenfin_retrieve with the hash above for all items.",
 		}
 		if b, err := marshalNoEscape(summary); err == nil {
 			out = string(b)
@@ -67,7 +67,7 @@ func compressContent(s string) (out, hash string, saved int, ok bool) {
 	r := []rune(s)
 	if len(r) > ccrHeadChars+ccrTailChars+200 {
 		out = string(r[:ccrHeadChars]) +
-			fmt.Sprintf("\n…[%d chars omitted — headroom_retrieve <<ccr:%s>> for full content]…\n", len(r)-ccrHeadChars-ccrTailChars, hash) +
+			fmt.Sprintf("\n…[%d chars omitted — tokenfin_retrieve <<ccr:%s>> for full content]…\n", len(r)-ccrHeadChars-ccrTailChars, hash) +
 			string(r[len(r)-ccrTailChars:])
 		return out, hash, estimateTokens(s) - estimateTokens(out), true
 	}

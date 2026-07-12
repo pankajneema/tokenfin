@@ -395,7 +395,7 @@ func clip(s string) string {
 }
 
 // handleCCR runs the buffered path for input-compressed requests: forward,
-// resolve any headroom_retrieve tool call inline (one round), return the final
+// resolve any tokenfin_retrieve tool call inline (one round), return the final
 // response. Compression already happened in `parsed`; `original` is the
 // uncompressed body (for measuring savings).
 func (s *Service) handleCCR(w http.ResponseWriter, r *http.Request, parsed map[string]any, original []byte, url string, apiKey *models.APIKey, originalModel string, opts []string, holdout bool) {
