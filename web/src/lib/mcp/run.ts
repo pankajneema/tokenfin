@@ -76,7 +76,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       const model = typeof args.model === 'string' ? args.model : 'mcp'
       const costSaved = +(tokensSaved * inputPrice(model) / 1e6).toFixed(8)
       await admin.from('usage_events').insert({
-        org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, model,
+        org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, user_id: ctx.userId, model,
         input_tokens: 0, output_tokens: 0, total_tokens: 0, cost_usd: 0,
         input_tokens_saved: tokensSaved, baseline_cost_usd: costSaved,
         tags: { source: 'mcp' }, metadata: { mcp_compress: true },
@@ -96,7 +96,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       const bucket = istBucket()
 
       await admin.from('usage_events').insert({
-        org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, model,
+        org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, user_id: ctx.userId, model,
         input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok,
         cost_usd: cost, tags: { source: 'mcp' }, metadata: { mcp: true },
       })
@@ -123,7 +123,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       let captured = false
       if (typeof args.prompt === 'string' && args.prompt) {
         const { error: capErr } = await admin.from('prompt_captures').insert({
-          org_id: ctx.orgId, project_id: ctx.projectId, model,
+          org_id: ctx.orgId, project_id: ctx.projectId, user_id: ctx.userId, model,
           prompt_text: String(args.prompt).slice(0, 100_000),
           response_text: typeof args.response === 'string' ? args.response.slice(0, 100_000) : null,
           input_tokens: inTok, output_tokens: outTok, cost_usd: cost,

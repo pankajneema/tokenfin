@@ -71,7 +71,7 @@ const TOOL_GUIDES: ToolGuide[] = [
       {
         n:    3,
         title: 'Tell Codex to use the TokenFin address',
-        desc:  'Look for a section like `[model_providers.something]` — it might say "headroom", "openai", or another name. That is just the name of the AI service Codex is talking to. Inside that section, find the line that says `base_url` and change it to the address below, then save the file (Cmd+S):',
+        desc:  'Look for a section like `[model_providers.something]` — it might say "tokenfin", "openai", or another name. That is just the name of the AI service Codex is talking to. Inside that section, find the line that says `base_url` and change it to the address below, then save the file (Cmd+S):',
         code:  'base_url = "http://127.0.0.1:7070/v1"',
         tip:   'Port 7070 is where the TokenFin tracker runs on your computer. All Codex AI calls will pass through it before reaching the AI provider — that\'s how usage gets captured.',
       },
@@ -994,7 +994,7 @@ export default function ResourcesPage() {
                   },
                   {
                     q: 'My Codex works fine but usage is not being tracked.',
-                    a: 'The most common cause is the base_url in ~/.codex/config.toml still pointing to the old provider address. Open that file in a text editor and confirm the relevant line reads: base_url = "http://127.0.0.1:7070/v1". The section name above it (like [model_providers.headroom]) does not matter — just the URL value inside it. If the URL looks correct, try running install.command again to verify the tracker is running, then restart your terminal.',
+                    a: 'The most common cause is the base_url in ~/.codex/config.toml still pointing to the old provider address. Open that file in a text editor and confirm the relevant line reads: base_url = "http://127.0.0.1:7070/v1". The section name above it (like [model_providers.tokenfin]) does not matter — just the URL value inside it. If the URL looks correct, try running install.command again to verify the tracker is running, then restart your terminal.',
                   },
                   {
                     q: 'Can I track API calls from a custom application I am building?',

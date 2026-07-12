@@ -13,7 +13,7 @@ export async function authenticate(req: NextRequest): Promise<KeyCtx | null> {
   const keyHash = crypto.createHash('sha256').update(raw).digest('hex')
   const { data } = await createAdminClient()
     .from('api_keys')
-    .select('id, org_id, project_id, is_active, expires_at, scopes')
+    .select('id, org_id, project_id, user_id, is_active, expires_at, scopes')
     .eq('key_hash', keyHash)
     .maybeSingle()
   if (!data || !data.is_active) return null
@@ -22,6 +22,7 @@ export async function authenticate(req: NextRequest): Promise<KeyCtx | null> {
     keyId: data.id as string,
     orgId: data.org_id as string,
     projectId: (data.project_id as string | null) ?? null,
+    userId: (data.user_id as string | null) ?? null,
     scopes: (data.scopes as string[] | null) ?? [],
   }
 }

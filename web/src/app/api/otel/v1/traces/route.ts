@@ -15,7 +15,7 @@ import crypto from 'crypto'
 import { createAdminClient } from '@/lib/supabase/server'
 import { computeCost } from '@/lib/mcp/pricing'
 
-interface KeyCtx { orgId: string; projectId: string | null; keyId: string }
+interface KeyCtx { orgId: string; projectId: string | null; keyId: string; userId: string | null }
 
 async function auth(req: NextRequest): Promise<KeyCtx | null> {
   const raw = req.headers.get('x-api-key')
@@ -23,10 +23,10 @@ async function auth(req: NextRequest): Promise<KeyCtx | null> {
   if (!raw) return null
   const keyHash = crypto.createHash('sha256').update(raw).digest('hex')
   const { data } = await createAdminClient()
-    .from('api_keys').select('id, org_id, project_id, is_active, expires_at').eq('key_hash', keyHash).maybeSingle()
+    .from('api_keys').select('id, org_id, project_id, user_id, is_active, expires_at').eq('key_hash', keyHash).maybeSingle()
   if (!data || !data.is_active) return null
   if (data.expires_at && new Date(data.expires_at) < new Date()) return null
-  return { orgId: data.org_id, projectId: data.project_id ?? null, keyId: data.id }
+  return { orgId: data.org_id, projectId: data.project_id ?? null, keyId: data.id, userId: data.user_id ?? null }
 }
 
 // OTLP attribute value → JS primitive.
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
 
         if (model && (inTok + outTok) > 0) {
           usageRows.push({
-            org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, model,
+            org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, user_id: ctx.userId, model,
             input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok, cost_usd: cost,
             tags: { source: 'otel' }, metadata: { trace_id: traceId, span_id: spanId },
           })

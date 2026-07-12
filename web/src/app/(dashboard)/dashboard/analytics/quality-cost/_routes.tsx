@@ -29,7 +29,7 @@ export function RoutesPanel({ orgId, models, recommended, routes }: {
   return (
     <div className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
       <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-[var(--fg)]"><Route size={15} className="text-teal" /> Auto-routing</div>
-      <p className="mb-3 text-[11.5px] text-[var(--fg-tertiary)]">The gateway rewrites requests for “from” to “to” (same provider). Savings recorded automatically. Requires the gateway with HEADROOM_ROUTING=1.</p>
+      <p className="mb-3 text-[11.5px] text-[var(--fg-tertiary)]">The gateway rewrites requests for “from” to “to” (same provider). Savings recorded automatically. Requires the gateway with TOKENFIN_ROUTING=1.</p>
 
       {routes.length > 0 && (
         <div className="mb-3 space-y-1.5">

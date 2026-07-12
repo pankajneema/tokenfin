@@ -185,7 +185,7 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
   const keyHash = hashKey(apiKey)
   const { data: keyRow } = await admin
     .from('api_keys')
-    .select('id, org_id, project_id, is_active, expires_at, scopes')
+    .select('id, org_id, project_id, user_id, is_active, expires_at, scopes')
     .eq('key_hash', keyHash)
     .single()
 
@@ -279,6 +279,7 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
     org_id:        orgId,
     project_id:    resolvedProjectId,
     api_key_id:    keyRow.id,   // attribute usage to the key that sent it
+    user_id:       keyRow.user_id ?? null,   // and to the member the key belongs to (My Usage)
     model,
     input_tokens:  effectiveInput,
     output_tokens: effectiveOutput,

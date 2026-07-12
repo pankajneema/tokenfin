@@ -12,6 +12,10 @@ import { FirstEventCelebration }  from '@/components/dashboard/first-event-celeb
 
 export const metadata = { title: 'Overview — TokenFin' }
 
+// Always render fresh — usage data changes on every ingest / record_usage call.
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 /* ── Sparkline builder ────────────────────────────────── */
 type SparkRow = { cost_usd?: number | null; total_tokens?: number | null; created_at: string }
 function buildSparklines(events: SparkRow[]) {

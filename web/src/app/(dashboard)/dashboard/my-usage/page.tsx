@@ -3,6 +3,10 @@ import { MyUsageClient } from './_client'
 
 export const metadata = { title: 'My Usage — TokenFin' }
 
+// Always render fresh — usage data changes on every ingest / record_usage call.
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 export interface ModelSlice { model: string; cost: number; tokens: number; requests: number }
 export interface DayPoint   { day: string; cost: number }
 export interface PromptRow  { hash: string; cost: number; requests: number; model: string }

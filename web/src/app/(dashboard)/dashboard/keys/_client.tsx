@@ -674,9 +674,10 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
                     <button
                       onClick={() => copyPrefix(k.keyPrefix, k.id)}
                       className="text-[var(--fg-tertiary)] hover:text-coral transition-colors flex-shrink-0"
-                      title="Copy key prefix (full key is shown only at creation)">
+                      title="This is a masked identifier, not the key. The full key is shown only once at creation — rotate the key to get a new one.">
                       {copiedId === k.id ? <Check size={12} className="text-teal" /> : <Copy size={12} />}
                     </button>
+                    <span className="text-[9px] font-semibold uppercase tracking-wide text-[var(--fg-tertiary)] bg-[var(--bg-secondary)] px-1.5 py-0.5 rounded flex-shrink-0">masked</span>
                   </div>
                 </div>
 
@@ -752,7 +753,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
                           onClick={() => { copyPrefix(k.keyPrefix, k.id); setActionMenu(null) }}
                           /* copies the masked prefix for identification, not the secret */
                           className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12.5px] font-medium text-[var(--fg)] hover:bg-[var(--bg-hover)] transition-colors">
-                          <Copy size={13} /> Copy prefix
+                          <Copy size={13} /> Copy masked prefix
                         </button>
 
                         {can(role, 'keys:delete') && (

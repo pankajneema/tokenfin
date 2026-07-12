@@ -43,6 +43,10 @@ function detectPlatform(tags: Record<string, string> | null): string {
 
 export const metadata = { title: 'Analytics — TokenFin' }
 
+// Always render fresh — usage data changes on every ingest / record_usage call.
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 const MODEL_COLORS = ['#D97757','#E8896A','#10A37F','#F0AC8A','#0D8A6A','#4285F4','#6B7280']
 
 function fmtDay(iso: string) {

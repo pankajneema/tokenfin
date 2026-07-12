@@ -3,5 +3,6 @@ export interface KeyCtx {
   keyId: string
   orgId: string
   projectId: string | null
+  userId: string | null
   scopes: string[]
 }
