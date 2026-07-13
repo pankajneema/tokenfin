@@ -208,9 +208,6 @@ function PaymentModal({ plan, billing, invoice, step, onContinue }: {
   step:     PaymentStep
   onContinue: () => void
 }) {
-  const amount     = billing ? plan.annual : plan.monthly
-  const totalLabel = billing ? `$${(amount! * 12).toFixed(2)} / year` : `$${amount!.toFixed(2)} / month`
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-[3px]" />
@@ -222,35 +219,28 @@ function PaymentModal({ plan, billing, invoice, step, onContinue }: {
               <span className="w-8 h-8 rounded-full border-[3px] border-coral/30 border-t-coral animate-spin block" />
             </div>
             <div>
-              <p className="text-[16px] font-bold text-[var(--fg)]">Processing…</p>
-              <p className="text-[13px] text-[var(--fg-secondary)] mt-1">Setting up your {plan.name} plan</p>
+              <p className="text-[16px] font-bold text-[var(--fg)]">Activating…</p>
+              <p className="text-[13px] text-[var(--fg-secondary)] mt-1">Switching you to {plan.name}</p>
             </div>
           </div>
         ) : (
           <>
-            {/* Success header */}
+            {/* Activation confirmation — honest, free during early access */}
             <div className="bg-[var(--green-bg)] px-6 py-5 flex items-center gap-4 border-b border-[var(--border)]">
               <div className="w-12 h-12 rounded-2xl bg-teal/20 flex items-center justify-center flex-shrink-0">
                 <CheckCircle2 size={24} className="text-teal" />
               </div>
               <div>
-                <p className="text-[15px] font-bold text-[var(--fg)]">Purchase complete!</p>
-                <p className="text-[12px] text-[var(--fg-secondary)]">Your {plan.name} plan is now active</p>
+                <p className="text-[15px] font-bold text-[var(--fg)]">You’re on {plan.name}</p>
+                <p className="text-[12px] text-[var(--fg-secondary)]">Activated — free during early access</p>
               </div>
             </div>
 
-            {/* Invoice receipt */}
             <div className="px-6 py-5">
               <div className="bg-[var(--bg-secondary)] rounded-xl p-4 mb-4 border border-[var(--border)]">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-[11px] font-bold text-[var(--fg-tertiary)] uppercase tracking-wider">Invoice</p>
-                  <span className="px-2 py-0.5 rounded-full bg-[var(--green-bg)] text-teal text-[10px] font-bold">PAID</span>
-                </div>
                 {[
-                  { label: 'Invoice #',   value: invoice?.invoiceId ?? '—' },
-                  { label: 'Plan',        value: `${plan.name} (${billing ? 'Annual' : 'Monthly'})` },
-                  { label: 'Period',      value: invoice?.period ?? '' },
-                  { label: 'Date',        value: invoice?.date ?? new Date().toISOString().slice(0, 10) },
+                  { label: 'Plan',      value: plan.name },
+                  { label: 'Activated', value: invoice?.date ?? new Date().toISOString().slice(0, 10) },
                 ].map(row => (
                   <div key={row.label} className="flex items-center justify-between py-1.5 border-b border-[var(--border)] last:border-0">
                     <span className="text-[12px] text-[var(--fg-secondary)]">{row.label}</span>
@@ -258,40 +248,19 @@ function PaymentModal({ plan, billing, invoice, step, onContinue }: {
                   </div>
                 ))}
                 <div className="flex items-center justify-between pt-2.5 mt-1">
-                  <span className="text-[13px] font-bold text-[var(--fg)]">Total</span>
-                  <span className="text-[15px] font-bold text-[var(--fg)] tabular-nums">{totalLabel}</span>
+                  <span className="text-[13px] font-bold text-[var(--fg)]">Price today</span>
+                  <span className="text-[15px] font-bold text-teal tabular-nums">$0 · Free</span>
                 </div>
               </div>
 
               <p className="text-[11.5px] text-[var(--fg-tertiary)] text-center mb-4">
-                A copy of this receipt has been saved to your billing history.
+                All plans are free while TokenFin is in early access. We’ll email you well before any plan ever starts billing.
               </p>
 
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const lines = [
-                      `Invoice: ${invoice?.invoiceId}`,
-                      `Plan: ${plan.name}`,
-                      `Amount: ${totalLabel}`,
-                      `Period: ${invoice?.period}`,
-                      `Date: ${invoice?.date}`,
-                      `Status: PAID`,
-                    ].join('\n')
-                    const blob = new Blob([lines], { type: 'text/plain' })
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url; a.download = `${invoice?.invoiceId ?? 'invoice'}.txt`; a.click()
-                    URL.revokeObjectURL(url)
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--border)] text-[12.5px] font-medium text-[var(--fg-secondary)] hover:bg-[var(--bg-secondary)] transition-colors">
-                  <Download size={13} /> Receipt
-                </button>
-                <button onClick={onContinue}
-                  className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl bg-coral text-white text-[13px] font-semibold hover:opacity-90 transition-opacity">
-                  Get started <ArrowRight size={13} />
-                </button>
-              </div>
+              <button onClick={onContinue}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-coral text-white text-[13px] font-semibold hover:opacity-90 transition-opacity">
+                Get started <ArrowRight size={13} />
+              </button>
             </div>
           </>
         )}
@@ -508,10 +477,14 @@ export default function PlansPage() {
           <h1 className="text-[40px] font-bold text-[var(--fg)] tracking-tight leading-[1.15] mb-4">
             The right plan for<br />every AI team
           </h1>
-          <p className="text-[15px] text-[var(--fg-secondary)] max-w-md mx-auto leading-relaxed mb-8">
-            Start free, upgrade when you&apos;re ready. All plans include a 14-day trial — no credit card required.
+          <p className="text-[15px] text-[var(--fg-secondary)] max-w-md mx-auto leading-relaxed mb-5">
+            Pick any plan and start now. Prices below are our future list price —
+            <span className="font-semibold text-[var(--fg)]"> every plan is free while TokenFin is in early access.</span>
           </p>
-          <BillingToggle annual={annual} onChange={setAnnual} />
+          <div className="mx-auto mb-8 inline-flex items-center gap-1.5 rounded-full bg-[var(--green-bg)] px-3 py-1 text-[12px] font-semibold text-teal">
+            <CheckCircle2 size={13} /> Free during early access · no credit card
+          </div>
+          <div><BillingToggle annual={annual} onChange={setAnnual} /></div>
         </div>
 
         {error && (
@@ -550,7 +523,7 @@ export default function PlansPage() {
           Questions?{' '}
           <button onClick={() => setShowSales(true)} className="text-coral hover:underline font-medium">Chat with us</button>
           {' '}or{' '}
-          <Link href="/docs" className="text-coral hover:underline font-medium">read the docs</Link>
+          <Link href="/dashboard/resources" className="text-coral hover:underline font-medium">read the docs</Link>
         </p>
       </div>
 

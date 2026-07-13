@@ -28,6 +28,12 @@ export interface PromptPattern {
   prompt_chars:       number
   prompt_preview:     string | null   // first 120 chars of last user message
   top_model:          string
+  // Efficiency rating + savings (computed in the page; optional for API callers)
+  rating?:            'A' | 'B' | 'C' | 'D' | 'F'
+  rating_score?:      number           // 0–100
+  rating_reason?:     string | null
+  savings_usd?:       number           // est. monthly $ recoverable on this pattern
+  savings_hint?:      string | null
 }
 
 export async function GET(req: NextRequest) {

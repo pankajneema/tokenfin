@@ -126,6 +126,14 @@ export default function LoginPage() {
     ? emailValid ? 'valid' : email ? 'error' : 'default'
     : 'default'
 
+  // Post-login destination — honors ?next= (must be a same-site relative path
+  // to avoid open redirects), falling back to the dashboard.
+  function nextDest() {
+    if (typeof window === 'undefined') return '/dashboard'
+    const n = new URLSearchParams(window.location.search).get('next')
+    return n && n.startsWith('/') ? n : '/dashboard'
+  }
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     setEmailTouched(true)
@@ -134,7 +142,7 @@ export default function LoginPage() {
     setError(null)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) { setError(error.message); setLoading(false); return }
-    router.push('/dashboard')
+    router.push(nextDest())
     router.refresh()
   }
 
@@ -143,7 +151,7 @@ export default function LoginPage() {
     setError(null)
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${location.origin}/auth/callback` },
+      options: { redirectTo: `${location.origin}/auth/callback?next=${encodeURIComponent(nextDest())}` },
     })
     if (error) { setError(error.message); setSocialLoading(null) }
   }
@@ -324,7 +332,7 @@ export default function LoginPage() {
       {/* ── Trust badge ── */}
       <div className="mt-5 flex items-center justify-center gap-1.5 text-[11px] text-[var(--fg-tertiary)]">
         <ShieldCheck size={11} className="text-teal" strokeWidth={2} />
-        <span>256-bit SSL encryption · SOC 2 compliant</span>
+        <span>Encrypted in transit & at rest</span>
       </div>
     </div>
   )

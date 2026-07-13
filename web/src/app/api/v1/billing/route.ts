@@ -1,32 +1,28 @@
 /**
  * POST /api/v1/billing
- * Simulate plan purchase / upgrade / downgrade.
- * Updates organizations.plan and creates an invoice record in notifications.
- * Body: { plan: string; billing: 'monthly'|'annual' }
+ * Activate a plan for the caller's org. During early access ALL plans are free,
+ * so this is a real, instant, no-charge activation — it updates
+ * organizations.plan and logs an honest $0 activation record. No payment is
+ * collected and none is faked.
+ * Body: { plan: string; billing?: 'monthly'|'annual' }
  *
  * GET /api/v1/billing
- * Returns invoice history for the caller's org.
- * (Reads notifications where type = 'invoice')
+ * Returns the org's plan-activation history (all $0 during early access).
  *
- * POST /api/v1/billing/contact-sales handled separately below.
+ * Contact Sales inquiries are handled in the same POST (contactSales: true).
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
 
-const PLAN_PRICE: Record<string, { monthly: number; annual: number }> = {
-  free:       { monthly: 0,  annual: 0  },
-  team:       { monthly: 29, annual: 23 },
-  pro:        { monthly: 99, annual: 79 },
-  enterprise: { monthly: 0,  annual: 0  },
-}
-
+// Tier catalog. Prices are the FUTURE list price (shown for reference); during
+// early access every tier is billed at $0.
 const PLAN_NAME: Record<string, string> = {
   free: 'Free', team: 'Starter', pro: 'Pro', enterprise: 'Enterprise',
 }
 
-function invoiceId() {
-  return 'INV-' + crypto.randomBytes(3).toString('hex').toUpperCase()
+function activationId() {
+  return 'ACT-' + crypto.randomBytes(3).toString('hex').toUpperCase()
 }
 
 function period(date = new Date()) {
@@ -79,38 +75,34 @@ export async function POST(req: NextRequest) {
   if (!member) return NextResponse.json({ error: 'No org found' }, { status: 404 })
   const orgId = member.org_id
 
-  // Update plan
+  // Instantly activate the plan (real DB update — no payment, all tiers free now).
   const { error: updateErr } = await admin
     .from('organizations').update({ plan }).eq('id', orgId)
   if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 })
 
-  // Build invoice
-  const prices = PLAN_PRICE[plan]
-  const amount = billing === 'annual' ? prices.annual : prices.monthly
+  // Honest $0 activation record (not a fake "PAID" invoice).
   const inv = {
-    invoiceId:  invoiceId(),
+    invoiceId:  activationId(),
     plan,
     planName:   PLAN_NAME[plan] ?? plan,
-    amount,
+    amount:     0,
     billing,
     period:     period(),
     date:       new Date().toISOString().slice(0, 10),
-    annualTotal: billing === 'annual' ? amount * 12 : null,
+    annualTotal: null,
+    freeEarlyAccess: true,
   }
 
-  // Store as notification (invoice record)
-  if (amount > 0 || plan !== 'free') {
-    await admin.from('notifications').insert({
-      org_id:  orgId,
-      user_id: user.id,
-      type:    'invoice',
-      title:   `${inv.invoiceId} · ${inv.planName} Plan · $${amount > 0 ? (billing === 'annual' ? amount * 12 : amount).toFixed(2) : '0.00'}`,
-      body:    JSON.stringify(inv),
-      is_read: true,
-    })
-  }
+  await admin.from('notifications').insert({
+    org_id:  orgId,
+    user_id: user.id,
+    type:    'invoice',
+    title:   `${inv.planName} plan activated · Free (early access)`,
+    body:    JSON.stringify(inv),
+    is_read: true,
+  })
 
-  return NextResponse.json({ ok: true, invoice: inv })
+  return NextResponse.json({ ok: true, invoice: inv, free: true })
 }
 
 /* ─────────────────────────────────────────────────────── */

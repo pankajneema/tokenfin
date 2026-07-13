@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { createAdminClient } from '@/lib/supabase/server'
 import { compressContent } from './compress'
 import { ccrPut, ccrGet } from './ccr'
@@ -75,12 +76,13 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       await ccrPut(hash, ctx.orgId, content) // reversible cache
       const model = typeof args.model === 'string' ? args.model : 'mcp'
       const costSaved = +(tokensSaved * inputPrice(model) / 1e6).toFixed(8)
-      await admin.from('usage_events').insert({
+      const { error: cmpErr } = await admin.from('usage_events').insert({
         org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, user_id: ctx.userId, model,
         input_tokens: 0, output_tokens: 0, total_tokens: 0, cost_usd: 0,
         input_tokens_saved: tokensSaved, baseline_cost_usd: costSaved,
         tags: { source: 'mcp' }, metadata: { mcp_compress: true },
       })
+      if (cmpErr) console.error('[mcp] compress savings insert failed:', cmpErr.message) // compression still succeeded
       return { compressed, hash, tokens_saved: tokensSaved, cost_saved: costSaved }
     }
     case 'retrieve': {
@@ -90,16 +92,51 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
     case 'record_usage': {
       const model = String(args.model ?? '')
       if (!model) throw new Error('model is required')
-      const inTok  = Math.max(0, Math.floor(Number(args.input_tokens) || 0))
-      const outTok = Math.max(0, Math.floor(Number(args.output_tokens) || 0))
-      const cost   = typeof args.cost_usd === 'number' ? args.cost_usd : computeCost(model, inTok, outTok)
+      const n = (v: unknown) => Math.max(0, Math.floor(Number(v) || 0))
+      const freshTok = n(args.input_tokens)
+      const cacheRd  = n(args.cache_read_tokens)
+      const cacheWr  = n(args.cache_creation_tokens)
+      const outTok   = n(args.output_tokens)
+      const inTok    = freshTok + cacheRd + cacheWr // total input for token analytics
+      // Cache-aware pricing: reads ≈10% of input rate, writes ≈125%.
+      const cost = typeof args.cost_usd === 'number'
+        ? args.cost_usd
+        : +(computeCost(model, freshTok, outTok) + (cacheRd * 0.1 + cacheWr * 1.25) * inputPrice(model) / 1e6).toFixed(8)
       const bucket = istBucket()
 
-      await admin.from('usage_events').insert({
+      // Idempotency: if the caller supplies an event_id, a repeat with the same
+      // value is ignored so a retry / double-fire never double-counts spend.
+      const eventId = typeof args.event_id === 'string' && args.event_id ? args.event_id.slice(0, 200) : null
+      if (eventId) {
+        const { data: dup } = await admin.from('usage_events')
+          .select('id').eq('org_id', ctx.orgId).eq('metadata->>event_id', eventId).limit(1).maybeSingle()
+        if (dup) return { recorded: false, duplicate: true, model, total_tokens: inTok + outTok, cost_usd: cost, bucket }
+      }
+
+      // Privacy-safe prompt fingerprint on the event so Prompt Analytics can
+      // group + rate this pattern. Full text (if any) is stored separately in
+      // prompt_captures (opt-in, RLS, TTL) — never in metadata.
+      const promptText = typeof args.prompt === 'string' ? args.prompt : ''
+      const meta: Record<string, unknown> = { mcp: true }
+      if (eventId) meta.event_id = eventId
+      if (promptText) {
+        meta.prompt_hash    = crypto.createHash('sha256').update(promptText.trim()).digest('hex').slice(0, 32)
+        meta.prompt_preview = promptText.trim().slice(0, 120)
+        meta.prompt_chars   = promptText.length
+      }
+
+      const row = {
         org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, user_id: ctx.userId, model,
         input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok,
-        cost_usd: cost, tags: { source: 'mcp' }, metadata: { mcp: true },
-      })
+        cost_usd: cost, tags: { source: 'mcp' }, metadata: meta,
+      }
+      let { error: evErr } = await admin.from('usage_events').insert(row)
+      if (evErr && /api_key_id/.test(evErr.message)) {
+        // Deployed DB missing migration 016 — retry without the column so events still land.
+        const { api_key_id: _drop, ...legacy } = row as Record<string, unknown>
+        ;({ error: evErr } = await admin.from('usage_events').insert(legacy))
+      }
+      if (evErr) throw new Error(`usage_events insert failed: ${evErr.message}`)
 
       // Roll into daily aggregates (analytics tools read usage_agg). Prefer the
       // RPC; fall back to a read-modify-write increment if it's unavailable.

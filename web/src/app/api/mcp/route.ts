@@ -18,9 +18,24 @@ import crypto from 'crypto'
 import { authenticate, unauthorized } from '@/lib/mcp/auth'
 import { handleRpc } from '@/lib/mcp/server'
 
+// DNS-rebinding guard. Blanket-rejecting every Origin broke legitimate clients —
+// several MCP clients (web connectors, browser-based agents, MCP Inspector) DO
+// send one. Allow known-good origins + our own app; reject the rest.
+const ALLOWED_ORIGINS = [
+  process.env.NEXT_PUBLIC_APP_URL,
+  'https://claude.ai', 'https://claude.com', 'https://chatgpt.com', 'https://chat.openai.com',
+].filter(Boolean) as string[]
+
+function originAllowed(origin: string | null): boolean {
+  if (!origin) return true // non-browser clients
+  try {
+    const o = new URL(origin).origin
+    return ALLOWED_ORIGINS.some(a => new URL(a).origin === o) || o.startsWith('http://localhost') || o.startsWith('http://127.0.0.1')
+  } catch { return false }
+}
+
 export async function POST(req: NextRequest) {
-  // DNS-rebinding guard: real MCP clients don't send a browser Origin.
-  if (req.headers.get('origin')) {
+  if (!originAllowed(req.headers.get('origin'))) {
     return NextResponse.json({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Origin not allowed' } }, { status: 403 })
   }
 

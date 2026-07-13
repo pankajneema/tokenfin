@@ -1,0 +1,39 @@
+{
+  "name": "tokenfin",
+  "version": "0.2.0",
+  "description": "TokenFin CLI — one command to auto-record Claude Code usage & cost to your TokenFin dashboard.",
+  "bin": {
+    "tokenfin": "bin/tokenfin.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "assets",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "keywords": [
+    "tokenfin",
+    "finops",
+    "claude",
+    "claude-code",
+    "mcp",
+    "llm",
+    "cost",
+    "token",
+    "observability"
+  ],
+  "homepage": "https://tokenfin.curiousdevs.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pankajneema/tokenfin.git",
+    "directory": "cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "type": "commonjs"
+}

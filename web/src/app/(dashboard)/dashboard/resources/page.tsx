@@ -409,41 +409,27 @@ console.log(data)
 /* ══════════════════════════════════════════════════════════════
    SETUP STEPS
 ══════════════════════════════════════════════════════════════ */
-const SETUP_STEPS = [
+// Dead-simple, copy-paste setup. No keys to copy, no config files, no base URLs.
+// Works on Mac, Windows, and Linux (Node ships with most AI dev tools).
+const SETUP_STEPS: { n: number; title: string; desc: string; code?: string; href?: string; cta?: string }[] = [
   {
     n: 1,
-    title: 'Create a project',
-    desc:  'Go to Projects → New project. Give it a name and assign a team. All costs will be bucketed here.',
-    href:  '/dashboard/projects',
-    cta:   'Open Projects',
+    title: 'Sign in from your terminal',
+    desc:  'Open your Terminal, paste this line, and press Enter. Your browser opens — click “Authorize”. That creates your key automatically, so there is nothing to copy.',
+    code:  'npx tokenfin@latest login',
   },
   {
     n: 2,
-    title: 'Connect a platform',
-    desc:  'Go to Connected Platforms → Connect platform. Choose your app type and generate an ingest API key.',
-    href:  '/dashboard/mcp',
-    cta:   'Connected Platforms',
+    title: 'Connect your AI tool',
+    desc:  'Paste this and pick your tool from the list (Claude Code, Cursor, Windsurf, VS Code, Codex, Claude Desktop…). It sets everything up for you.',
+    code:  'npx tokenfin@latest setup',
   },
   {
     n: 3,
-    title: 'Connect your AI tool',
-    desc:  'Follow the step-by-step guide for your tool (Codex, Cursor, Claude CLI, Cowork, OpenCode) — no code required.',
-    href:  null as unknown as string,
-    cta:   'Connect tools',
-  },
-  {
-    n: 4,
-    title: 'Set a budget limit',
-    desc:  'Go to Limits → New limit. Set Warn at 80%, Throttle at 95%, Block at 100% of your monthly budget.',
-    href:  '/dashboard/limits',
-    cta:   'Open Limits',
-  },
-  {
-    n: 5,
-    title: 'Create an alert rule',
-    desc:  "Go to Alerts → New rule. Choose channels (Slack, email) and a cool-down so you're not spammed.",
-    href:  '/dashboard/alerts',
-    cta:   'Open Alerts',
+    title: 'Use your AI as usual',
+    desc:  'That’s it. Your usage and cost show up here automatically — no config files to edit, no URLs to change.',
+    href:  '/dashboard',
+    cta:   'Open dashboard',
   },
 ]
 
@@ -630,6 +616,7 @@ function ToolCard({ tool }: { tool: ToolGuide }) {
 ══════════════════════════════════════════════════════════════ */
 export default function ResourcesPage() {
   const [activeTab, setActiveTab] = useState<TabId>('start')
+  const [copiedCmd, setCopiedCmd] = useState<number | null>(null)
 
   const tabs: { id: TabId; label: string; icon: React.ElementType }[] = [
     { id: 'start',     label: 'Get started',   icon: Rocket        },
@@ -680,45 +667,52 @@ export default function ResourcesPage() {
           {/* Steps */}
           <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-[var(--border)]">
-              <p className="text-[13.5px] font-bold text-[var(--fg)]">5-step setup</p>
-              <p className="text-[12px] text-[var(--fg-secondary)] mt-0.5">From zero to full cost attribution in ~20 minutes</p>
+              <p className="text-[13.5px] font-bold text-[var(--fg)]">Set up in under a minute</p>
+              <p className="text-[12px] text-[var(--fg-secondary)] mt-0.5">Copy-paste two commands. No keys to copy, no config files, no code.</p>
             </div>
             <div className="divide-y divide-[var(--border)]">
               {SETUP_STEPS.map(s => (
-                <div key={s.n} className="flex items-start gap-4 px-5 py-4 hover:bg-[var(--bg-hover)] transition-colors">
+                <div key={s.n} className="flex items-start gap-4 px-5 py-4">
                   <div className="w-7 h-7 rounded-full bg-coral/15 border border-coral/25 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <span className="text-[12px] font-bold text-coral">{s.n}</span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-semibold text-[var(--fg)]">{s.title}</p>
                     <p className="text-[12px] text-[var(--fg-secondary)] mt-0.5 leading-relaxed">{s.desc}</p>
+                    {s.code && (
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(s.code!); setCopiedCmd(s.n); setTimeout(() => setCopiedCmd(null), 1500) }}
+                        className="mt-2.5 flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 font-mono text-[12.5px] text-[var(--fg)] hover:bg-[var(--bg-hover)] transition-colors"
+                      >
+                        <span className="truncate">{s.code}</span>
+                        {copiedCmd === s.n
+                          ? <span className="flex items-center gap-1 text-[11px] font-sans font-semibold text-teal flex-shrink-0"><Check size={12} /> Copied</span>
+                          : <span className="flex items-center gap-1 text-[11px] font-sans font-medium text-[var(--fg-tertiary)] flex-shrink-0"><Copy size={12} /> Copy</span>}
+                      </button>
+                    )}
+                    {s.href && (
+                      <a href={s.href} className="mt-2.5 inline-flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80">
+                        {s.cta} <ArrowRight size={12} />
+                      </a>
+                    )}
                   </div>
-                  {s.href ? (
-                    <a href={s.href} className="flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80 flex-shrink-0 mt-0.5">
-                      {s.cta} <ArrowRight size={12} />
-                    </a>
-                  ) : (
-                    <button onClick={() => setActiveTab('tools')} className="flex items-center gap-1.5 text-[12px] font-semibold text-coral hover:opacity-80 flex-shrink-0 mt-0.5">
-                      {s.cta} <ArrowRight size={12} />
-                    </button>
-                  )}
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Quick link to tools tab */}
+          {/* Fallback for tools that need manual config */}
           <div className="flex items-center gap-4 px-5 py-4 bg-[#8B5CF6]/10 border border-[#8B5CF6]/20 rounded-2xl">
             <div className="w-9 h-9 rounded-xl bg-[#8B5CF6]/20 flex items-center justify-center flex-shrink-0">
               <Plug size={16} className="text-[#8B5CF6]" />
             </div>
             <div className="flex-1">
-              <p className="text-[13px] font-semibold text-[#8B5CF6]">Using Codex, Cursor, or Claude CLI?</p>
-              <p className="text-[12px] text-[#8B5CF6]/80 mt-0.5">Step-by-step guides for every AI tool — no developer knowledge needed.</p>
+              <p className="text-[13px] font-semibold text-[#8B5CF6]">Tool not in the list, or prefer manual setup?</p>
+              <p className="text-[12px] text-[#8B5CF6]/80 mt-0.5">Paste-ready config for every client on the MCP Setup page.</p>
             </div>
-            <button onClick={() => setActiveTab('tools')} className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[#8B5CF6] hover:opacity-80 flex-shrink-0">
-              See guides <ArrowRight size={12} />
-            </button>
+            <a href="/dashboard/mcp/connect" className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[#8B5CF6] hover:opacity-80 flex-shrink-0">
+              MCP Setup <ArrowRight size={12} />
+            </a>
           </div>
 
           {/* Quick links — all real, in-app navigation */}

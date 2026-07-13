@@ -4,11 +4,17 @@ import crypto from 'crypto'
 import { createAdminClient } from '@/lib/supabase/server'
 import type { KeyCtx } from './types'
 
-// Validates the Bearer API key on every request and resolves it to an org.
+// Validates the API key on every request and resolves it to an org.
+// Accepts the key via (in order): Authorization: Bearer, x-api-key header, or a
+// ?key= / ?api_key= query param — the query form lets clients that can't set a
+// header (e.g. Claude's web custom connector) still authenticate.
 // Returns null on any failure (caller responds 401).
 export async function authenticate(req: NextRequest): Promise<KeyCtx | null> {
   const auth = req.headers.get('authorization') ?? ''
-  const raw  = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
+  const raw =
+    (auth.startsWith('Bearer ') ? auth.slice(7).trim() : '') ||
+    (req.headers.get('x-api-key') ?? '').trim() ||
+    (req.nextUrl.searchParams.get('key') ?? req.nextUrl.searchParams.get('api_key') ?? '').trim()
   if (!raw) return null
   const keyHash = crypto.createHash('sha256').update(raw).digest('hex')
   const { data } = await createAdminClient()

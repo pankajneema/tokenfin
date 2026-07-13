@@ -27,6 +27,9 @@ function fmtNum(n: number) {
 function insights(p: PromptPattern) {
   const tags: { label: string; color: string; bg: string; tip: string }[] = []
 
+  // Savings opportunity first — the actionable, dollar-denominated signal.
+  if ((p.savings_usd ?? 0) > 0)
+    tags.push({ label: `Save ~$${p.savings_usd}`, color: 'var(--green)', bg: 'var(--green-bg)', tip: p.savings_hint ?? 'Cheaper routing available' })
   if (p.count >= 50)
     tags.push({ label: 'High volume', color: 'var(--blue)',  bg: 'var(--blue-bg)',  tip: `Sent ${p.count}× — consider caching` })
   if ((p.io_ratio ?? 0) > 3)
@@ -37,6 +40,17 @@ function insights(p: PromptPattern) {
     tags.push({ label: 'Low output',  color: 'var(--fg-secondary)', bg: 'var(--bg-tertiary)', tip: 'Very short output — may be errors or refusals' })
 
   return tags
+}
+
+// Letter-grade → colour, for the efficiency rating pill.
+function gradeStyle(g: PromptPattern['rating']): { color: string; bg: string } {
+  switch (g) {
+    case 'A': return { color: 'var(--green)', bg: 'var(--green-bg)' }
+    case 'B': return { color: 'var(--green)', bg: 'var(--green-bg)' }
+    case 'C': return { color: 'var(--amber)', bg: 'var(--amber-bg)' }
+    case 'D': return { color: 'var(--amber)', bg: 'var(--amber-bg)' }
+    default:  return { color: 'var(--red)',   bg: 'var(--red-bg)' }
+  }
 }
 
 /* ── Sort config ─────────────────────────────────────────────────────────────── */
@@ -278,7 +292,7 @@ export function PromptsClient({
                 <SortTh label="Avg tokens"  sk="avg_input_tokens" active={sortKey === 'avg_input_tokens'} dir={sortDir} onSort={handleSort} />
                 <SortTh label="Avg latency" sk="avg_latency_ms"   active={sortKey === 'avg_latency_ms'}   dir={sortDir} onSort={handleSort} />
                 <th className="text-left px-5 py-3 text-[11.5px] font-semibold uppercase tracking-wide text-[var(--fg-tertiary)]">
-                  Signals
+                  Rating
                 </th>
               </tr>
             </thead>
@@ -341,15 +355,14 @@ export function PromptsClient({
                         {fmtUsd(p.avg_cost_usd)}
                       </td>
 
-                      {/* Avg tokens */}
+                      {/* Avg tokens — input vs output, with a proportional split bar */}
                       <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-1.5 tabular-nums text-[var(--fg-secondary)]">
-                          <span>{fmtNum(p.avg_input_tokens)}</span>
-                          <span className="text-[var(--fg-tertiary)]">/</span>
-                          <span>{fmtNum(p.avg_output_tokens)}</span>
+                        <div className="flex items-center gap-1.5 tabular-nums">
+                          <span className="text-[var(--blue)] font-medium" title="avg input tokens">↓{fmtNum(p.avg_input_tokens)}</span>
+                          <span className="text-[var(--green)] font-medium" title="avg output tokens">↑{fmtNum(p.avg_output_tokens)}</span>
                           {p.io_ratio !== null && (
                             <span className={cn(
-                              'text-[10.5px] font-medium px-1 py-0.5 rounded ml-1',
+                              'text-[10.5px] font-medium px-1 py-0.5 rounded ml-0.5',
                               p.io_ratio > 3
                                 ? 'bg-[var(--amber-bg)] text-[var(--amber)]'
                                 : 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]'
@@ -358,6 +371,16 @@ export function PromptsClient({
                             </span>
                           )}
                         </div>
+                        {(() => {
+                          const tot = p.avg_input_tokens + p.avg_output_tokens
+                          const inPct = tot > 0 ? (p.avg_input_tokens / tot) * 100 : 0
+                          return (
+                            <div className="mt-1.5 flex h-1 w-28 overflow-hidden rounded-full bg-[var(--bg-tertiary)]" title={`input ${Math.round(inPct)}% · output ${Math.round(100 - inPct)}%`}>
+                              <div style={{ width: `${inPct}%`, background: 'var(--blue)' }} />
+                              <div style={{ width: `${100 - inPct}%`, background: 'var(--green)' }} />
+                            </div>
+                          )
+                        })()}
                       </td>
 
                       {/* Avg latency */}
@@ -381,10 +404,18 @@ export function PromptsClient({
                         </div>
                       </td>
 
-                      {/* Signals */}
+                      {/* Rating & signals */}
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          {tags.length === 0
+                          {p.rating && (() => { const gs = gradeStyle(p.rating); return (
+                            <span
+                              title={`Efficiency ${p.rating_score}/100 — ${p.rating_reason ?? ''}`}
+                              className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-md px-1 text-[11px] font-bold cursor-help"
+                              style={{ background: gs.bg, color: gs.color }}>
+                              {p.rating}
+                            </span>
+                          )})()}
+                          {tags.length === 0 && !p.rating
                             ? <span className="text-[11.5px] text-[var(--fg-tertiary)]">—</span>
                             : tags.map(t => (
                                 <span

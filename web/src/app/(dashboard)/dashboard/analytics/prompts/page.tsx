@@ -2,6 +2,51 @@ import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
 import { PromptsClient }       from './_client'
 import type { PromptPattern }  from '@/app/api/v1/analytics/prompts/route'
+import { inputPrice, outputPrice } from '@/lib/mcp/pricing'
+
+// Cheapest capable tier used as the "could you route down?" reference.
+const CHEAP_IN = 0.8, CHEAP_OUT = 4 // ~Haiku / gpt-4o-mini class, per 1M
+
+// Efficiency rating (A–F) + a REAL dollar savings estimate per prompt pattern.
+// Cost-first heuristic: reward tight I/O, penalise premium models doing short
+// work and context bloat — the two most common, fixable sources of LLM waste.
+function rate(p: PromptPattern): Pick<PromptPattern, 'rating' | 'rating_score' | 'rating_reason' | 'savings_usd' | 'savings_hint'> {
+  const m = p.top_model
+  const premium = /opus|sonnet|gpt-4o(?!-mini)|gemini-1\.5-pro/.test(m)
+  const curPerCall = (p.avg_input_tokens * inputPrice(m) + p.avg_output_tokens * outputPrice(m)) / 1e6
+
+  let score = 100
+  let reason = 'Efficient'
+  let savings_usd = 0
+  let savings_hint: string | null = null
+
+  // 1) Premium model doing short outputs → route down.
+  if (premium && p.avg_output_tokens > 0 && p.avg_output_tokens < 120) {
+    const cheapPerCall = (p.avg_input_tokens * CHEAP_IN + p.avg_output_tokens * CHEAP_OUT) / 1e6
+    if (cheapPerCall < curPerCall) {
+      savings_usd = +((curPerCall - cheapPerCall) * p.count).toFixed(2)
+      savings_hint = `Short outputs on a premium model — routing to a cheaper tier saves ~$${savings_usd}`
+      reason = 'Over-powered model for short output'
+      score -= 30
+    }
+  }
+  // 2) Context bloat (huge input vs output) → cache / compress.
+  if ((p.io_ratio ?? 0) > 15) {
+    score -= 22
+    reason = reason === 'Efficient' ? 'Context-heavy — cache or compress the prompt' : reason
+    if (!savings_hint) savings_hint = 'Very high input:output — enable prompt caching or compress context'
+  } else if ((p.io_ratio ?? 0) > 5) {
+    score -= 8
+  }
+  // 3) Raw context size.
+  if (p.avg_input_tokens > 60_000) { score -= 12; if (reason === 'Efficient') reason = 'Large context per call' }
+  // 4) Very low output at volume → likely errors/refusals (paying for nothing).
+  if (p.avg_output_tokens < 20 && p.count >= 5) { score -= 10; if (reason === 'Efficient') reason = 'Very short outputs — possible errors/refusals' }
+
+  score = Math.max(0, Math.min(100, score))
+  const rating = (score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : score >= 40 ? 'D' : 'F') as PromptPattern['rating']
+  return { rating, rating_score: score, rating_reason: reason, savings_usd, savings_hint }
+}
 
 export { type PromptPattern } from '@/app/api/v1/analytics/prompts/route'
 
@@ -74,7 +119,7 @@ export default async function PromptsAnalyticsPage() {
       const avg = sorted.length ? Math.round(sorted.reduce((s, v) => s + v, 0) / sorted.length) : null
       const p95 = sorted.length ? (sorted[Math.floor(sorted.length * 0.95)] ?? null) : null
       const topModel = (Object.entries(p.models) as [string, number][]).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'unknown'
-      return {
+      const base: PromptPattern = {
         hash:              p.hash,
         count:             p.count,
         total_cost_usd:    +p.totalCost.toFixed(4),
@@ -88,6 +133,7 @@ export default async function PromptsAnalyticsPage() {
         prompt_preview:    p.promptPreview ?? null,
         top_model:         topModel,
       }
+      return { ...base, ...rate(base) }
     })
 
   // Summary stats

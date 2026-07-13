@@ -453,7 +453,7 @@ export default function SignupPage() {
       {/* ── Trust signals ── */}
       <div className="mt-5 flex items-center justify-center gap-1.5 text-[11px] text-[var(--fg-tertiary)]">
         <ShieldCheck size={11} className="text-teal" strokeWidth={2} />
-        <span>256-bit SSL encryption · SOC 2 compliant</span>
+        <span>Encrypted in transit & at rest</span>
       </div>
 
       {/* ── Legal ── */}

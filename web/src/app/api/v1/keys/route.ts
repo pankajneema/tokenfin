@@ -143,7 +143,10 @@ export async function POST(req: NextRequest) {
   }
 
   // Encrypt the raw key so it can be copied again later (migration 022).
-  const sealed = sealKey(rawKey)
+  // Best-effort: if KEY_ENCRYPTION_SECRET isn't configured, skip encryption
+  // (copy-anytime disabled) rather than failing key creation.
+  let sealed: { ciphertext: string; iv: string; authTag: string } | null = null
+  try { sealed = sealKey(rawKey) } catch { sealed = null }
 
   // ── Insert — gracefully handles missing columns if migrations haven't run ──
   const insertPayload: Record<string, unknown> = {
@@ -152,10 +155,12 @@ export async function POST(req: NextRequest) {
     team_id: team_id ?? null,
     key_hash:   keyHash,
     key_prefix: keyPrefix,
-    key_enc_cipher: sealed.ciphertext,
-    key_enc_iv:     sealed.iv,
-    key_enc_tag:    sealed.authTag,
     env, scopes, expires_at: expires_at ?? null,
+  }
+  if (sealed) {
+    insertPayload.key_enc_cipher = sealed.ciphertext
+    insertPayload.key_enc_iv     = sealed.iv
+    insertPayload.key_enc_tag    = sealed.authTag
   }
 
   let { data, error } = await db()

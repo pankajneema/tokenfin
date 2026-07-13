@@ -48,17 +48,25 @@ export async function middleware(request: NextRequest) {
                    || pathname.startsWith('/forgot-password')
                    || pathname.startsWith('/reset-password')
   const isCallback  = pathname.startsWith('/auth')
+  // Public, token-secured key reveal (used by provisioning links AND the CLI
+  // login handoff — both authenticate via an unguessable single-use token, not
+  // a session cookie).
+  const isReveal    = pathname.startsWith('/keys/reveal')
+                   || pathname.startsWith('/api/v1/keys/reveal')
   const isPublicApi = pathname.startsWith('/api/orgs')
                    || pathname.startsWith('/api/invites')
                    || pathname.startsWith('/api/v1/invites')
-  const isPublic    = isAuthPage || isCallback || isPublicApi
+  const isPublic    = isAuthPage || isCallback || isReveal || isPublicApi
 
   // ── Rule 1: unauthenticated → login ───────────────────────────────────────
   if (!user && !isPublic) {
     const url = request.nextUrl.clone()
+    // Preserve the FULL intended destination (path + query) so flows like
+    // /cli/authorize?port=…&state=… survive the login round-trip.
+    const dest = pathname + request.nextUrl.search
     url.pathname = '/login'
-    // Preserve the intended destination for post-login redirect
-    if (pathname !== '/') url.searchParams.set('next', pathname)
+    url.search   = ''
+    if (pathname !== '/') url.searchParams.set('next', dest)
     return NextResponse.redirect(url)
   }
 

@@ -180,7 +180,7 @@ function ConnectModal({ item, orgId, onClose, onConnected }: {
             </div>
             <div>
               <p className="text-[15px] font-bold text-[var(--fg)]">{item.name} connected!</p>
-              <p className="text-[12.5px] text-[var(--fg-secondary)] mt-1">Data will start flowing within a few minutes.</p>
+              <p className="text-[12.5px] text-[var(--fg-secondary)] mt-1">Saved. Live sync for this connector is coming soon.</p>
             </div>
             <button onClick={onClose} className="btn-primary mt-2">Done</button>
           </div>
