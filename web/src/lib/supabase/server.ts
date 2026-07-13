@@ -44,7 +44,13 @@ export function createAdminClient() {
   return createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
+    {
+      auth: { autoRefreshToken: false, persistSession: false },
+      // Next.js caches GET fetches by default; a service-role client must always
+      // read fresh (stale privileged reads cause subtle bugs, e.g. alert cooldown
+      // re-firing on a cached last_fired_at). Force no-store on every request.
+      global: { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, cache: 'no-store' }) },
+    }
   )
 }
 

@@ -91,8 +91,20 @@ function RuleCard({
   readOnly?:   boolean
 }) {
   const [menu, setMenu] = useState(false)
+  const [testState, setTestState] = useState<'idle' | 'sending' | 'sent' | 'err'>('idle')
   const tm  = TRIGGER_META[rule.triggerType]
   const chs = activeChannels(rule.channels)
+
+  async function testFire() {
+    setMenu(false); setTestState('sending')
+    try {
+      const res = await fetch('/api/v1/alerts/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: rule.id }),
+      })
+      setTestState(res.ok ? 'sent' : 'err')
+    } catch { setTestState('err') }
+    setTimeout(() => setTestState('idle'), 3000)
+  }
 
   return (
     <div className={cn('bg-white dark:bg-[#141428] border rounded-2xl p-5 space-y-4 transition-all',
@@ -102,6 +114,9 @@ function RuleCard({
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-[13.5px] font-bold text-[var(--fg)] leading-snug">{rule.name}</p>
             <span className={cn('text-[10.5px] font-semibold px-1.5 py-0.5 rounded-md', tm.bg, tm.color)}>{tm.label}</span>
+            {testState === 'sending' && <span className="text-[10.5px] font-semibold text-[var(--fg-tertiary)]">Sending test…</span>}
+            {testState === 'sent'    && <span className="text-[10.5px] font-semibold text-teal">✓ Test sent</span>}
+            {testState === 'err'     && <span className="text-[10.5px] font-semibold text-[var(--red)]">Test failed</span>}
           </div>
           <p className="text-[11.5px] text-[var(--fg-secondary)] mt-1">{rule.condition || '—'}</p>
         </div>
@@ -119,7 +134,7 @@ function RuleCard({
                   {([
                     { icon: Pencil,     label: 'Edit rule',   danger: false, fn: () => { onEdit(rule); setMenu(false) } },
                     { icon: Copy,       label: 'Duplicate',   danger: false, fn: () => { onDuplicate(rule); setMenu(false) } },
-                    { icon: PlayCircle, label: 'Test fire',   danger: false, fn: () => setMenu(false) },
+                    { icon: PlayCircle, label: 'Test fire',   danger: false, fn: testFire },
                     { icon: Trash2,     label: 'Delete rule', danger: true,  fn: () => { onDelete(rule.id); setMenu(false) } },
                   ] as { icon: React.ElementType; label: string; danger: boolean; fn: () => void }[]).map((item, i) => (
                     <button key={i} onClick={item.fn}
