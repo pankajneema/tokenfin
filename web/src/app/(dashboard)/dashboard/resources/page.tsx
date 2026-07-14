@@ -414,14 +414,15 @@ console.log(data)
 const SETUP_STEPS: { n: number; title: string; desc: string; code?: string; href?: string; cta?: string }[] = [
   {
     n: 1,
-    title: 'Sign in from your terminal',
-    desc:  'Open your Terminal, paste this line, and press Enter. Your browser opens — click “Authorize”. That creates your key automatically, so there is nothing to copy.',
-    code:  'npx tokenfin@latest login',
+    title: 'Open Setup and pick your tool',
+    desc:  'One place, every tool: one-click install for Cursor & VS Code, a paste-in connector for Claude.ai & Claude Desktop, and one command for Claude Code. It fills in your key for you.',
+    href:  '/dashboard/setup',
+    cta:   'Open Setup',
   },
   {
     n: 2,
-    title: 'Connect your AI tool',
-    desc:  'Paste this and pick your tool from the list (Claude Code, Cursor, Windsurf, VS Code, Codex, Claude Desktop…). It sets everything up for you.',
+    title: 'On Claude Code? One command does it all',
+    desc:  'Paste this in your terminal. It signs you in (browser opens — no key to copy), registers the server, and installs the auto-record hook. This one-command path is Claude Code only.',
     code:  'npx tokenfin@latest setup',
   },
   {
@@ -707,11 +708,11 @@ export default function ResourcesPage() {
               <Plug size={16} className="text-[#8B5CF6]" />
             </div>
             <div className="flex-1">
-              <p className="text-[13px] font-semibold text-[#8B5CF6]">Tool not in the list, or prefer manual setup?</p>
-              <p className="text-[12px] text-[#8B5CF6]/80 mt-0.5">Paste-ready config for every client on the MCP Setup page.</p>
+              <p className="text-[13px] font-semibold text-[#8B5CF6]">Cursor, VS Code, Claude.ai, Codex, Windsurf…?</p>
+              <p className="text-[12px] text-[#8B5CF6]/80 mt-0.5">Every tool has a guided, one-click / paste-in flow in Setup.</p>
             </div>
-            <a href="/dashboard/mcp/connect" className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[#8B5CF6] hover:opacity-80 flex-shrink-0">
-              MCP Setup <ArrowRight size={12} />
+            <a href="/dashboard/setup" className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[#8B5CF6] hover:opacity-80 flex-shrink-0">
+              Open Setup <ArrowRight size={12} />
             </a>
           </div>
 
