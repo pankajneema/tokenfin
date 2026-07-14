@@ -1,3 +1,5 @@
+import type { Tier, Accuracy } from '../setup/_catalog'
+
 export interface PlatformModel {
   model:    string
   tokens30d: number
@@ -20,4 +22,6 @@ export interface PlatformRow {
   cost30d:     number
   calls30d:    number
   models:      PlatformModel[]
+  tier:        Tier | null
+  accuracy:    Accuracy | null
 }

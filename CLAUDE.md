@@ -103,7 +103,53 @@ prevMap.set(shifted, prev + cost)
 | `/api/v1/models` | GET | Admin | Model usage summary |
 | `/api/v1/teams` | GET POST PATCH DELETE | Admin | Manage teams |
 | `/api/v1/invites` | POST | Admin | Send member invites |
+| `/api/v1/provision` | POST | Admin | Bulk onboard members + auto-generate keys (one-time reveal links) + service accounts |
+| `/api/v1/keys/reveal` | POST | Token (single-use) | Reveal a provisioned raw key exactly once |
+| `/api/mcp` | POST | API key (Bearer, read) | Remote MCP server — Streamable HTTP, JSON-RPC, read-only FinOps tools |
 | `/auth/callback` | GET | — | Supabase OAuth callback |
+
+### Key security model (IMPORTANT)
+- API keys are stored ONLY as `key_hash` (SHA-256) + a **masked** `key_prefix` (e.g. `tfk_prod_abc1_…c05a`). The raw key is returned **once** in the POST response, never again.
+- Bulk-provisioned keys are delivered via single-use, expiring, AES-256-GCM reveal links (`/keys/reveal/[token]`). Needs `KEY_ENCRYPTION_SECRET` env + migration 012 (`key_reveals` table, `api_keys.is_service_account`).
+- MCP keys are created **read-only** (`scopes: ['read']`); the MCP server (`/api/mcp`) exposes no write tools. See `docs/MCP.md`.
+
+### New dashboard pages
+- `/dashboard/my-usage` — per-user, dollar-first personal analytics (scoped to `usage_events.user_id`); shows a savings card.
+- `/dashboard/provision` — bulk team provisioning UI.
+- `/dashboard/mcp/connect` — one-click MCP key + client config generator.
+- `/dashboard/analytics/savings` — TokenFin Saver savings (measured vs estimated, by lever).
+- `/keys/reveal/[token]` — public one-time key reveal page.
+
+### MCP is the single integration (one-click)
+`/dashboard/mcp/connect` generates a key + copy-paste config for one connection that does
+everything. The server lives in `web/src/lib/mcp/*` (auth · tools · run · server · compress ·
+ccr · pricing · types) behind a thin `web/src/app/api/mcp/route.ts` (Streamable HTTP, JSON-RPC,
+Bearer auth, Origin guard). Tools:
+- **Analytics (read):** list_projects, get_spend, get_usage_by_model, get_daily_costs, get_budget_status
+- **Token saving:** compress / retrieve (reversible CCR, needs migration 015 for retrieve), savings_stats
+- **Auto-sync:** record_usage — client calls it after each model response → writes usage_events +
+  usage_agg (analytics reflect it immediately) and optionally captures the prompt (prompt_captures).
+The dashboard Gateway page was removed; the Go `cmd/gateway` proxy still exists for transparent
+output-shaping but is not the primary/surfaced integration.
+
+### TokenFin Saver — the savings layer (TokenFin)
+- **Gateway** (`backend/cmd/gateway`, port 8003): an LLM reverse-proxy clients point
+  `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` at. It applies cache-safe output-shaping levers
+  (verbosity steering at the system **tail**; effort routing on mechanical `tool_result`
+  turns — see `internal/gateway/shaper.go`), streams the provider response back unchanged,
+  and records actual usage + baseline. **Fail-open**: any error forwards the original request.
+- **Measurement**: a random **holdout** (`TOKENFIN_HOLDOUT`, default 0.05) bypasses all levers
+  so output savings are *measured* against a control, not just estimated.
+- **Schema**: migration 013 adds savings columns to `usage_events`/`usage_agg` and makes the
+  `upsert_usage_agg*` functions savings-aware. Recording reuses the Redis stream + worker.
+- **CCR input compression (built)**: `internal/gateway/compress.go` + `ccr.go` reversibly
+  compress bulky tool_result JSON/logs (keep first N rows / head+tail), cache the original in
+  Redis (`tf:ccr:<hash>`, 1h TTL), and inject a `tokenfin_retrieve` tool. The proxy resolves
+  that call inline (one round, buffered path) so nothing is lost. CCR runs on **non-streaming**
+  requests only; streaming requests still get output shaping.
+- **Full-prompt capture (opt-in)**: gateway env `CAPTURE_PROMPTS=1` writes the full prompt +
+  response to `prompt_captures` (migration 014) — a separate, RLS-protected, 30-day-TTL table.
+  Surfaced under Analytics → Prompts (expandable cards). Off by default (prompts may hold PII).
 
 ---
 

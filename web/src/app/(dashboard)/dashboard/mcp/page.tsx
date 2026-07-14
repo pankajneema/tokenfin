@@ -1,6 +1,7 @@
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
 import { McpClient }          from './_client'
+import { inferConnection }    from '../setup/_catalog'
 import type { PlatformRow, PlatformModel } from './_types'
 
 export { type PlatformRow, type PlatformModel } from './_types'
@@ -75,6 +76,8 @@ export default async function McpPage() {
       .map(([model, u]) => ({ model, tokens30d: u.tokens, cost30d: u.cost, calls30d: u.calls }))
       .sort((a, b) => b.cost30d - a.cost30d)
 
+    const { tier, accuracy } = inferConnection(k.name, models.map(m => m.model))
+
     return {
       id:          k.id,
       name:        k.name,
@@ -90,6 +93,8 @@ export default async function McpPage() {
       cost30d:     pu.cost,
       calls30d:    pu.calls,
       models,
+      tier,
+      accuracy,
     }
   })
 
