@@ -1,5 +1,1 @@
-{
-  "_disabled_crons_reenable_by_renaming_to_crons": [
-    { "path": "/api/v1/cron/alerts", "schedule": "0 * * * *" }
-  ]
-}
+{}
