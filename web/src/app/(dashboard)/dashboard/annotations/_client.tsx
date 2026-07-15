@@ -11,8 +11,7 @@ export function AnnotationsClient({ orgId, rows }: { orgId: string; rows: Captur
       <p className="mb-5 text-[13px] text-[var(--fg-secondary)]">Human review of captured prompts. Your ratings become ground truth (evaluator = human).</p>
       {rows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-[var(--border)] p-8 text-center text-[12.5px] text-[var(--fg-tertiary)]">
-          No captured prompts to review. Enable CAPTURE_PROMPTS on the gateway/MCP.
-        </div>
+          No captured prompts to review.        </div>
       ) : (
         <div className="space-y-3">{rows.map(r => <Item key={r.id} orgId={orgId} row={r} />)}</div>
       )}

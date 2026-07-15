@@ -47,6 +47,8 @@ const PAGE_META: Record<string, { label: string; desc?: string }> = {
   settings:     { label: 'Settings',     desc: 'Workspace configuration'          },
   integrations: { label: 'Integrations', desc: 'Connect your tools'              },
   models:       { label: 'Models',       desc: 'LLM model registry & pricing'    },
+  setup:        { label: 'Connections',  desc: 'Connect your coding agents'       },
+  mcp:          { label: 'Platforms',    desc: 'Connected platforms & usage'      },
 }
 
 /* ══════════════════════════════════════════════════════════════

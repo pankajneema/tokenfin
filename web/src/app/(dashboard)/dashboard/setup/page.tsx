@@ -4,7 +4,7 @@ import type { Role } from '@/lib/rbac'
 import { getOrCreateSetupKey } from '@/lib/setup/key'
 import { SetupClient } from './_client'
 
-export const metadata = { title: 'Setup — TokenFin' }
+export const metadata = { title: 'Connections — TokenFin' }
 
 /**
  * Setup Hub (server). Resolves the org + role, and — for admins — get-or-creates

@@ -175,7 +175,7 @@ function PlatformCard({ p }: { p: PlatformRow }) {
       ) : (
         <div className="mt-3 flex items-center gap-2 rounded-lg border border-dashed border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-[11.5px] text-[var(--fg-secondary)]">
           <KeyRound size={13} className="flex-shrink-0 text-[var(--fg-tertiary)]" />
-          Connected, but no usage recorded yet — finish the recorder step in Setup.
+          Connected, but no usage recorded yet — run a turn in your agent and it appears here.
         </div>
       )}
     </div>
