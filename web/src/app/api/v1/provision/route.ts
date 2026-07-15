@@ -73,6 +73,13 @@ export async function POST(req: NextRequest) {
   }): Promise<{ ok: true; reveal_url: string; project_id: string } | { ok: false; project_id: string; error: string }> {
     const raw     = generateApiKey(opts.projectId, env)
     const keyHash = crypto.createHash('sha256').update(raw).digest('hex')
+    // Retire any prior active key for this member+project so re-provisioning
+    // rotates instead of hitting api_keys_member_project_unique (only enforced
+    // WHERE user_id IS NOT NULL AND is_active).
+    if (opts.userId) {
+      await admin.from('api_keys').update({ is_active: false })
+        .eq('org_id', org_id).eq('project_id', opts.projectId).eq('user_id', opts.userId).eq('is_active', true)
+    }
     const { data: keyRow, error: keyErr } = await admin.from('api_keys').insert({
       org_id, project_id: opts.projectId, team_id: team_id ?? null,
       user_id: opts.userId ?? null, created_by: actorId,

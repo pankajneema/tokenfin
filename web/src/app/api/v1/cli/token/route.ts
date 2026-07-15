@@ -47,6 +47,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Server missing KEY_ENCRYPTION_SECRET; cannot complete CLI login.' }, { status: 501 })
   }
 
+  // 3b. Enforce "one active key per (member, project)": retire any prior active
+  //     key for this user+project so the new one doesn't collide with the partial
+  //     unique index api_keys_member_project_unique (org_id, project_id, user_id)
+  //     WHERE user_id IS NOT NULL AND is_active. A repeat `tokenfin login` thus
+  //     ROTATES the key instead of erroring. (The org-level setup-hub key has
+  //     user_id = NULL, so it is not touched.)
+  await admin.from('api_keys')
+    .update({ is_active: false })
+    .eq('org_id', orgId).eq('project_id', proj.id).eq('user_id', user.id).eq('is_active', true)
+
   // 4. Insert the key (hash + masked prefix only).
   const { data: keyRow, error: keyErr } = await admin.from('api_keys').insert({
     org_id: orgId, project_id: proj.id, user_id: user.id, created_by: user.id,

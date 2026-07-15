@@ -83,7 +83,11 @@ export async function getOrCreateSetupKey(orgId: string, userId: string): Promis
 
   const payload: Record<string, unknown> = {
     org_id: orgId, project_id: projectId, name: SETUP_KEY_NAME,
-    created_by: userId, user_id: userId,
+    // setup-hub is an ORG-LEVEL shared key (selected by org+name, reused across
+    // users) — keep user_id NULL so it is exempt from the per-member unique index
+    // api_keys_member_project_unique and never collides with a member's own
+    // (e.g. CLI login) key on the same project. created_by still records who made it.
+    created_by: userId, user_id: null,
     key_hash: keyHash, key_prefix: maskKey(raw),
     env: 'production', scopes: ['read', 'write'], is_active: true,
   }
