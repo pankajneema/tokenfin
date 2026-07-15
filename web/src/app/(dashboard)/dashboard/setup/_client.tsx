@@ -1,21 +1,20 @@
 'use client'
 
 /**
- * Connect surface — interim, Claude Code only.
+ * Connections — connect your coding agents to TokenFin, grouped by form factor.
  *
- * The old multi-tool wizard (hooks / proxy / record snippets) is gone with the
- * capture rewrite. Usage now arrives via each CLI agent's native OpenTelemetry
- * export → our OTLP receiver at /api/otel. This page shows the one command that
- * writes that config, and a live beacon that proves events are actually landing
- * — "config written" is not a connection. The full grouped /connections surface
- * (Codex, Gemini, pull connectors, five states) lands in a later milestone.
+ * Usage arrives via each agent's native OpenTelemetry export → our OTLP receiver
+ * at /api/otel. Only CLI agents push real-time per-turn usage today; IDEs and
+ * chat apps are shown honestly with WHETHER and HOW they can be tracked — never
+ * a green checkmark on something we can't actually capture (spec §6). One command
+ * configures every installed push agent; each shows a live beacon.
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Check, Terminal, ShieldCheck, Radio } from 'lucide-react'
+import { Copy, Check, Terminal, ShieldCheck, ChevronDown, Puzzle, MonitorSmartphone, SquareTerminal } from 'lucide-react'
 import { TIER_META, ACCURACY_META, type Tier, type Accuracy } from './_catalog'
 
-// ── shared badges (also consumed by /dashboard/mcp Connected Platforms) ──────
+// ── shared badges (also consumed by /dashboard/mcp Platforms) ────────────────
 export function TierBadge({ tier }: { tier: Tier }) {
   const m = TIER_META[tier]
   return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium ${m.cls}`}>{m.label}</span>
@@ -29,176 +28,217 @@ export function AccuracyBadge({ accuracy }: { accuracy: Accuracy }) {
   )
 }
 
-interface KeyInfo { id: string; raw: string; masked: string }
-interface Props {
-  endpoint:   string          // /api/mcp — read-only MCP (query the dashboard from chat)
-  appUrl:     string          // origin, used to build the OTLP endpoint
-  orgId:      string
-  isAdmin:    boolean
-  keyError:   boolean
-  initialKey: KeyInfo | null
+// ── status model ─────────────────────────────────────────────────────────────
+// Binary: 'push' = working now (real OTLP capture), everything else = coming soon.
+type Status = 'push' | 'pull' | 'byok' | 'subscription' | 'none'
+
+interface Tool { name: string; status: Status; sourceId?: string; reason?: string }
+interface Category { id: string; label: string; hint: string; Icon: typeof Terminal; tools: Tool[] }
+
+const CATEGORIES: Category[] = [
+  {
+    id: 'cli', label: 'CLI / terminal', hint: 'Per-turn data over OpenTelemetry, in seconds', Icon: SquareTerminal,
+    tools: [
+      { name: 'Claude Code', status: 'push', sourceId: 'claude_code' },
+      { name: 'Codex CLI',   status: 'push', sourceId: 'codex_cli' },
+      { name: 'Gemini CLI',  status: 'push', sourceId: 'gemini_cli' },
+      { name: 'Aider', status: 'byok' }, { name: 'OpenCode', status: 'byok' }, { name: 'Goose', status: 'byok' },
+      { name: 'Crush', status: 'byok' }, { name: 'Qwen Code', status: 'byok' },
+      { name: 'Amp', status: 'none' }, { name: 'Warp', status: 'none' },
+      { name: 'Devin CLI', status: 'none' }, { name: 'Antigravity CLI', status: 'none' },
+    ],
+  },
+  {
+    id: 'ext', label: 'IDE extension / plugin', hint: 'Runs inside your editor', Icon: Puzzle,
+    tools: [
+      { name: 'Claude Code (VS Code · JetBrains)', status: 'push', sourceId: 'claude_code' },
+      { name: 'Codex (VS Code)', status: 'push', sourceId: 'codex_cli' },
+      { name: 'GitHub Copilot', status: 'pull' },
+      { name: 'Gemini Code Assist', status: 'pull' },
+      { name: 'Cline', status: 'byok' }, { name: 'Roo Code', status: 'byok' }, { name: 'Kilo Code', status: 'byok' }, { name: 'Continue', status: 'byok' },
+      { name: 'Amazon Q Developer', status: 'none' }, { name: 'Tabnine', status: 'none' }, { name: 'Cody', status: 'none' },
+      { name: 'Augment Code', status: 'none' }, { name: 'Qodo', status: 'none' }, { name: 'Supermaven', status: 'none' },
+    ],
+  },
+  {
+    id: 'ide', label: 'AI-native IDE', hint: 'Standalone editors / forks', Icon: MonitorSmartphone,
+    tools: [
+      { name: 'Cursor', status: 'pull', reason: 'Teams / Enterprise admin API (short retention on their side — our long history is the pitch). Connector coming soon.' },
+      { name: 'Windsurf (Devin Desktop)', status: 'none', reason: 'No usage API published.' },
+      { name: 'Google Antigravity', status: 'none' }, { name: 'Zed', status: 'none' }, { name: 'Kiro', status: 'none' },
+      { name: 'Trae', status: 'none' }, { name: 'PearAI', status: 'none' }, { name: 'Void', status: 'none' },
+    ],
+  },
+  {
+    id: 'desktop', label: 'Desktop & chat', hint: 'Subscription apps — no per-token cost', Icon: MonitorSmartphone,
+    tools: [
+      { name: 'Claude Desktop', status: 'subscription' }, { name: 'ChatGPT', status: 'subscription' }, { name: 'Gemini (web)', status: 'subscription' },
+    ],
+  },
+]
+
+// config for the three push agents (keyed by sourceId)
+function pushConfig(otelEndpoint: string, key: string): Record<string, { file: string; captures: string; note: string | null; config: string }> {
+  return {
+    claude_code: {
+      file: '~/.claude/settings.json', captures: 'Per-turn model, input / output / cache tokens and cost (from api_request logs).', note: null,
+      config: ['"env": {', '  "CLAUDE_CODE_ENABLE_TELEMETRY": "1",', '  "OTEL_METRICS_EXPORTER": "otlp",', '  "OTEL_LOGS_EXPORTER": "otlp",',
+        '  "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",', `  "OTEL_EXPORTER_OTLP_ENDPOINT": "${otelEndpoint}",`,
+        `  "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer ${key}",`, '  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"', '}'].join('\n'),
+    },
+    codex_cli: {
+      file: '~/.codex/config.toml  (user-level only)', captures: 'Per-turn tokens from the codex.turn.token_usage metric.',
+      note: 'metrics_exporter must be otlp-http — Codex defaults it to statsig, which sends metrics to OpenAI, not us.',
+      config: ['[otel]', 'exporter = "none"', 'metrics_exporter = "otlp-http"', 'log_user_prompt = false', '',
+        '[otel.metrics_exporter.otlp-http]', `endpoint = "${otelEndpoint}/v1/metrics"`, 'protocol = "json"', '',
+        '[otel.metrics_exporter.otlp-http.headers]', `Authorization = "Bearer ${key}"`].join('\n'),
+    },
+    gemini_cli: {
+      file: '~/.gemini/settings.json', captures: 'Per-turn tokens from the gen_ai.client.token.usage metric.',
+      note: 'Gemini can’t set OTLP headers, so the key rides on the endpoint as ?key=.',
+      config: JSON.stringify({ telemetry: { enabled: true, target: 'local', useCollector: true, otlpProtocol: 'http', otlpEndpoint: `${otelEndpoint}?key=${key}`, logPrompts: false } }, null, 2),
+    },
+  }
 }
 
-interface ConnStatus {
-  last_event_at: string | null
-  tokens_today:  number
-  cost_basis:    string | null
-}
+interface KeyInfo { id: string; raw: string; masked: string }
+interface Props { endpoint: string; appUrl: string; orgId: string; isAdmin: boolean; keyError: boolean; initialKey: KeyInfo | null }
+interface SourceStatus { source: string; last_event_at: string | null; tokens_today: number; cost_basis: string | null; model?: string | null }
 
 function useCopy() {
   const [copied, setCopied] = useState<string | null>(null)
-  const copy = (text: string, id: string) => {
-    navigator.clipboard?.writeText(text).then(() => {
-      setCopied(id); setTimeout(() => setCopied(c => (c === id ? null : c)), 1400)
-    })
-  }
+  const copy = (text: string, id: string) => { navigator.clipboard?.writeText(text).then(() => { setCopied(id); setTimeout(() => setCopied(c => (c === id ? null : c)), 1400) }) }
   return { copied, copy }
 }
-
 function CopyBtn({ text, id, copied, copy }: { text: string; id: string; copied: string | null; copy: (t: string, i: string) => void }) {
   const done = copied === id
   return (
-    <button
-      onClick={() => copy(text, id)}
-      className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-[12px] text-[var(--fg-secondary)] hover:bg-[var(--bg-tertiary)]"
-      aria-label="Copy"
-    >
-      {done ? <Check size={13} className="text-teal" /> : <Copy size={13} />}
-      {done ? 'Copied' : 'Copy'}
+    <button onClick={() => copy(text, id)} aria-label="Copy" className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-[12px] text-[var(--fg-secondary)] hover:bg-[var(--bg-tertiary)]">
+      {done ? <Check size={13} className="text-teal" /> : <Copy size={13} />}{done ? 'Copied' : 'Copy'}
     </button>
   )
 }
+const isLive = (s?: SourceStatus) => !!s?.last_event_at && Date.now() - new Date(s.last_event_at).getTime() < 60 * 60 * 1000
 
 export function SetupClient({ appUrl, isAdmin, keyError, initialKey }: Props) {
   const { copied, copy } = useCopy()
   const [revealed, setRevealed] = useState(false)
-  const [status, setStatus] = useState<ConnStatus | null>(null)
+  const [open, setOpen] = useState<string | null>('cli:Claude Code')
+  const [bySource, setBySource] = useState<Record<string, SourceStatus>>({})
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const otelEndpoint = `${appUrl.replace(/\/$/, '')}/api/otel`
   const key = initialKey?.raw ?? '<YOUR_KEY>'
   const command = 'npx tokenfin login && npx tokenfin setup'
+  const CFG = pushConfig(otelEndpoint, key)
 
-  // The env block `npx tokenfin setup` writes into ~/.claude/settings.json.
-  const envBlock = [
-    '"env": {',
-    '  "CLAUDE_CODE_ENABLE_TELEMETRY": "1",',
-    '  "OTEL_METRICS_EXPORTER": "otlp",',
-    '  "OTEL_LOGS_EXPORTER": "otlp",',
-    '  "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",',
-    `  "OTEL_EXPORTER_OTLP_ENDPOINT": "${otelEndpoint}",`,
-    `  "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer ${key}",`,
-    '  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"',
-    '}',
-  ].join('\n')
-
-  // Live beacon — the pipe is not silently broken only if events keep landing.
   useEffect(() => {
     let alive = true
     const poll = async () => {
       try {
-        const r = await fetch('/api/v1/connections?source=claude_code', { cache: 'no-store' })
-        if (!r.ok || !alive) return
-        const j = (await r.json()) as ConnStatus
-        if (alive) setStatus(j)
-      } catch { /* endpoint not up yet — keep waiting */ }
+        const r = await fetch('/api/v1/connections', { cache: 'no-store' }); if (!r.ok || !alive) return
+        const j = await r.json() as { sources?: SourceStatus[] }
+        if (alive) setBySource(Object.fromEntries((j.sources ?? []).map(s => [s.source, s])))
+      } catch { /* not up yet */ }
     }
-    poll()
-    timer.current = setInterval(poll, 4000)
+    poll(); timer.current = setInterval(poll, 4000)
     return () => { alive = false; if (timer.current) clearInterval(timer.current) }
   }, [])
 
-  const lastMs = status?.last_event_at ? Date.now() - new Date(status.last_event_at).getTime() : Infinity
-  const live = lastMs < 60 * 60 * 1000 // an event within the last hour
+  const pushLive = CATEGORIES.flatMap(c => c.tools).filter(t => t.status === 'push' && t.sourceId && isLive(bySource[t.sourceId!]))
+  const liveSources = new Set(pushLive.map(t => t.sourceId))
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 py-2">
       <header className="space-y-1">
-        <h1 className="text-[22px] font-semibold text-[var(--fg)]">Connect Claude Code</h1>
+        <h1 className="text-[22px] font-semibold text-[var(--fg)]">Connections</h1>
         <p className="text-[14px] text-[var(--fg-secondary)]">
-          One command. Real per-turn usage over OpenTelemetry — no proxy, no hooks. We never see
-          your API keys or your prompts.
+          One command connects every installed CLI agent — real per-turn usage over OpenTelemetry, no
+          proxy, no hooks. We never see your API keys or your prompts.
+        </p>
+        <p className="text-[12px] text-[var(--fg-tertiary)]">
+          {liveSources.size} connected · Working now: Claude Code, Codex CLI &amp; Gemini CLI · the rest are coming soon.
         </p>
       </header>
 
-      {/* Live ingest heartbeat */}
-      <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2.5 w-2.5">
-              {live && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: 'var(--teal)' }} />}
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ background: live ? 'var(--teal)' : 'var(--fg-tertiary)' }} />
-            </span>
-            <span className="text-[13px] font-medium text-[var(--fg)]">
-              {live ? 'Live' : 'Waiting for first event…'}
-            </span>
-            <Radio size={14} className="text-[var(--fg-tertiary)]" />
-          </div>
-          {live && status && (
-            <div className="text-right">
-              <div className="font-mono tabular-nums text-[14px] text-[var(--fg)]">{status.tokens_today.toLocaleString()} tokens today</div>
-              <div className="text-[11px] uppercase tracking-wide text-[var(--fg-tertiary)]">{status.cost_basis ?? 'notional'}</div>
-            </div>
-          )}
-        </div>
-        {!live && (
-          <p className="mt-2 text-[12px] text-[var(--fg-tertiary)]">
-            Run the command below, then start a Claude Code session. The first turn shows up here in
-            seconds. Nothing is counted until real events arrive.
-          </p>
-        )}
-      </section>
-
-      {/* Automatic */}
+      {/* one command */}
       <section className="space-y-2">
-        <div className="flex items-center gap-2 text-[13px] font-medium text-[var(--fg)]">
-          <Terminal size={15} /> Automatic — run one command
-        </div>
+        <div className="flex items-center gap-2 text-[13px] font-medium text-[var(--fg)]"><Terminal size={15} /> Run once — configures every installed CLI agent</div>
         <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5">
           <code className="overflow-x-auto font-mono text-[13px] text-[var(--fg)]">$ {command}</code>
           <CopyBtn text={command} id="cmd" copied={copied} copy={copy} />
         </div>
-        <p className="text-[12px] text-[var(--fg-tertiary)]">
-          Writes an <code>env</code> block to <code>~/.claude/settings.json</code> and waits until the
-          first real event lands before reporting success.
-        </p>
+        <p className="text-[12px] text-[var(--fg-tertiary)]">Writes each agent’s config, then waits until the first real event lands before reporting success.</p>
       </section>
 
-      {/* Manual */}
-      <section className="space-y-2">
-        <div className="text-[13px] font-medium text-[var(--fg)]">Manual — paste the config yourself</div>
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)]">
-          <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2">
-            <span className="text-[12px] text-[var(--fg-tertiary)]">~/.claude/settings.json</span>
-            <CopyBtn text={envBlock} id="env" copied={copied} copy={copy} />
+      {/* categories */}
+      {CATEGORIES.map(cat => (
+        <section key={cat.id} className="space-y-2">
+          <div className="flex items-baseline gap-2">
+            <cat.Icon size={15} className="translate-y-[2px] text-[var(--fg-secondary)]" />
+            <h2 className="text-[14px] font-semibold text-[var(--fg)]">{cat.label}</h2>
+            <span className="text-[12px] text-[var(--fg-tertiary)]">{cat.hint}</span>
           </div>
-          <pre className="overflow-x-auto p-3 font-mono text-[12px] leading-relaxed text-[var(--fg)]">{envBlock}</pre>
-        </div>
-      </section>
+          <div className="divide-y divide-[var(--border)] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)]">
+            {cat.tools.map(t => {
+              const working = t.status === 'push'
+              const s = t.sourceId ? bySource[t.sourceId] : undefined
+              const live = isLive(s)
+              const rowKey = `${cat.id}:${t.name}`
+              const cfg = t.sourceId ? CFG[t.sourceId] : undefined
+              const expandable = working && !!cfg
+              return (
+                <div key={rowKey}>
+                  <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {t.status === 'push' ? (
+                        <span className="relative flex h-2 w-2">
+                          {live && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: 'var(--teal)' }} />}
+                          <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: live ? 'var(--teal)' : 'var(--fg-tertiary)' }} />
+                        </span>
+                      ) : <span className="h-2 w-2 rounded-full" style={{ background: 'var(--border-strong)' }} />}
+                      <span className="truncate text-[13px] text-[var(--fg)]">{t.name}</span>
+                      {live && <span className="text-[11px] text-teal">Live</span>}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {live && s && <span className="font-mono tabular-nums text-[11px] text-[var(--fg-tertiary)]">{Number(s.tokens_today || 0).toLocaleString()} tok</span>}
+                      <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${working ? 'bg-[var(--green-bg)] text-teal' : 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]'}`}>{working ? 'Working' : 'Coming soon'}</span>
+                      {expandable && (
+                        <button onClick={() => setOpen(o => (o === rowKey ? null : rowKey))} className="text-[var(--fg-tertiary)] hover:text-[var(--fg)]">
+                          <ChevronDown size={15} className={open === rowKey ? 'rotate-180 transition' : 'transition'} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {/* expandable config for push */}
+                  {expandable && open === rowKey && cfg && (
+                    <div className="border-t border-[var(--border)] bg-[var(--bg)]">
+                      <p className="px-4 pt-2 text-[12px] text-[var(--fg-secondary)]">{cfg.captures}</p>
+                      {cfg.note && <p className="px-4 pt-1 text-[11px] text-[var(--amber)]">⚠ {cfg.note}</p>}
+                      <div className="flex items-center justify-between px-4 pt-2">
+                        <span className="font-mono text-[11px] text-[var(--fg-tertiary)]">{cfg.file}</span>
+                        <CopyBtn text={cfg.config} id={`cfg-${rowKey}`} copied={copied} copy={copy} />
+                      </div>
+                      <pre className="overflow-x-auto px-4 pb-3 pt-1 font-mono text-[12px] leading-relaxed text-[var(--fg)]">{cfg.config}</pre>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      ))}
 
-      {/* Key */}
+      {/* ingest key */}
       <section className="space-y-2">
-        <div className="flex items-center gap-2 text-[13px] font-medium text-[var(--fg)]">
-          <ShieldCheck size={15} /> Your ingest key
-        </div>
-        {keyError && (
-          <p className="text-[13px] text-red">Could not provision a key. Refresh, or check your role.</p>
-        )}
-        {!keyError && !isAdmin && (
-          <p className="text-[13px] text-[var(--fg-secondary)]">Ask an org admin to grab the ingest key from this page.</p>
-        )}
+        <div className="flex items-center gap-2 text-[13px] font-medium text-[var(--fg)]"><ShieldCheck size={15} /> Your ingest key</div>
+        {keyError && <p className="text-[13px] text-red">Could not provision a key. Refresh, or check your role.</p>}
+        {!keyError && !isAdmin && <p className="text-[13px] text-[var(--fg-secondary)]">Ask an org admin to grab the ingest key from this page.</p>}
         {!keyError && isAdmin && initialKey && (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5">
-            <code className="overflow-x-auto font-mono text-[13px] text-[var(--fg)]">
-              {revealed ? initialKey.raw : initialKey.masked}
-            </code>
+            <code className="overflow-x-auto font-mono text-[13px] text-[var(--fg)]">{revealed ? initialKey.raw : initialKey.masked}</code>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setRevealed(v => !v)}
-                className="rounded border border-[var(--border)] px-2 py-1 text-[12px] text-[var(--fg-secondary)] hover:bg-[var(--bg-tertiary)]"
-              >
-                {revealed ? 'Hide' : 'Reveal'}
-              </button>
+              <button onClick={() => setRevealed(v => !v)} className="rounded border border-[var(--border)] px-2 py-1 text-[12px] text-[var(--fg-secondary)] hover:bg-[var(--bg-tertiary)]">{revealed ? 'Hide' : 'Reveal'}</button>
               <CopyBtn text={initialKey.raw} id="key" copied={copied} copy={copy} />
             </div>
           </div>
