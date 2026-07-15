@@ -75,8 +75,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'More',
     items: [
-      { label: 'Setup',        href: '/dashboard/setup',        icon: Plug },
-      { label: 'MCP',          href: '/dashboard/mcp',          icon: Puzzle },
+      { label: 'Connections',  href: '/dashboard/setup',        icon: Plug },
+      { label: 'Platforms',    href: '/dashboard/mcp',          icon: Puzzle },
       { label: 'Integrations', href: '/dashboard/integrations', icon: GitBranch },
       { label: 'Settings',     href: '/dashboard/settings',     icon: Settings },
     ],
