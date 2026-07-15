@@ -523,7 +523,7 @@ export default function PlansPage() {
           Questions?{' '}
           <button onClick={() => setShowSales(true)} className="text-coral hover:underline font-medium">Chat with us</button>
           {' '}or{' '}
-          <Link href="/dashboard/resources" className="text-coral hover:underline font-medium">read the docs</Link>
+          <Link href="/dashboard/setup" className="text-coral hover:underline font-medium">read the docs</Link>
         </p>
       </div>
 

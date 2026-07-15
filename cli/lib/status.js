@@ -1,47 +1,39 @@
 'use strict'
 
-const fs = require('fs')
-const os = require('os')
-const path = require('path')
-const { spawnSync } = require('child_process')
+// `tokenfin status` — is Claude Code configured, and are events flowing?
 
+const { readConfig } = require('./config')
+const { MANAGED_KEYS, readClaudeSettings } = require('./otel')
+const { getConnStatus } = require('./api')
+const { DEFAULT_APP_URL } = require('./login')
+
+const log = (m) => process.stdout.write(m + '\n')
 const mark = (ok) => (ok ? '✔' : '✗')
 
-async function status() {
-  const dir = path.join(os.homedir(), '.claude')
-  const cfgPath = path.join(dir, 'tokenfin-hook.json')
-  const recPath = path.join(dir, 'tokenfin-record-usage.js')
-  const settingsPath = path.join(dir, 'settings.json')
+async function status(flags = {}) {
+  const cfg = readConfig()
+  const appUrl = (flags.appUrl || process.env.TOKENFIN_APP_URL || cfg.appUrl || DEFAULT_APP_URL).replace(/\/$/, '')
+  const key = (flags.key || process.env.TOKENFIN_KEY || cfg.key || '').trim()
 
-  let url = null
-  try { url = JSON.parse(fs.readFileSync(cfgPath, 'utf8')).url } catch {}
+  let env = {}
+  try { env = readClaudeSettings().env || {} }
+  catch (e) { log('! ' + e.message) }
 
-  const cfgOk = fs.existsSync(cfgPath)
-  const recOk = fs.existsSync(recPath)
+  const configured = MANAGED_KEYS.every((k) => env[k])
+  log(mark(configured) + ' Claude Code OTel config ' + (configured ? 'present' : 'missing — run `tokenfin setup`'))
+  if (env.OTEL_EXPORTER_OTLP_ENDPOINT) log('  endpoint: ' + env.OTEL_EXPORTER_OTLP_ENDPOINT)
 
-  let hookOk = false
-  try {
-    const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
-    // match quoted (current) and unquoted (pre-0.1.1) hook commands
-    hookOk = (s.hooks && s.hooks.Stop || []).some(g => (g.hooks || []).some(h => typeof h.command === 'string' && h.command.includes('tokenfin-record-usage.js')))
-  } catch {}
+  if (!key) { log('· no stored key — run `tokenfin login` to check live event flow'); return }
 
-  let mcpOk = false
-  const r = spawnSync('claude', ['mcp', 'list'], { encoding: 'utf8', shell: process.platform === 'win32' })
-  if (!r.error && r.stdout) mcpOk = /tokenfin/i.test(r.stdout)
-
-  process.stdout.write([
-    'TokenFin — Claude Code setup status',
-    `  ${mark(cfgOk)} hook config       ${cfgPath}`,
-    `  ${mark(recOk)} recorder script   ${recPath}`,
-    `  ${mark(hookOk)} Stop hook         settings.json`,
-    `  ${mark(mcpOk)} MCP server        ${url || 'tokenfin'}`,
-    '',
-    (cfgOk && recOk && hookOk && mcpOk)
-      ? 'All set. Usage auto-records after each Claude Code turn.'
-      : 'Not fully configured. Run: npx tokenfin setup --key <tfk_prod_...>',
-    '',
-  ].join('\n'))
+  const r = await getConnStatus(appUrl, key, 'claude_code')
+  if (!r.ok) { log('✗ could not reach TokenFin — ' + r.why); return }
+  const s = r.status || {}
+  if (s.last_event_at) {
+    const ageMin = Math.round((Date.now() - new Date(s.last_event_at).getTime()) / 60000)
+    log('✔ live — last event ' + ageMin + ' min ago · ' + Number(s.tokens_today || 0).toLocaleString() + ' tokens today · ' + (s.cost_basis || 'notional'))
+  } else {
+    log('· no events yet for claude_code — run a Claude Code turn')
+  }
 }
 
 module.exports = { status }

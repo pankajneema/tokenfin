@@ -12,7 +12,7 @@ import { FirstEventCelebration }  from '@/components/dashboard/first-event-celeb
 
 export const metadata = { title: 'Overview — TokenFin' }
 
-// Always render fresh — usage data changes on every ingest / record_usage call.
+// Always render fresh — usage data changes on every ingested event.
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
@@ -75,10 +75,10 @@ export default async function DashboardPage() {
     { data: prev5dAgg  },
   ] = await Promise.all([
     admin.from('usage_events')
-      .select('total_tokens,input_tokens,output_tokens,cost_usd,model,project_id,created_at,tags')
+      .select('total_tokens,input_tokens,output_tokens,cost_usd,cost_basis,model,project_id,created_at,tags')
       .eq('org_id', orgId).gte('created_at', since30),
     admin.from('usage_events')
-      .select('total_tokens,cost_usd,created_at')
+      .select('total_tokens,cost_usd,cost_basis,created_at')
       .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30),
     admin.from('usage_events')
       .select('total_tokens,cost_usd,created_at')
@@ -106,7 +106,11 @@ export default async function DashboardPage() {
   ])
 
   /* ── Current period aggregations ── */
-  const totalCost    = (events30 ?? []).reduce((s, r) => s + Number(r.cost_usd     ?? 0), 0)
+  // Notional = subscription usage priced at API rates (e.g. Claude Code on
+  // Pro/Max). It is NOT a bill and must never sum into the metered spend total.
+  const isNotional = (r: { cost_basis?: string | null }) => r.cost_basis === 'notional'
+  const totalCost    = (events30 ?? []).filter(r => !isNotional(r)).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const notionalCost = (events30 ?? []).filter(isNotional).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
   const totalTokens  = (events30 ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
   const totalReqs    = events30?.length ?? 0
   const memberCount  = members?.length  ?? 0
@@ -120,7 +124,7 @@ export default async function DashboardPage() {
   }, 0)
 
   /* ── Prev period ── */
-  const prevCost   = (eventsPrev ?? []).reduce((s, r) => s + Number(r.cost_usd     ?? 0), 0)
+  const prevCost   = (eventsPrev ?? []).filter(r => !isNotional(r)).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
   const prevTokens = (eventsPrev ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
   const prevReqs   = eventsPrev?.length ?? 0
 
@@ -135,7 +139,7 @@ export default async function DashboardPage() {
   for (const e of events30 ?? []) {
     const m = e.model ?? 'unknown'
     if (!modelMap[m]) modelMap[m] = { cost: 0, tokens: 0, reqs: 0 }
-    modelMap[m].cost   += Number(e.cost_usd     ?? 0)
+    modelMap[m].cost   += isNotional(e) ? 0 : Number(e.cost_usd ?? 0)
     modelMap[m].tokens += Number(e.total_tokens ?? 0)
     modelMap[m].reqs++
   }
@@ -159,7 +163,7 @@ export default async function DashboardPage() {
     const day = toISTDate(e.created_at)
     if (!dayMap.has(day)) continue
     const entry = dayMap.get(day)!
-    entry.cost   += Number(e.cost_usd     ?? 0)
+    entry.cost   += isNotional(e) ? 0 : Number(e.cost_usd ?? 0)
     entry.tokens += Number(e.total_tokens ?? 0)
     entry.reqs++
   }
@@ -285,6 +289,7 @@ export default async function DashboardPage() {
 
         <StatsCards
           totalCost={totalCost}
+          notionalCost={notionalCost}
           totalTokens={totalTokens}
           inputTokens={inputTokens}
           outputTokens={outputTokens}

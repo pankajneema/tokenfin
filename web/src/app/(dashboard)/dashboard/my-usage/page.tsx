@@ -3,7 +3,7 @@ import { MyUsageClient } from './_client'
 
 export const metadata = { title: 'My Usage — TokenFin' }
 
-// Always render fresh — usage data changes on every ingest / record_usage call.
+// Always render fresh — usage data changes on every ingested event.
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 

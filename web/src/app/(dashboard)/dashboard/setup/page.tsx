@@ -28,7 +28,8 @@ export default async function SetupPage() {
   const role = (member?.role as Role | undefined) ?? 'viewer'
   const isAdmin = can(role, 'keys:create')
 
-  const endpoint = (process.env.NEXT_PUBLIC_APP_URL || 'https://tokenfin.curiousdevs.com') + '/api/mcp'
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://tokenfin.curiousdevs.com'
+  const endpoint = appUrl + '/api/mcp'
 
   let setupKey: { id: string; raw: string; masked: string } | null = null
   let keyError = false
@@ -44,6 +45,7 @@ export default async function SetupPage() {
   return (
     <SetupClient
       endpoint={endpoint}
+      appUrl={appUrl}
       orgId={orgId}
       isAdmin={isAdmin}
       keyError={keyError}

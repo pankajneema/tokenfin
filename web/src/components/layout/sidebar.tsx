@@ -7,7 +7,7 @@ import type { User } from '@supabase/supabase-js'
 import {
   Zap, LayoutDashboard, BarChart3,
   Layers, Users, UserPlus, Key, Shield, Bell, GitBranch, Settings,
-  ChevronLeft, ChevronRight, ChevronDown, HelpCircle, BookOpen, Puzzle, Gauge, Plug,
+  ChevronLeft, ChevronRight, ChevronDown, HelpCircle, Puzzle, Gauge, Plug,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -79,12 +79,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'MCP',          href: '/dashboard/mcp',          icon: Puzzle },
       { label: 'Integrations', href: '/dashboard/integrations', icon: GitBranch },
       { label: 'Settings',     href: '/dashboard/settings',     icon: Settings },
-    ],
-  },
-  {
-    label: 'Resources',
-    items: [
-      { label: 'Resources',    href: '/dashboard/resources',    icon: BookOpen },
     ],
   },
 ]

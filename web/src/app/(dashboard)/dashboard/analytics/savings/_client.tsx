@@ -22,7 +22,7 @@ export function SavingsClient(p: Props) {
           <PiggyBank size={22} className="mx-auto mb-3 text-[var(--fg-tertiary)]" />
           <p className="text-[14px] font-semibold text-[var(--fg)]">No savings recorded yet</p>
           <p className="mx-auto mt-1 max-w-md text-[12.5px] text-[var(--fg-secondary)]">
-            Connect a client via <a className="text-teal underline" href="/dashboard/mcp/connect">MCP Setup</a> and use the compress tool — savings appear as traffic flows.
+            Connect a client via <a className="text-teal underline" href="/dashboard/setup">Setup</a> and use the compress tool — savings appear as traffic flows.
           </p>
         </div>
       </div>

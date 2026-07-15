@@ -60,6 +60,7 @@ interface Props {
   memberCount:   number
   sparks:        { costs: number[]; tokens: number[]; reqs: number[] }
   trends:        { cost: number | null; tokens: number | null; reqs: number | null }
+  notionalCost?: number
 }
 
 function fmtTokShort(n: number): string {
@@ -71,12 +72,12 @@ function fmtTokShort(n: number): string {
 }
 
 /* ═══════════════════════════════════════════════════════════════ */
-export function StatsCards({ totalCost, totalTokens, inputTokens, outputTokens, totalRequests, memberCount, sparks, trends }: Props) {
+export function StatsCards({ totalCost, totalTokens, inputTokens, outputTokens, totalRequests, memberCount, sparks, trends, notionalCost = 0 }: Props) {
   const cards = [
     {
       label:     'Total Cost',
       value:     formatCost(totalCost),
-      sub:       'vs. previous 30 days',
+      sub:       notionalCost > 0 ? `metered · + ${formatCost(notionalCost)} notional (subscription)` : 'vs. previous 30 days',
       Icon:      DollarSign,
       trend:     trends.cost,
       color:     '#E8533A',

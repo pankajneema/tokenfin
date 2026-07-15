@@ -134,25 +134,8 @@ func (c *Client) SetIfNewTTL(ctx context.Context, key string, ttl time.Duration)
 	return c.rdb.SetNX(ctx, key, 1, ttl).Result()
 }
 
-// ─── CCR reversible store ────────────────────────────────────────────────────
-// Stores the original of a compressed block so the model can retrieve it on
-// demand. TTL-bounded — originals are ephemeral, not a permanent archive.
-
-func (c *Client) CCRPut(ctx context.Context, hash, original string, ttl time.Duration) error {
-	return c.rdb.Set(ctx, ccrK(hash), original, ttl).Err()
-}
-
-func (c *Client) CCRGet(ctx context.Context, hash string) (string, error) {
-	v, err := c.rdb.Get(ctx, ccrK(hash)).Result()
-	if err == goredis.Nil {
-		return "", nil // miss — not an error
-	}
-	return v, err
-}
-
 // ─── Key builders — single source of truth for Redis key names ───────────────
 
-func ccrK(hash string) string                { return "tf:ccr:" + hash }
 func apiKeyK(hash string) string             { return "apikey:" + hash }
 func usageTokenK(orgID, month string) string { return fmt.Sprintf("org:%s:usage:tokens:%s", orgID, month) }
 func usageCostK(orgID, month string) string  { return fmt.Sprintf("org:%s:usage:cost:%s", orgID, month) }

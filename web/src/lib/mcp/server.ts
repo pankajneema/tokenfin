@@ -6,11 +6,10 @@ export const PROTOCOL_VERSION = '2025-06-18'
 export const SERVER_INFO = { name: 'tokenfin', title: 'TokenFin FinOps', version: '1.0.0' }
 
 const INSTRUCTIONS =
-  'TokenFin — one connection for FinOps. (1) Analytics: get_spend, get_usage_by_model, ' +
+  'TokenFin — read-only FinOps for your dashboard. (1) Analytics: get_spend, get_usage_by_model, ' +
   'get_daily_costs, get_budget_status, list_projects. (2) Token saving: call compress() on ' +
   'bulky tool output/JSON/logs before adding to context; retrieve(hash) restores the original. ' +
-  '(3) Auto-sync: call record_usage() once after every model response with the token counts ' +
-  '(and optionally the prompt/response) so TokenFin tracks spend and prompts automatically.'
+  'Usage is captured automatically via OpenTelemetry — there is no write/record tool here.'
 
 // Dispatches one JSON-RPC message. Returns the response object, or null for
 // notifications (which get a 202 with no body).

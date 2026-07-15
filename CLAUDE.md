@@ -106,6 +106,10 @@ prevMap.set(shifted, prev + cost)
 | `/api/v1/provision` | POST | Admin | Bulk onboard members + auto-generate keys (one-time reveal links) + service accounts |
 | `/api/v1/keys/reveal` | POST | Token (single-use) | Reveal a provisioned raw key exactly once |
 | `/api/mcp` | POST | API key (Bearer, read) | Remote MCP server — Streamable HTTP, JSON-RPC, read-only FinOps tools |
+| `/api/otel/v1/logs` | POST | API key (Bearer) | **OTLP receiver — per-turn usage.** Parses `*.api_request` log events → one usage_events row, deduped by `event_id`. JSON + protobuf. |
+| `/api/otel/v1/metrics` | POST | API key (Bearer/`?key=`) | OTLP receiver — health checks + **Codex/Gemini capture**: derives per-turn rows by diffing cumulative counters (`lib/otlp/metrics.ts`, state in `otlp_metric_state`, migration 024). Claude Code metrics are NOT derived (its logs own those rows). |
+| `/api/otel/v1/traces` | POST | API key (Bearer) | OTLP receiver — GenAI spans → spans/traces + usage mirror. |
+| `/api/v1/connections` | GET | API key or session | Per-source connection status (last event, tokens today, cost_basis). Powers CLI `setup`/`status`/`doctor` + setup beacon. |
 | `/auth/callback` | GET | — | Supabase OAuth callback |
 
 ### Key security model (IMPORTANT)
@@ -116,40 +120,47 @@ prevMap.set(shifted, prev + cost)
 ### New dashboard pages
 - `/dashboard/my-usage` — per-user, dollar-first personal analytics (scoped to `usage_events.user_id`); shows a savings card.
 - `/dashboard/provision` — bulk team provisioning UI.
-- `/dashboard/mcp/connect` — one-click MCP key + client config generator.
-- `/dashboard/analytics/savings` — TokenFin Saver savings (measured vs estimated, by lever).
+- `/dashboard/setup` — interim Claude Code connect surface (OTLP one-command + live ingest beacon). Full grouped `/connections` is a later milestone.
+- `/dashboard/analytics/savings` — savings (measured vs estimated, by lever).
 - `/keys/reveal/[token]` — public one-time key reveal page.
 
-### MCP is the single integration (one-click)
-`/dashboard/mcp/connect` generates a key + copy-paste config for one connection that does
-everything. The server lives in `web/src/lib/mcp/*` (auth · tools · run · server · compress ·
-ccr · pricing · types) behind a thin `web/src/app/api/mcp/route.ts` (Streamable HTTP, JSON-RPC,
-Bearer auth, Origin guard). Tools:
+### Capture = OpenTelemetry push (the Connections rebuild)
+Usage is captured from each CLI agent's **native OTLP export**, not from MCP/hooks/proxy (all
+removed — see `MIGRATION.md`). `npx tokenfin setup` writes an OTel `env` block into
+`~/.claude/settings.json` pointing Claude Code at `/api/otel`.
+- **Receiver**: `web/src/lib/otlp/*` (auth · attrs · proto · decode · mapping · normalize · persist)
+  behind `web/src/app/api/otel/v1/{logs,metrics,traces}/route.ts`. Accepts OTLP/JSON **and**
+  protobuf (protobufjs, inlined proto). Bearer key → org via `api_keys` hash.
+- **Per-turn rows come from logs**: Claude Code's `claude_code.api_request` event carries model,
+  token counts, cost, `prompt.id`, `session.id`, `user.email`. `normalize.ts` → one `usage_events`
+  row; `persist.ts` upserts with `ON CONFLICT (event_id) DO NOTHING` (idempotent; replays are no-ops).
+  Metrics (`claude_code.token.usage`) are cumulative counters of the same tokens → health-only,
+  never persisted (would double-count).
+- **cost_basis**: CLI-agent usage is `notional` (subscription usage priced at API rates — NOT a
+  bill; never summed into a metered total). `metered`/`vendor_reported` come with pull connectors.
+- **Mapping is versioned in one file** (`otlp/mapping.ts`); unrecognized metric names are logged,
+  never silently dropped.
+- **Codex/Gemini (Phase 4, needs a real-session confirm)**: they report tokens only as metric
+  counters. `otlp/metrics.ts` derives per-turn rows by cumulative-diffing (first-seen = baseline,
+  emit nothing). `setup` writes `~/.codex/config.toml` (`[otel]`, user-level, `metrics_exporter=otlp-http`
+  — NOT the statsig default) and `~/.gemini/settings.json` (telemetry; auth via `?key=` since Gemini
+  can't set headers). Exact metric attribute names + temporality still need one real session to verify.
+
+### MCP is read-only (query the dashboard from chat)
+`web/src/lib/mcp/*` behind `web/src/app/api/mcp/route.ts` (Streamable HTTP, JSON-RPC, Bearer,
+Origin guard). Tools:
 - **Analytics (read):** list_projects, get_spend, get_usage_by_model, get_daily_costs, get_budget_status
 - **Token saving:** compress / retrieve (reversible CCR, needs migration 015 for retrieve), savings_stats
-- **Auto-sync:** record_usage — client calls it after each model response → writes usage_events +
-  usage_agg (analytics reflect it immediately) and optionally captures the prompt (prompt_captures).
-The dashboard Gateway page was removed; the Go `cmd/gateway` proxy still exists for transparent
-output-shaping but is not the primary/surfaced integration.
 
-### TokenFin Saver — the savings layer (TokenFin)
-- **Gateway** (`backend/cmd/gateway`, port 8003): an LLM reverse-proxy clients point
-  `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` at. It applies cache-safe output-shaping levers
-  (verbosity steering at the system **tail**; effort routing on mechanical `tool_result`
-  turns — see `internal/gateway/shaper.go`), streams the provider response back unchanged,
-  and records actual usage + baseline. **Fail-open**: any error forwards the original request.
-- **Measurement**: a random **holdout** (`TOKENFIN_HOLDOUT`, default 0.05) bypasses all levers
-  so output savings are *measured* against a control, not just estimated.
-- **Schema**: migration 013 adds savings columns to `usage_events`/`usage_agg` and makes the
-  `upsert_usage_agg*` functions savings-aware. Recording reuses the Redis stream + worker.
-- **CCR input compression (built)**: `internal/gateway/compress.go` + `ccr.go` reversibly
-  compress bulky tool_result JSON/logs (keep first N rows / head+tail), cache the original in
-  Redis (`tf:ccr:<hash>`, 1h TTL), and inject a `tokenfin_retrieve` tool. The proxy resolves
-  that call inline (one round, buffered path) so nothing is lost. CCR runs on **non-streaming**
-  requests only; streaming requests still get output shaping.
-- **Full-prompt capture (opt-in)**: gateway env `CAPTURE_PROMPTS=1` writes the full prompt +
-  response to `prompt_captures` (migration 014) — a separate, RLS-protected, 30-day-TTL table.
-  Surfaced under Analytics → Prompts (expandable cards). Off by default (prompts may hold PII).
+There is **no** `record_usage` / write tool — MCP never captures usage (it can't reliably know
+token counts). `setup` optionally registers this server so you can ask your dashboard questions
+in chat.
+
+### Removed: the Go gateway / proxy
+The `cmd/gateway` reverse-proxy, base-URL rewriting, and the LaunchAgent/CLI proxies are **deleted**
+(`MIGRATION.md`): a proxy in the request path is an unacceptable failure mode for an observability
+tool and would force us to hold customer provider keys. Savings columns (migration 013) and
+`prompt_captures` (014) remain; the MCP `compress`/`savings_stats` tools still use them.
 
 ---
 

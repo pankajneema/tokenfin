@@ -177,7 +177,7 @@ export function PromptsClient({
               Make sure you&apos;re on proxy version 1.1+.
             </p>
           </div>
-          <a href="/dashboard/resources" className="btn-primary text-[13px]">
+          <a href="/dashboard/setup" className="btn-primary text-[13px]">
             View setup guide →
           </a>
         </div>

@@ -58,7 +58,7 @@ export function OnboardingChecklist({ hasProject, hasApiKey, hasEvent }: Props) 
       id:      'event',
       label:   'Send your first event',
       desc:    'Follow the setup guide — this checklist disappears after.',
-      href:    '/dashboard/resources',
+      href:    '/dashboard/setup',
       done:    hasEvent,
       current: hasProject && hasApiKey && !hasEvent,
     },

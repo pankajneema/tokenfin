@@ -1,75 +1,40 @@
 # tokenfin
 
-One command to auto-record your **Claude Code** usage & cost to your [TokenFin](https://tokenfin.curiousdevs.com) dashboard.
+Point **Claude Code** at your [TokenFin](https://tokenfin.curiousdevs.com) dashboard in one command.
+
+TokenFin is an **OpenTelemetry receiver**. Claude Code (and Codex, Gemini) already emit token usage
+over OTLP — this CLI just writes the config that sends it to TokenFin. No proxy sits in your request
+path, no provider API keys are held, and no hooks parse your transcripts.
+
+## Quick start
 
 ```bash
-npx tokenfin setup --key tfk_prod_xxx
+npx tokenfin login    # browser sign-in, stores an ingest key in ~/.tokenfin/config.json
+npx tokenfin setup    # writes the OTel env block to ~/.claude/settings.json, waits for the first event
 ```
 
-That's it. Restart Claude Code and every session on this machine records token usage automatically — no manual tool calls, no proxy.
-
-## Why a CLI (and not just an MCP server)
-
-An MCP server is **passive** — it only exposes tools. Connecting it gives Claude read/record tools, but nothing *calls* `record_usage`, so the dashboard stays empty. `tokenfin setup` fixes that by installing two things:
-
-1. the **tokenfin MCP server** (user scope) — read + record tools
-2. a Claude Code **Stop hook** — after every turn, it reads the transcript's token usage and posts it to your dashboard
-
-The hook is what makes recording actually happen. It's fail-open and silent (never blocks or errors your session).
+`setup` doesn't exit on "config written" — it waits until a real event lands, then reports the model
+it saw. Open Claude Code and run a turn.
 
 ## Commands
 
-```bash
-npx tokenfin login      # sign in via browser (creates a project key, no copy/paste)
-npx tokenfin setup      # configure your tool (interactive picker) — MCP + Claude Code auto-record hook
-npx tokenfin proxy      # run a local recorder-proxy that auto-records ANY tool (see below)
-npx tokenfin status     # show what's currently configured
-npx tokenfin remove     # undo everything
-```
+| Command | What it does |
+|---|---|
+| `login` | Browser OAuth; stores an ingest key. |
+| `setup` | Writes `env` (telemetry on, OTLP → `<app>/api/otel`, `http/protobuf`, `cumulative`) into `~/.claude/settings.json`, then waits for the first event. Also registers the read-only MCP server so you can query your dashboard from chat. |
+| `status` | Whether Claude Code is configured and events are flowing. |
+| `doctor` | Diagnoses silent data loss: config present/valid, protocol/temporality correct, events in the last 24h. |
+| `remove` | Full clean uninstall — strips the env block (backup first) and unregisters the MCP server. |
 
-### Auto-record any tool (`tokenfin proxy`)
+Options: `--key <tfk_…>` / `TOKENFIN_KEY`, `--app-url <url>` / `TOKENFIN_APP_URL`, `--yes`.
 
-Claude Code auto-records via a Stop hook. For **any other tool** (Cursor, Windsurf,
-Codex, your own app…), run the recorder-proxy and point the tool at it:
+## What's captured
 
-```bash
-npx tokenfin proxy          # → http://127.0.0.1:8788
-# then, in your tool / shell:
-ANTHROPIC_BASE_URL=http://127.0.0.1:8788   # Anthropic
-OPENAI_BASE_URL=http://127.0.0.1:8788/v1   # OpenAI
-```
+Per turn: model, input/output tokens, cache read/write tokens, and cost — from Claude Code's
+`claude_code.api_request` telemetry. Claude Code on Pro/Max reports **notional** cost (what it would
+cost on the API), shown separately from metered spend, never summed into it.
 
-Every call is forwarded **unchanged** to the provider and its token usage is
-recorded to your dashboard. It's **fail-open** — if recording ever fails, your
-request still goes through untouched. Your provider key passes through in its
-normal header and is never stored. Works for streaming and non-streaming.
+## Privacy
 
-### Options
-
-| Flag | Env | Default |
-|---|---|---|
-| `-k, --key <key>` | `TOKENFIN_KEY` | prompted (hidden input) |
-| `-u, --url <url>` | `TOKENFIN_URL` | `https://tokenfin.curiousdevs.com/api/mcp` |
-| `-y, --yes` | — | non-interactive; never prompt |
-
-Get your key from **Dashboard → API Keys**. Use the full raw key (not the masked `tfk_…c05a` display value).
-
-## What it writes
-
-All under `~/.claude/`:
-
-- `tokenfin-hook.json` — `{ url, key }`, `chmod 600`
-- `tokenfin-record-usage.js` — the Stop hook recorder
-- `settings.json` — a `Stop` hook entry (backed up to `settings.json.bak-tokenfin` first)
-- registers the `tokenfin` MCP server via `claude mcp add --scope user`
-
-Zero dependencies, cross-platform (macOS / Linux / Windows), Node ≥ 16.
-
-## Requirements
-
-- [Claude Code](https://claude.com/claude-code) installed (`claude` on your PATH)
-- Node.js ≥ 16 (ships with Claude Code)
-
-## Other clients
-
-The auto-record hook is Claude-Code-specific. For **Cursor / Claude Desktop / Claude.ai / ChatGPT**, connect the MCP server for read/compress tools from **Dashboard → Connect via MCP**; deterministic auto-recording there requires the TokenFin gateway (`ANTHROPIC_BASE_URL` proxy).
+The ingest key authenticates OTLP pushes to TokenFin; it is never sent to your model provider. Prompts
+are not captured by this setup.

@@ -1,7 +1,6 @@
 import crypto from 'crypto'
 
-// Reversible CCR compression for the MCP `compress` tool — mirrors the Go
-// gateway compressor (backend/internal/gateway/compress.go). Bulky JSON arrays
+// Reversible CCR compression for the MCP `compress` tool. Bulky JSON arrays
 // keep the first N rows; large text keeps head+tail. The original is cached so
 // `retrieve` can return it verbatim. ~4 chars/token heuristic for estimates.
 

@@ -43,7 +43,7 @@ function detectPlatform(tags: Record<string, string> | null): string {
 
 export const metadata = { title: 'Analytics — TokenFin' }
 
-// Always render fresh — usage data changes on every ingest / record_usage call.
+// Always render fresh — usage data changes on every ingested event.
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 

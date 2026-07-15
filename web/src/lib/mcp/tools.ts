@@ -64,7 +64,6 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 365 } }, additionalProperties: false },
     annotations: { title: 'Savings stats', readOnlyHint: true, openWorldHint: false },
   },
-  // ── Auto-sync: report usage (+ optional prompt) after each model call ──
   // ── Evaluation (quality / hallucination) ──
   {
     name: 'evaluate',
@@ -87,26 +86,6 @@ export const TOOLS = [
     description: 'Hallucination rate and mean faithfulness over the last N days (default 30).',
     inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 365 } }, additionalProperties: false },
     annotations: { title: 'Eval summary', readOnlyHint: true, openWorldHint: false },
-  },
-  {
-    name: 'record_usage',
-    description: 'Report an LLM call so TokenFin syncs token usage and cost. Call this once after each model response. Optionally include the prompt/response text to capture it for prompt analytics. Cost is computed automatically if omitted.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        model: { type: 'string' },
-        input_tokens: { type: 'integer', minimum: 0, description: 'Non-cached input tokens.' },
-        output_tokens: { type: 'integer', minimum: 0 },
-        cache_read_tokens: { type: 'integer', minimum: 0, description: 'Cache-read input tokens (priced ~10% of input).' },
-        cache_creation_tokens: { type: 'integer', minimum: 0, description: 'Cache-write input tokens (priced ~125% of input).' },
-        cost_usd: { type: 'number', description: 'Optional; computed from the model if omitted.' },
-        prompt: { type: 'string', description: 'Optional full prompt to capture.' },
-        response: { type: 'string', description: 'Optional full response to capture.' },
-        event_id: { type: 'string', description: 'Optional idempotency key — a repeat call with the same value is ignored (prevents double-counting on retries).' },
-      },
-      required: ['model'], additionalProperties: false,
-    },
-    annotations: { title: 'Record usage', readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
 ] as const
 

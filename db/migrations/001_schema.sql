@@ -1282,3 +1282,70 @@ ALTER TABLE api_keys
   ADD COLUMN IF NOT EXISTS key_enc_iv     TEXT,
   ADD COLUMN IF NOT EXISTS key_enc_tag    TEXT;
 
+
+-- =============================================================================
+-- Migration 023 — OTLP push ingest (Connections rebuild, Milestone 1)
+-- =============================================================================
+-- TokenFin now receives usage as native OpenTelemetry from CLI agents (Claude
+-- Code / Codex / Gemini) at /api/otel/v1/{metrics,logs,traces}. This is an
+-- ADDITIVE migration: the existing UUID `id` PK, every analytics query, and the
+-- Go worker keep working unchanged. The receiver populates the new columns.
+--
+-- Idempotency (non-negotiable — the same spend can arrive via push AND a future
+-- pull poll): `event_id` is a UNIQUE dedupe key. The receiver inserts with
+-- ON CONFLICT (event_id) DO NOTHING, so a replay never double-counts.
+--
+-- `cost_basis` keeps us honest: 'metered' = real per-token money, 'notional' =
+-- subscription usage priced at API rates (e.g. Claude Code on Pro/Max — NOT a
+-- bill; never sum into a metered total), 'vendor_reported' = the vendor's own $.
+--
+-- input_tokens/output_tokens are re-asserted defensively: the deployed DB and
+-- the ingest/otel routes already use them, but a fresh 001 apply created only
+-- prompt_/completion_tokens. IF NOT EXISTS makes this safe either way.
+-- =============================================================================
+
+ALTER TABLE usage_events
+  ADD COLUMN IF NOT EXISTS input_tokens        BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS output_tokens       BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS event_id            TEXT,
+  ADD COLUMN IF NOT EXISTS source              TEXT,      -- claude_code | codex_cli | gemini_cli | ...
+  ADD COLUMN IF NOT EXISTS mode                TEXT,      -- 'push' | 'pull'
+  ADD COLUMN IF NOT EXISTS provider_request_id TEXT,
+  ADD COLUMN IF NOT EXISTS correlation_id      TEXT,      -- prompt.id (CC) / conversation.id (Codex) / session
+  ADD COLUMN IF NOT EXISTS cache_read_tokens   BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS cache_write_tokens  BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS reasoning_tokens    BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS cost_basis          TEXT,      -- metered | notional | vendor_reported
+  ADD COLUMN IF NOT EXISTS user_email          TEXT,
+  ADD COLUMN IF NOT EXISTS session_id          TEXT;
+
+-- Dedupe identity. Plain unique index: Postgres allows many NULLs (legacy rows
+-- keep event_id NULL) while enforcing uniqueness on real ids — and unlike a
+-- partial index it can serve as an ON CONFLICT (event_id) arbiter for upserts.
+CREATE UNIQUE INDEX IF NOT EXISTS usage_events_event_id_uq
+  ON usage_events(event_id);
+
+-- Connections status endpoint reads latest event per (org, source).
+CREATE INDEX IF NOT EXISTS usage_events_org_source_created
+  ON usage_events(org_id, source, created_at DESC);
+
+
+-- =============================================================================
+-- Migration 024 — OTLP metric state (Codex/Gemini cumulative-counter diffing)
+-- =============================================================================
+-- Codex and Gemini report per-turn tokens only as metric COUNTERS, usually
+-- cumulative (monotonically growing totals). To turn those into per-turn rows
+-- without double-counting, the /api/otel/v1/metrics receiver diffs each metric
+-- series against its last-seen value, stored here. First observation of a series
+-- records a baseline and emits nothing; later observations emit only the delta.
+-- (Claude Code is unaffected — its per-turn rows come from logs, not metrics.)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS otlp_metric_state (
+  org_id     UUID        NOT NULL,
+  series_key TEXT        NOT NULL,
+  value      NUMERIC     NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (org_id, series_key)
+);
+
