@@ -36,6 +36,10 @@ desktop.ini
 # ── Logs ──────────────────────────────────────────────────────
 *.log
 logs/
+# but NOT the OTLP logs API route — the bare logs/ rule above was ignoring it,
+# which kept it out of the deploy and made /api/otel/v1/logs 404 in production
+!web/src/app/api/otel/v1/logs/
+!web/src/app/api/otel/v1/logs/**
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
