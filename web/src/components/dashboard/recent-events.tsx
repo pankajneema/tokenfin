@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { ArrowRight } from 'lucide-react'
 import { formatCost, formatTokens, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import { TimeAgo } from '@/components/ui/time-ago'
 
 /* ── Types ──────────────────────────────────────────────────── */
 interface Event {
@@ -156,7 +157,7 @@ export function RecentEvents({ events }: { events: Event[] }) {
                       ))}
                   </div>
                 </td>
-                <td className="px-3 py-3 text-[11.5px] text-[var(--fg-tertiary)] whitespace-nowrap">{reltime(ev.created_at)}</td>
+                <td className="px-3 py-3 text-[11.5px] text-[var(--fg-tertiary)] whitespace-nowrap"><TimeAgo value={ev.created_at} format={reltime} /></td>
               </tr>
             ))}
           </tbody>

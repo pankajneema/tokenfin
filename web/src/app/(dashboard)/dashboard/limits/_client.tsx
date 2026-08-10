@@ -5,11 +5,12 @@ import {
   Trash2, Pencil, PauseCircle, PlayCircle, MoreHorizontal, Check, X,
   Building2, FolderOpen, Users, User, Zap, Activity,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, readApiError } from '@/lib/utils'
 import { can, type Role } from '@/lib/rbac'
 import type { LimitRow, LimitScope, LimitPeriod, ScopeOption } from './page'
 
 /* ── Helpers ─────────────────────────────────────────────────── */
+
 type LimitStatus = 'healthy' | 'warning' | 'throttled' | 'blocked'
 
 function getStatus(l: LimitRow): LimitStatus {
@@ -161,9 +162,16 @@ function LimitCard({
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--red)] inline-block" />Throttle {limit.throttleAt}%</span>
           <span className="flex items-center gap-1"><Ban size={9} />Block {limit.blockAt}%</span>
         </div>
-        <button className="flex items-center gap-1 text-[10.5px] font-medium text-[var(--fg-tertiary)] hover:text-[var(--fg)] transition-colors">
-          <BellOff size={11} />No alert
-        </button>
+        {limit.hasAlert ? (
+          <span className="flex items-center gap-1 text-[10.5px] font-medium text-[var(--green)]">
+            <Bell size={11} />Alert on
+          </span>
+        ) : (
+          <button onClick={() => onAddAlert(limit)}
+            className="flex items-center gap-1 text-[10.5px] font-medium text-[var(--fg-tertiary)] hover:text-[var(--fg)] transition-colors">
+            <BellOff size={11} />No alert
+          </button>
+        )}
       </div>
     </div>
   )
@@ -238,7 +246,7 @@ function LimitModal({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: initial!.id, budget_usd: Number(budget), period, warn_at: warnAt, throttle_at: throttleAt, block_at: blockAt }),
         })
-        if (!res.ok) throw new Error(await res.text())
+        if (!res.ok) throw new Error(await readApiError(res))
         const data = await res.json()
         row = {
           ...initial!,
@@ -255,7 +263,7 @@ function LimitModal({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         })
-        if (!res.ok) throw new Error(await res.text())
+        if (!res.ok) throw new Error(await readApiError(res))
         const data = await res.json()
         row = {
           id:            data.id,
@@ -269,6 +277,7 @@ function LimitModal({
           throttleAt:    data.throttle_at,
           blockAt:       data.block_at,
           isActive:      true,
+          hasAlert:      createAlert,
         }
         onCreated(row)
 
@@ -486,7 +495,7 @@ function AddAlertModal({ limit, orgId, onClose, onCreated }: {
           channels,
         }),
       })
-      if (!res.ok) throw new Error(await res.text())
+      if (!res.ok) throw new Error(await readApiError(res))
       onCreated()
       onClose()
     } catch (e: unknown) {
@@ -737,9 +746,13 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
         <Zap size={16} className="text-[var(--blue)] mt-0.5 flex-shrink-0" />
         <div className="text-[12px] text-[var(--blue)]">
           <span className="font-bold">How limits work: </span>
-          When spend hits <span className="font-semibold">Warn %</span>, alerts fire.
-          At <span className="font-semibold">Throttle %</span>, API responses are rate-limited.
-          At <span className="font-semibold">Block %</span>, all API calls are rejected until the period resets.
+          Spend here counts everything captured — direct API/SDK usage and Claude Code /
+          Codex / Gemini via <span className="font-semibold">tokenfin setup</span>.
+          At <span className="font-semibold">Warn %</span>, alerts fire for all of it.
+          <span className="font-semibold"> Throttle %</span> and <span className="font-semibold">Block %</span> only
+          apply to direct API/SDK calls through <code className="font-mono">/api/v1/ingest</code> — TokenFin sits
+          outside Claude Code / Codex / Gemini's request path by design, so it can warn about their
+          usage but can&apos;t stop it.
         </div>
       </div>
 

@@ -119,8 +119,13 @@ function CopyBtn({ text, id, copied, copy }: { text: string; id: string; copied:
   )
 }
 const isLive = (s?: SourceStatus) => !!s?.last_event_at && Date.now() - new Date(s.last_event_at).getTime() < 60 * 60 * 1000
+// "Connected" is a persistent fact (has ever sent an event) — distinct from
+// "Live" (sent one in the last hour). Conflating the two made the header stat
+// say "0 connected" for a perfectly-working setup the moment an hour passed
+// since the last turn, which reads as broken when it isn't.
+const isConnected = (s?: SourceStatus) => !!s?.last_event_at
 
-export function SetupClient({ appUrl, isAdmin, keyError, initialKey }: Props) {
+export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey }: Props) {
   const { copied, copy } = useCopy()
   const [revealed, setRevealed] = useState(false)
   const [open, setOpen] = useState<string | null>('cli:Claude Code')
@@ -136,17 +141,19 @@ export function SetupClient({ appUrl, isAdmin, keyError, initialKey }: Props) {
     let alive = true
     const poll = async () => {
       try {
-        const r = await fetch('/api/v1/connections', { cache: 'no-store' }); if (!r.ok || !alive) return
+        const r = await fetch(`/api/v1/connections?org_id=${orgId}`, { cache: 'no-store' }); if (!r.ok || !alive) return
         const j = await r.json() as { sources?: SourceStatus[] }
         if (alive) setBySource(Object.fromEntries((j.sources ?? []).map(s => [s.source, s])))
       } catch { /* not up yet */ }
     }
     poll(); timer.current = setInterval(poll, 4000)
     return () => { alive = false; if (timer.current) clearInterval(timer.current) }
-  }, [])
+  }, [orgId])
 
-  const pushLive = CATEGORIES.flatMap(c => c.tools).filter(t => t.status === 'push' && t.sourceId && isLive(bySource[t.sourceId!]))
-  const liveSources = new Set(pushLive.map(t => t.sourceId))
+  const pushTools = CATEGORIES.flatMap(c => c.tools).filter(t => t.status === 'push' && t.sourceId)
+  const totalPushSources = new Set(pushTools.map(t => t.sourceId!)).size
+  const connectedSourceIds = new Set(pushTools.map(t => t.sourceId!).filter(id => isConnected(bySource[id])))
+  const liveSourceIds = new Set(pushTools.map(t => t.sourceId!).filter(id => isLive(bySource[id])))
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 py-2">
@@ -157,7 +164,15 @@ export function SetupClient({ appUrl, isAdmin, keyError, initialKey }: Props) {
           proxy, no hooks. We never see your API keys or your prompts.
         </p>
         <p className="text-[12px] text-[var(--fg-tertiary)]">
-          {liveSources.size} connected · Working now: Claude Code, Codex CLI &amp; Gemini CLI · the rest are coming soon.
+          {connectedSourceIds.size === 0 ? (
+            <>0 connected yet — Claude Code, Codex CLI &amp; Gemini CLI are supported, run the command below · the rest are coming soon.</>
+          ) : (
+            <>
+              <span className="font-semibold text-teal">{connectedSourceIds.size}/{totalPushSources} connected</span>
+              {liveSourceIds.size > 0 && <> · <span className="font-semibold text-teal">{liveSourceIds.size} live now</span></>}
+              {' '}· the rest are coming soon.
+            </>
+          )}
         </p>
       </header>
 
@@ -171,8 +186,12 @@ export function SetupClient({ appUrl, isAdmin, keyError, initialKey }: Props) {
         <p className="text-[12px] text-[var(--fg-tertiary)]">Writes each agent’s config, then waits until the first real event lands before reporting success.</p>
       </section>
 
-      {/* categories */}
-      {CATEGORIES.map(cat => (
+      {/* categories — only tools we actually support today. A long "coming
+          soon" roadmap list was cluttering the page and burying the ones
+          that work; that list can come back as a real roadmap page later. */}
+      {CATEGORIES.map(cat => ({ ...cat, tools: cat.tools.filter(t => t.status === 'push') }))
+        .filter(cat => cat.tools.length > 0)
+        .map(cat => (
         <section key={cat.id} className="space-y-2">
           <div className="flex items-baseline gap-2">
             <cat.Icon size={15} className="translate-y-[2px] text-[var(--fg-secondary)]" />
@@ -181,28 +200,39 @@ export function SetupClient({ appUrl, isAdmin, keyError, initialKey }: Props) {
           </div>
           <div className="divide-y divide-[var(--border)] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)]">
             {cat.tools.map(t => {
-              const working = t.status === 'push'
+              const supported = t.status === 'push'
               const s = t.sourceId ? bySource[t.sourceId] : undefined
-              const live = isLive(s)
+              const connected = supported && isConnected(s)
+              const live = supported && isLive(s)
               const rowKey = `${cat.id}:${t.name}`
               const cfg = t.sourceId ? CFG[t.sourceId] : undefined
-              const expandable = working && !!cfg
+              const expandable = supported && !!cfg
+              // Three honest states for a supported tool — "connected" is a
+              // persistent fact (this org has ever sent an event for it),
+              // "live" is a freshness signal (an event in the last hour) on
+              // top of that. Neither is "we built support for this," which
+              // is what the badge used to mean regardless of whether this
+              // specific customer had connected anything.
+              const badge = !supported
+                ? { label: 'Coming soon', cls: 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]' }
+                : connected
+                  ? { label: live ? 'Live' : 'Connected', cls: 'bg-[var(--green-bg)] text-teal' }
+                  : { label: 'Not connected', cls: 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]' }
               return (
                 <div key={rowKey}>
                   <div className="flex items-center justify-between gap-3 px-4 py-2.5">
                     <div className="flex min-w-0 items-center gap-2">
-                      {t.status === 'push' ? (
+                      {supported ? (
                         <span className="relative flex h-2 w-2">
                           {live && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: 'var(--teal)' }} />}
-                          <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: live ? 'var(--teal)' : 'var(--fg-tertiary)' }} />
+                          <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: connected ? 'var(--teal)' : 'var(--fg-tertiary)' }} />
                         </span>
                       ) : <span className="h-2 w-2 rounded-full" style={{ background: 'var(--border-strong)' }} />}
                       <span className="truncate text-[13px] text-[var(--fg)]">{t.name}</span>
-                      {live && <span className="text-[11px] text-teal">Live</span>}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      {live && s && <span className="font-mono tabular-nums text-[11px] text-[var(--fg-tertiary)]">{Number(s.tokens_today || 0).toLocaleString()} tok</span>}
-                      <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${working ? 'bg-[var(--green-bg)] text-teal' : 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]'}`}>{working ? 'Working' : 'Coming soon'}</span>
+                      {live && s && <span className="font-mono tabular-nums text-[11px] text-[var(--fg-tertiary)]">{Number(s.tokens_today || 0).toLocaleString()} tok today</span>}
+                      <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${badge.cls}`}>{badge.label}</span>
                       {expandable && (
                         <button onClick={() => setOpen(o => (o === rowKey ? null : rowKey))} className="text-[var(--fg-tertiary)] hover:text-[var(--fg)]">
                           <ChevronDown size={15} className={open === rowKey ? 'rotate-180 transition' : 'transition'} />

@@ -153,7 +153,7 @@ export function OnboardingClient({ orgId }: { orgId: string }) {
           <div className="bg-[var(--bg)] rounded-2xl border border-[var(--border)] shadow-soft overflow-hidden">
             {step === 0 && <StepProject saving={saving} onNext={handleProjectNext} />}
             {step === 1 && <StepInvite  saving={saving} onNext={handleInviteNext} onSkip={() => setStep(2)} />}
-            {step === 2 && <StepDone    data={data} onGo={() => router.push('/dashboard')} />}
+            {step === 2 && <StepDone    data={data} onGo={() => { router.refresh(); router.push('/dashboard') }} />}
           </div>
         </div>
       </main>

@@ -54,6 +54,7 @@ export function AcceptInvitationClient({ email, orgName, role, expired }: Props)
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Failed to accept invitation.')
 
+      router.refresh()
       router.push('/dashboard')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong.')

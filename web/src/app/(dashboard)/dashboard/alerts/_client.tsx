@@ -6,7 +6,8 @@ import {
   MoreHorizontal, Activity, Webhook, ExternalLink,
   Settings, Search, RefreshCw, Link2, Pencil, Copy, PlayCircle,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, readApiError } from '@/lib/utils'
+import { TimeAgo, relTime } from '@/components/ui/time-ago'
 import { can, type Role } from '@/lib/rbac'
 import type { AlertRuleRow, AlertHistoryRow, TriggerType } from './_types'
 
@@ -45,14 +46,6 @@ const SEVERITY_META: Record<HistorySeverity, { icon: React.ElementType; color: s
   critical: { icon: XCircle,       color: 'text-[var(--red)]',   bg: 'bg-[var(--red-bg)]',   label: 'Critical' },
 }
 
-function reltime(iso: string) {
-  const s = (Date.now() - new Date(iso).getTime()) / 1000
-  if (s < 60)     return `${Math.round(s)}s ago`
-  if (s < 3600)   return `${Math.round(s / 60)}m ago`
-  if (s < 86400)  return `${Math.round(s / 3600)}h ago`
-  if (s < 604800) return `${Math.round(s / 86400)}d ago`
-  return new Date(iso).toLocaleDateString()
-}
 
 function severityFromType(type: string): HistorySeverity {
   if (type.includes('critical') || type.includes('block')) return 'critical'
@@ -165,7 +158,7 @@ function RuleCard({
         <div className="flex items-center gap-4 text-[11px] text-[var(--fg-tertiary)]">
           <span className="flex items-center gap-1"><Activity size={11} />{rule.firedCount} fires</span>
           {rule.lastFiredAt && (
-            <span className="flex items-center gap-1"><Clock size={11} />Last {reltime(rule.lastFiredAt)}</span>
+            <span className="flex items-center gap-1"><Clock size={11} />Last <TimeAgo value={rule.lastFiredAt} format={relTime} /></span>
           )}
           <span className="flex items-center gap-1"><RefreshCw size={11} />{rule.cooldownHours}h cooldown</span>
         </div>
@@ -201,7 +194,7 @@ function HistoryRow({ event }: { event: AlertHistoryRow }) {
         <span className={cn('text-[10.5px] font-semibold', event.isRead ? 'text-[var(--fg-tertiary)]' : 'text-teal')}>
           {event.isRead ? 'Read' : 'Unread'}
         </span>
-        <span className="text-[10.5px] text-[var(--fg-tertiary)]">{reltime(event.createdAt)}</span>
+        <span className="text-[10.5px] text-[var(--fg-tertiary)]"><TimeAgo value={event.createdAt} format={relTime} /></span>
       </div>
     </div>
   )
@@ -274,10 +267,10 @@ function ChannelCard({ channel, onConnect }: { channel: Channel; onConnect: (id:
 
 /* ── CreateRuleModal ── */
 const TEMPLATES = [
-  { name: 'Daily spend alert', trigger: 'threshold'    as TriggerType, desc: 'When daily total > $X',  channels: { email: true, slack: false, webhook: false, inapp: true } },
-  { name: 'Budget warning',    trigger: 'limit_breach' as TriggerType, desc: 'On limit warn threshold', channels: { email: true, slack: true,  webhook: false, inapp: true } },
-  { name: 'Cost spike',        trigger: 'anomaly'      as TriggerType, desc: 'When cost > 3× avg',      channels: { email: false, slack: true, webhook: false, inapp: true } },
-  { name: 'Weekly digest',     trigger: 'threshold'    as TriggerType, desc: 'Scheduled weekly report', channels: { email: true, slack: false, webhook: false, inapp: false } },
+  { name: 'Daily spend alert', trigger: 'threshold'    as TriggerType, desc: 'When daily total > $X',  channels: { email: true, slack: false, webhook: false, inapp: true }, threshold: '200' },
+  { name: 'Budget warning',    trigger: 'limit_breach' as TriggerType, desc: 'On limit warn threshold', channels: { email: true, slack: true,  webhook: false, inapp: true }, threshold: '' },
+  { name: 'Cost spike',        trigger: 'anomaly'      as TriggerType, desc: 'When cost > 3× avg',      channels: { email: false, slack: true, webhook: false, inapp: true }, threshold: '' },
+  { name: 'Weekly digest',     trigger: 'threshold'    as TriggerType, desc: 'Scheduled weekly report', channels: { email: true, slack: false, webhook: false, inapp: false }, threshold: '500' },
 ]
 
 function CreateRuleModal({ initial, orgId, onClose, onSaved }: {
@@ -300,7 +293,7 @@ function CreateRuleModal({ initial, orgId, onClose, onSaved }: {
   const [error,     setError]     = useState<string | null>(null)
 
   function applyTemplate(t: typeof TEMPLATES[0]) {
-    setName(t.name); setTrigger(t.trigger); setChannels(t.channels)
+    setName(t.name); setTrigger(t.trigger); setChannels(t.channels); setThreshold(t.threshold)
   }
 
   function toggleChannel(ch: AlertChannel) {
@@ -344,7 +337,7 @@ function CreateRuleModal({ initial, orgId, onClose, onSaved }: {
             channels: body.channels,
           }),
         })
-        if (!res.ok) throw new Error(await res.text())
+        if (!res.ok) throw new Error(await readApiError(res))
         const data = await res.json()
         row = {
           ...initial!,
@@ -360,7 +353,7 @@ function CreateRuleModal({ initial, orgId, onClose, onSaved }: {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         })
-        if (!res.ok) throw new Error(await res.text())
+        if (!res.ok) throw new Error(await readApiError(res))
         const data = await res.json()
         row = {
           id:            data.id,

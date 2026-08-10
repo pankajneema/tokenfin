@@ -59,7 +59,7 @@ export function EvalsClient({ orgId, meanFaithfulness, hallucinationRate, scored
                 <span className="text-[var(--fg-secondary)]">
                   {typeof r.summary?.hallucination_rate === 'number' ? `${Math.round((r.summary.hallucination_rate as number) * 100)}% halluc · ` : ''}
                   {typeof r.summary?.count === 'number' ? `${r.summary.count} scored · ` : ''}
-                  {new Date(r.created_at).toLocaleString()}
+                  {new Date(r.created_at).toLocaleString('en-US')}
                 </span>
               </div>
             ))}

@@ -245,7 +245,7 @@ export function Sidebar({ user }: { user: User }) {
         {/* Help row */}
         {!collapsed && (
           <div className="px-2.5 pt-2.5 pb-1 space-y-0.5">
-            <Link href="mailto:hello@curiousdevs.com" className="nav-item text-[12px]">
+            <Link href="mailto:hello@curiousdevs.com?subject=TokenFin%20support" className="nav-item text-[12px]">
               <HelpCircle size={14} className="flex-shrink-0" />
               <span>Help & Support</span>
             </Link>

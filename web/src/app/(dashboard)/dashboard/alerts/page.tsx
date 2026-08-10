@@ -57,7 +57,15 @@ export default async function AlertsPage() {
     createdAt:     r.created_at,
   }))
 
-  const history: AlertHistoryRow[] = (rawNotifs ?? []).map(n => ({
+  // Exclude internal system records (billing invoices, sales inquiries) —
+  // they're written to the shared notifications table for other pages to
+  // parse, not meant for display as alert history. Same filter as the
+  // dashboard topbar bell (see (dashboard)/layout.tsx).
+  const visibleNotifs = (rawNotifs ?? []).filter(
+    n => n.type !== 'invoice' && n.type !== 'sales_inquiry'
+  )
+
+  const history: AlertHistoryRow[] = visibleNotifs.map(n => ({
     id:        n.id,
     title:     n.title,
     body:      n.body ?? null,

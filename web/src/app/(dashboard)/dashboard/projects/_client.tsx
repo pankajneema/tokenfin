@@ -7,6 +7,7 @@ import {
   TrendingUp, TrendingDown, ChevronRight, Layers, X, Pencil,
 } from 'lucide-react'
 import { cn, formatCost, formatTokens, formatNumber } from '@/lib/utils'
+import { TimeAgo } from '@/components/ui/time-ago'
 import type { EnrichedProject } from './page'
 
 /* ── Palette ────────────────────────────────────────────────── */
@@ -162,7 +163,7 @@ function ProjectCard({
           <div className="flex items-center gap-2 text-[11px] text-[var(--fg-tertiary)]">
             <div className="flex items-center gap-1"><Key size={11} /><span>{project.keyCount} {project.keyCount === 1 ? 'key' : 'keys'}</span></div>
             <span>·</span>
-            <div className="flex items-center gap-1"><Clock size={11} /><span>{reltime(project.lastEventAt)}</span></div>
+            <div className="flex items-center gap-1"><Clock size={11} /><span><TimeAgo value={project.lastEventAt} format={reltime} /></span></div>
           </div>
           <Link href={`/dashboard/analytics?project=${project.id}`} className="flex items-center gap-1 text-[11.5px] font-semibold transition-colors" style={{ color: pal.accent }}>
             View <ChevronRight size={11} />
@@ -207,7 +208,7 @@ function ProjectRow({
       <td className="px-4 py-3.5 text-[12.5px] text-[var(--fg-secondary)] tabular-nums">{formatTokens(project.tokens)}</td>
       <td className="px-4 py-3.5 text-[12.5px] text-[var(--fg-secondary)] tabular-nums">{formatNumber(project.reqs)}</td>
       <td className="px-4 py-3.5 text-[12.5px] text-[var(--fg-secondary)]">{project.keyCount}</td>
-      <td className="px-4 py-3.5 text-[12px] text-[var(--fg-tertiary)] whitespace-nowrap">{reltime(project.lastEventAt)}</td>
+      <td className="px-4 py-3.5 text-[12px] text-[var(--fg-tertiary)] whitespace-nowrap"><TimeAgo value={project.lastEventAt} format={reltime} /></td>
       <td className="px-4 py-3.5">
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button onClick={() => onEdit(project)} className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--fg)] transition-colors">

@@ -74,18 +74,6 @@ const RECENT_PAGES = [
   { label: 'Teams',     href: '/dashboard/teams',    icon: Users           },
 ]
 
-/* ══════════════════════════════════════════════════════════════
-   RELATIVE TIME HELPER
-══════════════════════════════════════════════════════════════ */
-function relTime(isoStr: string): string {
-  const ms = Date.now() - new Date(isoStr).getTime()
-  if (ms < 60_000)        return 'Just now'
-  if (ms < 3_600_000)     return `${Math.round(ms / 60_000)}m ago`
-  if (ms < 86_400_000)    return `${Math.round(ms / 3_600_000)}h ago`
-  if (ms < 2 * 86_400_000) return 'Yesterday'
-  return new Date(isoStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
 type NotifTab = 'all' | 'budget' | 'team' | 'system'
 
 const NOTIF_TABS: { key: NotifTab; label: string }[] = [

@@ -108,8 +108,9 @@ function login({ appUrl, mcpUrl } = {}) {
 // `tokenfin login` — obtain + persist a credential, no tool configuration.
 async function runLogin(flags = {}) {
   const { readConfig, writeConfig } = require('./config')
-  const mcpUrl = (flags.url || process.env.TOKENFIN_URL || 'https://tokenfin.curiousdevs.com/api/mcp')
-  const appUrl = flags.appUrl || process.env.TOKENFIN_APP_URL || deriveAppUrl(mcpUrl)
+  const explicitUrl = flags.url || process.env.TOKENFIN_URL
+  const appUrl = (flags.appUrl || process.env.TOKENFIN_APP_URL || deriveAppUrl(explicitUrl)).replace(/\/$/, '')
+  const mcpUrl = explicitUrl || appUrl + '/api/mcp'
   const key = await login({ appUrl, mcpUrl })
   writeConfig({ ...readConfig(), key, url: mcpUrl, appUrl })
   process.stdout.write('✔ Logged in. Credential saved to ~/.tokenfin/config.json\n')

@@ -175,7 +175,7 @@ function CapturedPrompts({ rows }: { rows: Array<{ id: string; model: string; pr
     <div className="mt-8">
       <div className="mb-1 text-[15px] font-bold text-[var(--fg)]">Captured prompts</div>
       <p className="mb-3 text-[12.5px] text-[var(--fg-secondary)]">
-        Full prompt text routed through the gateway.{rows.length === 0 ? ' Opt-in: run the gateway with CAPTURE_PROMPTS=1.' : ''}
+        Full prompt/response text, when captured.{rows.length === 0 ? ' Not currently wired up in this deployment — no capture path writes to this table yet.' : ''}
       </p>
       {rows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-[var(--border)] p-8 text-center text-[12.5px] text-[var(--fg-tertiary)]">

@@ -16,6 +16,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { PlatformRow } from './_types'
 import { TierBadge, AccuracyBadge } from '../setup/_client'
+import { TimeAgo } from '@/components/ui/time-ago'
 
 const fmtInt   = (n: number) => n.toLocaleString()
 const fmtCost  = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`)
@@ -138,7 +139,7 @@ function PlatformCard({ p }: { p: PlatformRow }) {
         {p.accuracy ? <AccuracyBadge accuracy={p.accuracy} /> : null}
         <span className="badge-gray uppercase">{p.env}</span>
         <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-[var(--fg-tertiary)]">
-          <Clock size={11} /> {relTime(p.lastUsedAt)}
+          <Clock size={11} /> <TimeAgo value={p.lastUsedAt} format={relTime} />
         </span>
       </div>
 

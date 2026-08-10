@@ -35,7 +35,7 @@ function Item({ orgId, row }: { orgId: string; row: CaptureRow }) {
 
   return (
     <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
-      <div className="mb-1 text-[11.5px] text-[var(--fg-tertiary)]">{row.model} · {new Date(row.created_at).toLocaleString()}</div>
+      <div className="mb-1 text-[11.5px] text-[var(--fg-tertiary)]">{row.model} · {new Date(row.created_at).toLocaleString('en-US')}</div>
       <div className="mb-1 text-[12px] font-semibold text-[var(--fg)]">Prompt</div>
       <pre className="mb-2 max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--bg-tertiary)] p-2 font-mono text-[11px] text-[var(--fg)]">{row.prompt_text.slice(0, 2000)}</pre>
       <div className="mb-1 text-[12px] font-semibold text-[var(--fg)]">Response</div>

@@ -4,7 +4,7 @@ import {
   Check, X, ExternalLink, RefreshCw, AlertTriangle,
   Plus, Settings, Zap, Link2, ChevronRight,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, readApiError } from '@/lib/utils'
 import type { OrgIntegration } from './_types'
 
 /* ══════════════════════════════════════════════════════════════
@@ -143,7 +143,7 @@ function ConnectModal({ item, orgId, onClose, onConnected }: {
           },
         }),
       })
-      if (!res.ok) throw new Error(await res.text())
+      if (!res.ok) throw new Error(await readApiError(res))
       onConnected(item.id, detail || endpoint || item.name)
       setDone(true)
     } catch (e: unknown) {

@@ -14,11 +14,19 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await db()
     .from('org_integrations')
-    .select('integration, is_active, connected_at, last_synced_at, sync_ok, detail')
+    .select('provider, is_active, connected_at, last_synced_at, sync_ok, detail')
     .eq('org_id', orgId!)
     .eq('is_active', true)
   if (error) return dbError(error, 'GET integrations')
-  return NextResponse.json(data ?? [])
+  const mapped = (data ?? []).map(r => ({
+    integration:    r.provider,
+    is_active:      r.is_active,
+    connected_at:   r.connected_at,
+    last_synced_at: r.last_synced_at,
+    sync_ok:        r.sync_ok,
+    detail:         r.detail,
+  }))
+  return NextResponse.json(mapped)
 }
 
 /* POST /api/v1/integrations */
@@ -40,18 +48,18 @@ export async function POST(req: NextRequest) {
   const { data, error } = await db()
     .from('org_integrations')
     .upsert({
-      org_id, integration,
+      org_id, provider: integration,
       detail:         detail ?? null,
       config:         config ?? {},
       is_active:      true,
       sync_ok:        true,
       connected_at:   new Date().toISOString(),
       last_synced_at: new Date().toISOString(),
-    }, { onConflict: 'org_id,integration' })
+    }, { onConflict: 'org_id,provider' })
     .select()
     .single()
   if (error) return dbError(error, 'POST integrations')
-  return NextResponse.json(data, { status: 201 })
+  return NextResponse.json({ ...data, integration: data.provider }, { status: 201 })
 }
 
 /* DELETE /api/v1/integrations?org_id=xxx&integration=yyy */

@@ -40,7 +40,7 @@ export default async function McpPage() {
       .eq('org_id', orgId),
     admin
       .from('usage_events')
-      .select('api_key_id, model, total_tokens, cost_usd')
+      .select('api_key_id, model, total_tokens, cost_usd, source')
       .eq('org_id', orgId)
       .gte('created_at', since)
       .limit(100_000),
@@ -50,17 +50,18 @@ export default async function McpPage() {
   const projNames = new Map<string, string>((projects ?? []).map(p => [p.id, p.name]))
 
   // Aggregate usage per KEY + model (attributed by api_key_id, not project).
-  type UsageAgg = Map<string, { tokens: number; cost: number; calls: number; models: Map<string, { tokens: number; cost: number; calls: number }> }>
+  type UsageAgg = Map<string, { tokens: number; cost: number; calls: number; sources: Set<string>; models: Map<string, { tokens: number; cost: number; calls: number }> }>
   const keyUsage: UsageAgg = new Map()
 
   for (const row of usageRows ?? []) {
-    const kid = (row as { api_key_id: string | null }).api_key_id
+    const kid = (row as { api_key_id: string | null; source: string | null }).api_key_id
     if (!kid) continue // unattributed events count toward no key
-    if (!keyUsage.has(kid)) keyUsage.set(kid, { tokens: 0, cost: 0, calls: 0, models: new Map() })
+    if (!keyUsage.has(kid)) keyUsage.set(kid, { tokens: 0, cost: 0, calls: 0, sources: new Set(), models: new Map() })
     const pu = keyUsage.get(kid)!
     pu.tokens += row.total_tokens ?? 0
     pu.cost   += Number(row.cost_usd ?? 0)
     pu.calls  += 1 // one usage_event = one call
+    if (row.source) pu.sources.add(row.source)
 
     const prev = pu.models.get(row.model) ?? { tokens: 0, cost: 0, calls: 0 }
     pu.models.set(row.model, {
@@ -71,12 +72,12 @@ export default async function McpPage() {
   }
 
   const platforms: PlatformRow[] = (keys ?? []).map(k => {
-    const pu  = keyUsage.get(k.id) ?? { tokens: 0, cost: 0, calls: 0, models: new Map() }
+    const pu  = keyUsage.get(k.id) ?? { tokens: 0, cost: 0, calls: 0, sources: new Set<string>(), models: new Map() }
     const models: PlatformModel[] = Array.from(pu.models.entries())
       .map(([model, u]) => ({ model, tokens30d: u.tokens, cost30d: u.cost, calls30d: u.calls }))
       .sort((a, b) => b.cost30d - a.cost30d)
 
-    const { tier, accuracy } = inferConnection(k.name, models.map(m => m.model))
+    const { tier, accuracy } = inferConnection(k.name, models.map(m => m.model), Array.from(pu.sources))
 
     return {
       id:          k.id,

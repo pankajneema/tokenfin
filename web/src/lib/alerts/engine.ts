@@ -18,7 +18,11 @@ export interface AlertRule {
 
 export interface OrgCtx {
   orgId: string
-  agg: { project_id: string | null; bucket: string; cost_usd: number }[]
+  // Raw usage_events, not usage_agg — usage_agg deliberately excludes notional
+  // (CLI-agent: Claude Code/Codex/Gemini) spend so analytics totals stay a
+  // real bill. Alert rules need the full picture, or a "daily spend > $X"
+  // rule on a project used only via `tokenfin setup` would never fire.
+  events: { project_id: string | null; cost_usd: number; created_at: string }[]
   userMonth: Map<string, number>          // user_id → month-to-date $
   limits: { scope: string; project_id: string | null; budget_usd: number; warn_at: number }[]
   projectName: Map<string, string>
@@ -40,9 +44,9 @@ export function inferWindow(condition: string | null): Window {
 }
 
 function windowSpend(ctx: OrgCtx, projectId: string | null, w: Window): number {
-  const from = w === 'daily' ? today() : w === 'weekly' ? weekAgo() : monthStart()
-  return +ctx.agg
-    .filter(r => r.bucket >= from && (projectId ? r.project_id === projectId : true))
+  const fromTs = (w === 'daily' ? today() : w === 'weekly' ? weekAgo() : monthStart()) + 'T00:00:00Z'
+  return +ctx.events
+    .filter(r => r.created_at >= fromTs && (projectId ? r.project_id === projectId : true))
     .reduce((s, r) => s + Number(r.cost_usd), 0)
     .toFixed(4)
 }
@@ -65,9 +69,10 @@ export function evaluateRule(rule: AlertRule, ctx: OrgCtx): string | null {
     // Average of the 7 days before today.
     const from = weekAgo(), to = today()
     const days = new Map<string, number>()
-    for (const r of ctx.agg) {
-      if (r.bucket >= from && r.bucket < to && (!rule.project_id || r.project_id === rule.project_id))
-        days.set(r.bucket, (days.get(r.bucket) ?? 0) + Number(r.cost_usd))
+    for (const r of ctx.events) {
+      const bucket = r.created_at.slice(0, 10)
+      if (bucket >= from && bucket < to && (!rule.project_id || r.project_id === rule.project_id))
+        days.set(bucket, (days.get(bucket) ?? 0) + Number(r.cost_usd))
     }
     const vals = Array.from(days.values())
     const avg = vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 0
@@ -139,18 +144,19 @@ export async function deliverAlert(admin: Admin, rule: AlertRule, ctx: OrgCtx, m
 export async function buildOrgCtx(admin: Admin, orgId: string, emailByUser: Map<string, string>): Promise<OrgCtx> {
   const since = new Date(Date.now() - 31 * 86400_000).toISOString().slice(0, 10)
   const sinceTs = since + 'T00:00:00Z'
-  const [{ data: agg }, { data: events }, { data: members }, { data: limits }, { data: projects }, { data: integ }] = await Promise.all([
-    admin.from('usage_agg').select('project_id, bucket, cost_usd').eq('org_id', orgId).gte('bucket', since),
-    admin.from('usage_events').select('user_id, cost_usd, created_at').eq('org_id', orgId).gte('created_at', sinceTs),
+  const [{ data: events }, { data: members }, { data: limits }, { data: projects }, { data: integ }] = await Promise.all([
+    admin.from('usage_events').select('user_id, project_id, cost_usd, created_at').eq('org_id', orgId).gte('created_at', sinceTs),
     admin.from('members').select('user_id, role').eq('org_id', orgId),
     admin.from('limits').select('scope, project_id, budget_usd, warn_at').eq('org_id', orgId).eq('is_active', true),
     admin.from('projects').select('id, name').eq('org_id', orgId),
     admin.from('org_integrations').select('provider, config, detail, status').eq('org_id', orgId),
   ])
 
+  const evs = (events ?? []) as { user_id: string | null; project_id: string | null; cost_usd: number; created_at: string }[]
+
   const mStart = monthStart() + 'T00:00:00Z'
   const userMonth = new Map<string, number>()
-  for (const e of (events ?? []) as { user_id: string | null; cost_usd: number; created_at: string }[]) {
+  for (const e of evs) {
     if (!e.user_id || e.created_at < mStart) continue
     userMonth.set(e.user_id, (userMonth.get(e.user_id) ?? 0) + Number(e.cost_usd))
   }
@@ -173,7 +179,7 @@ export async function buildOrgCtx(admin: Admin, orgId: string, emailByUser: Map<
 
   return {
     orgId,
-    agg: (agg ?? []) as OrgCtx['agg'],
+    events: evs,
     userMonth,
     limits: (limits ?? []) as OrgCtx['limits'],
     projectName,

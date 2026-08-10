@@ -70,9 +70,13 @@ function codexOtelBlock(otelEndpoint, key) {
     '[otel]',
     'environment = "prod"',
     'exporter = "none"',
-    'metrics_exporter = "otlp-http"   # NOT statsig — send token metrics to TokenFin',
     'log_user_prompt = false',
     '',
+    // NOT statsig (Codex's default) — send token metrics to TokenFin. This
+    // table header alone is what selects the exporter; a `metrics_exporter =
+    // "otlp-http"` string field above conflicts with it (confirmed on a real
+    // session 2026-08-10: "cannot extend value of type string with a dotted
+    // key" — Codex refuses to even start).
     '[otel.metrics_exporter.otlp-http]',
     `endpoint = "${otelEndpoint}/v1/metrics"`,
     'protocol = "json"',

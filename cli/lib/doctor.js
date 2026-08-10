@@ -67,10 +67,14 @@ async function doctor(flags = {}) {
     line(managed ? PASS : WARN, managed ? 'Codex — [otel] present in ~/.codex/config.toml (user-level)' : 'Codex — no TokenFin [otel] block; run `tokenfin setup`')
     if (managed) {
       // The landmine: metrics default to statsig (sent to OpenAI, not us).
-      line(/metrics_exporter\s*=\s*"otlp-http"/.test(toml) ? PASS : FAIL,
-        /metrics_exporter\s*=\s*"otlp-http"/.test(toml) ? 'Codex — metrics_exporter = otlp-http (not statsig)' : 'Codex — metrics_exporter is NOT otlp-http; token metrics go to statsig, not TokenFin')
+      // The exporter is selected by this table header existing at all — a
+      // `metrics_exporter = "otlp-http"` string field is invalid TOML here
+      // (conflicts with the table) and crashes Codex outright, so its absence
+      // is correct, not a problem.
+      const hasOtlpHttpTable = /\[otel\.metrics_exporter\.otlp-http\]/.test(toml)
+      line(hasOtlpHttpTable ? PASS : FAIL,
+        hasOtlpHttpTable ? 'Codex — metrics_exporter = otlp-http (not statsig)' : 'Codex — no otlp-http metrics_exporter table; token metrics go to statsig, not TokenFin')
     }
-    line(WARN, 'Codex — note: `codex exec` and `codex mcp-server` emit no metrics (openai/codex#12913); that usage is invisible')
   }
 
   // 5c. Gemini CLI — only if the user has it

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { can, type Role } from '@/lib/rbac'
+import { TimeAgo } from '@/components/ui/time-ago'
 import type { ApiKeyRow, ProjectOption, TeamOption, MemberOption } from './page'
 
 /* ── Types ─────────────────────────────────────────────────── */
@@ -658,7 +659,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
                   <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                     <Clock size={10} className="text-[var(--fg-tertiary)]" />
                     <span className="text-[10.5px] text-[var(--fg-tertiary)]">
-                      Created {new Date(k.createdAt).toLocaleDateString()} by {k.createdByName}
+                      Created {new Date(k.createdAt).toLocaleDateString('en-US')} by {k.createdByName}
                     </span>
                     {k.assignedTeamName && (
                       <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-[var(--green-bg)] text-teal">
@@ -672,7 +673,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
                     )}
                     {expWarn && k.expiresAt && (
                       <span className="flex items-center gap-0.5 text-[10px] font-semibold text-[var(--amber)]">
-                        <AlertTriangle size={9} /> Expires {new Date(k.expiresAt).toLocaleDateString()}
+                        <AlertTriangle size={9} /> Expires {new Date(k.expiresAt).toLocaleDateString('en-US')}
                       </span>
                     )}
                   </div>
@@ -712,7 +713,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
                 <div><ReqBar n={k.requests30d} maxN={maxReq} color={em.dot} /></div>
 
                 {/* Last used */}
-                <div className="text-[11.5px] text-[var(--fg-tertiary)]">{reltime(k.lastUsedAt)}</div>
+                <div className="text-[11.5px] text-[var(--fg-tertiary)]"><TimeAgo value={k.lastUsedAt} format={reltime} /></div>
 
                 {/* Actions */}
                 <div className="flex items-center justify-end gap-1.5 relative">

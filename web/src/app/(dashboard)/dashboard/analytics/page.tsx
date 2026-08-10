@@ -98,10 +98,10 @@ export default async function AnalyticsPage() {
       .select('bucket,model,project_id,total_tokens,cost_usd')
       .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
     admin.from('usage_events')
-      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags')
+      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis')
       .eq('org_id', orgId).gte('created_at', since30),
     admin.from('usage_events')
-      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags')
+      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis')
       .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30),
     admin.from('projects').select('id,name').eq('org_id', orgId),
     admin.from('api_keys').select('id,name,project_id').eq('org_id', orgId).eq('is_active', true),
@@ -265,10 +265,15 @@ export default async function AnalyticsPage() {
       color: v.color,
     }))
 
-  /* ── Input / Output token totals ── */
+  /* ── Input / Output token totals ──
+   * Metered rows only, to match totTok (usage_agg-derived, metered-only) on
+   * the Tokens MTD card — otherwise the in/out breakdown silently includes
+   * notional (CLI-agent) tokens the headline total excludes, and the two
+   * numbers on the same card contradict each other. */
   let totalInputTokens  = 0
   let totalOutputTokens = 0
   for (const r of evts ?? []) {
+    if ((r as Record<string,unknown>).cost_basis === 'notional') continue
     const total  = Number(r.total_tokens ?? 0)
     const inTok  = Number((r as Record<string,unknown>).input_tokens  ?? Math.round(total * 0.7))
     const outTok = Number((r as Record<string,unknown>).output_tokens ?? (total - Math.round(total * 0.7)))

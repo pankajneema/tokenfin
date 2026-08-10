@@ -54,15 +54,21 @@ export async function deriveMetricEvents(body: any, ctx: KeyCtx, state: MetricSt
         if (!source) continue                    // claude_code + non-token metrics: not derived here
 
         const sum = m?.sum
-        const dps: any[] = sum?.dataPoints ?? m?.gauge?.dataPoints ?? []
-        const isDelta = !!sum && isDeltaTemporality(sum.aggregationTemporality)
+        const histogram = m?.histogram
+        const dps: any[] = sum?.dataPoints ?? m?.gauge?.dataPoints ?? histogram?.dataPoints ?? []
+        // Histograms have no cumulative-counter concept — each data point IS
+        // one fresh observation (e.g. Codex's codex.turn.token_usage: one
+        // data point per token_type per turn, confirmed on a real session
+        // 2026-08-10), so always treat them as delta, regardless of the
+        // aggregationTemporality they report.
+        const isDelta = !!histogram || (!!sum && isDeltaTemporality(sum.aggregationTemporality))
 
         for (const dp of dps) {
           const a = attrsToMap(dp?.attributes ?? [])
-          const type = a['type'] ?? a['gen_ai.token.type']
+          const type = a['token_type'] ?? a['type'] ?? a['gen_ai.token.type']
           const field = tokenFieldFor(type)
           if (!field) continue                   // unknown token type
-          const value = num(dp?.asInt ?? dp?.asDouble)
+          const value = num(histogram ? dp?.sum : (dp?.asInt ?? dp?.asDouble))
           const model = String(a['model'] ?? a['gen_ai.request.model'] ?? resAttrs['gen_ai.request.model'] ?? 'unknown')
           const correlation = (a['conversation.id'] ?? a['gen_ai.conversation.id'] ?? a['session.id'] ?? null) as string | null
           const timeNano = String(dp?.timeUnixNano ?? '')
@@ -95,7 +101,13 @@ export async function deriveMetricEvents(body: any, ctx: KeyCtx, state: MetricSt
     const total = t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_write_tokens + t.reasoning_tokens
     if (total <= 0) continue
     const ts = g.timeNano ? new Date(Number(g.timeNano) / 1e6).toISOString() : new Date().toISOString()
-    const cost = computeCost(g.model, t.input_tokens + t.cache_read_tokens + t.cache_write_tokens, t.output_tokens)
+    // input_tokens + output_tokens == the "total" token_type exactly, confirmed on a
+    // real Codex session (2026-08-10: 13699 + 5 == 13704) — cache_read/cache_write/
+    // reasoning are breakdowns OF input/output (OpenAI's usual *_details convention),
+    // not additive on top. Pricing them again here would double-count the cached
+    // portion, so only input_tokens/output_tokens go into the cost calc; cache/
+    // reasoning columns are still stored for an accurate breakdown display.
+    const cost = computeCost(g.model, t.input_tokens, t.output_tokens)
     rows.push({
       event_id: sha(`${g.source}|${g.correlation ?? ''}|${g.model}|${g.timeNano}`),
       ts, source: g.source, provider_request_id: null, correlation_id: g.correlation, model: g.model,

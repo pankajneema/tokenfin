@@ -1,20 +1,29 @@
 # Connecting tools to TokenFin
 
 > The old hook / proxy / `record_usage` setup was removed in the Connections rebuild — see
-> [`MIGRATION.md`](../MIGRATION.md) for why. This is the current model.
+> [`MIGRATION.md`](../MIGRATION.md) for why. This is the current model. For the deeper "why does
+> this work this way" (OTLP metric shapes, metered vs. notional, the bugs we found testing this
+> for real), see [`data-flow.md`](./data-flow.md).
 
 TokenFin is an **OpenTelemetry receiver**. Coding agents that ship native OTLP (Claude Code, Codex,
 Gemini) push token usage to us directly — no proxy in the request path, no provider keys held, no
 transcript parsing.
 
-## Claude Code (available now)
+## One command, all three agents
 
 ```bash
 npx tokenfin login
-npx tokenfin setup     # writes an OTel env block to ~/.claude/settings.json, waits for the first event
+npx tokenfin setup     # configures every installed agent, waits for the first real event
 ```
 
-`setup` writes:
+`setup` detects Claude Code, Codex CLI, and Gemini CLI and writes each one's own config format —
+below. It only reports success once a **real event** actually lands, not just when config is
+written. Verify anytime with `npx tokenfin status` or diagnose with `npx tokenfin doctor`. Undo
+with `npx tokenfin remove`.
+
+## Claude Code — fully verified
+
+Writes to `~/.claude/settings.json`:
 
 ```json
 "env": {
@@ -28,21 +37,44 @@ npx tokenfin setup     # writes an OTel env block to ~/.claude/settings.json, wa
 }
 ```
 
-Then it **waits for a real event** before reporting success. Verify anytime with `npx tokenfin status`
-or diagnose with `npx tokenfin doctor`. Undo with `npx tokenfin remove`.
-
-## What lands
-
 The receiver (`web/src/app/api/otel/v1/*`, lib in `web/src/lib/otlp/*`) turns each
 `claude_code.api_request` log event into one `usage_events` row (deduped by `event_id`): model,
-input/output tokens, cache read/write tokens, cost. Claude Code cost is **notional** (subscription
-usage priced at API rates), shown separately from metered spend.
+input/output tokens, cache read/write tokens, cost. Verified with a real `claude -p` call
+(2026-08-10) — event landed within seconds, dashboard reflected it correctly.
+
+## Codex CLI — fully verified (was completely broken until 2026-08-10)
+
+Writes an `[otel]` block to `~/.codex/config.toml` (user-level only — Codex ignores project-local
+config for this). A real `codex exec` session on 2026-08-10 surfaced three stacked bugs, all now
+fixed:
+
+1. The written TOML was invalid and made Codex refuse to start at all (a flat
+   `metrics_exporter = "otlp-http"` string conflicted with the
+   `[otel.metrics_exporter.otlp-http]` table underneath it).
+2. Codex reports tokens as an OTLP **histogram**, not a counter — the derivation code only read
+   counter-shaped metrics, so even a working config produced zero captured events.
+3. Cost was double-counting cached tokens (`cached_input` is a *subset* of `input`, not additive —
+   confirmed by exact arithmetic on real data: `input + output == total`).
+
+See [`data-flow.md`](./data-flow.md#deriving-events-from-metrics-codex-gemini) for the full
+writeup. `codex exec` **does** emit usable metrics — a doc comment claiming otherwise
+(`openai/codex#12913`) is gone; we have a correctly-priced captured row to prove it.
+
+## Gemini CLI — config verified against docs, not yet end-to-end tested with a real account
+
+Writes a `telemetry` block to `~/.gemini/settings.json`. Field names were checked against Gemini
+CLI's own telemetry docs and match. Given Codex's config *also* looked right until it was tested
+against a real session, treat this as "should work" rather than "confirmed" until someone runs it
+end-to-end with real Gemini credentials.
 
 ## Not yet
 
-Codex CLI, Gemini CLI (OTLP, same shape) and the pull connectors (Copilot, Cursor, Anthropic Admin)
-land in later milestones. The grouped `/connections` dashboard (five states, per-tool guides)
-replaces the interim `/dashboard/setup` surface then.
+The pull connectors (Copilot, Cursor, Anthropic Admin) land in later milestones. The grouped
+`/connections` dashboard (five states, per-tool guides) replaces the interim `/dashboard/setup`
+surface then. IDE extensions (Claude Code for VS Code/JetBrains, Codex for VS Code) are shown as
+connected via the same `sourceId` as their CLI counterpart — reasoned to be correct because both
+extensions wrap the same CLI binary reading the same user-level config file, but not empirically
+tested (no IDE available in the environment this was verified from).
 
 ## Query from chat (read-only MCP)
 

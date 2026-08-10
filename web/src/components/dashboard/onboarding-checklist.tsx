@@ -49,7 +49,7 @@ export function OnboardingChecklist({ hasProject, hasApiKey, hasEvent }: Props) 
     {
       id:      'key',
       label:   'Create an API key',
-      desc:    'Use it in the proxy or SDK to authenticate.',
+      desc:    'Use it with the SDK, or run `tokenfin setup` to connect Claude Code / Codex / Gemini.',
       href:    '/dashboard/keys',
       done:    hasApiKey,
       current: hasProject && !hasApiKey,

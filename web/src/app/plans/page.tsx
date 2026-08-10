@@ -446,6 +446,7 @@ export default function PlansPage() {
 
   function handleContinue() {
     setPayStep(null)
+    router.refresh()
     router.push('/onboarding')
   }
 

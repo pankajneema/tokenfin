@@ -24,12 +24,12 @@ export default async function IntegrationsPage() {
 
   const { data: rows } = await admin
     .from('org_integrations')
-    .select('integration, is_active, connected_at, last_synced_at, sync_ok, detail')
+    .select('provider, is_active, connected_at, last_synced_at, sync_ok, detail')
     .eq('org_id', orgId)
     .eq('is_active', true)
 
   const connected: OrgIntegration[] = (rows ?? []).map(r => ({
-    integration:  r.integration,
+    integration:  r.provider,
     isActive:     r.is_active,
     connectedAt:  r.connected_at,
     lastSyncedAt: r.last_synced_at,

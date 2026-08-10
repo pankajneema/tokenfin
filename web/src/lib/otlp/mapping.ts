@@ -15,17 +15,23 @@ export type TokenField =
   | 'input_tokens' | 'output_tokens'
   | 'cache_read_tokens' | 'cache_write_tokens' | 'reasoning_tokens'
 
-// Metric `type` attribute value → token column. Case/underscore/space-insensitive
-// (metrics use camelCase "cacheRead"; events use snake_case — normalized here).
+// Metric `type` / `token_type` attribute value → token column.
+// Case/underscore/space-insensitive (metrics use camelCase "cacheRead"; events
+// use snake_case — normalized here).
 const TOKEN_TYPE: Record<string, TokenField> = {
   input: 'input_tokens',
   output: 'output_tokens',
   cacheread: 'cache_read_tokens',
   cachecreation: 'cache_write_tokens',
-  cached: 'cache_read_tokens',       // Codex
-  reasoning: 'reasoning_tokens',     // Codex
-  prompt: 'input_tokens',            // GenAI semconv
-  completion: 'output_tokens',       // GenAI semconv
+  cached: 'cache_read_tokens',           // Codex (older builds)
+  cachedinput: 'cache_read_tokens',      // Codex real token_type, confirmed on a real session (2026-08-10)
+  cachewriteinput: 'cache_write_tokens', // Codex real token_type, confirmed on a real session (2026-08-10)
+  reasoning: 'reasoning_tokens',
+  reasoningoutput: 'reasoning_tokens',   // Codex real token_type, confirmed on a real session (2026-08-10)
+  prompt: 'input_tokens',                // GenAI semconv
+  completion: 'output_tokens',           // GenAI semconv
+  // "total" is deliberately unmapped — it's input+output+cache+reasoning
+  // combined; counting it too would double the token sum.
 }
 export const tokenFieldFor = (type: unknown): TokenField | null =>
   TOKEN_TYPE[String(type ?? '').toLowerCase().replace(/[_\s-]/g, '')] ?? null
@@ -37,6 +43,42 @@ export const TOKEN_METRIC_SOURCE: Record<string, string> = {
   'gen_ai.client.token.usage': 'gemini_cli',
 }
 export const COST_METRIC_NAMES = new Set(['claude_code.cost.usage'])
+
+// Operational metrics — observed on real sessions (2026-08-10: `claude -p`,
+// `codex exec`). Not token/cost-bearing (nothing to derive), but legitimate
+// and expected, so they shouldn't trip the "unrecognized metric" warning on
+// every push. Add more here only once confirmed on a real session, not
+// speculatively — same discipline as the rest of this file.
+export const KNOWN_NON_TOKEN_METRICS = new Set([
+  // Claude Code
+  'claude_code.session.count',
+  'claude_code.active_time.total',
+  // Codex CLI (0.147.0) — startup/runtime housekeeping, not usage
+  'codex.process.start',
+  'codex.sqlite.init.count', 'codex.sqlite.init.duration_ms',
+  'codex.remote_models.load_cache.duration_ms', 'codex.remote_models.fetch_update.duration_ms',
+  'codex.thread.started',
+  'codex.shell_snapshot', 'codex.shell_snapshot.duration_ms',
+  'codex.startup.phase.duration_ms',
+  'codex.startup_prewarm.duration_ms', 'codex.startup_prewarm.age_at_first_turn_ms',
+  'codex.rollout_compression.materialize', 'codex.rollout.size_bytes',
+  'codex.mcp.tools.fetch_uncached.duration_ms', 'codex.mcp.tools.cache_write.duration_ms',
+  'codex.mcp.tools.cache_publish.duration_ms', 'codex.mcp.tools.list.duration_ms',
+  'codex.apps.refresh.duration_ms',
+  'codex.websocket.request', 'codex.websocket.request.duration_ms',
+  'codex.websocket.event', 'codex.websocket.event.duration_ms',
+  'codex.thread.skills.enabled_total', 'codex.thread.skills.kept_total',
+  'codex.thread.skills.truncated', 'codex.thread.skills.description_truncated_chars',
+  'codex.skills.shadow_selection', 'codex.skills.shadow_selection.duration_ms',
+  'codex.skills.shadow_selection.catalog_entries', 'codex.skills.shadow_selection.selected_entries',
+  'codex.skills.shadow_selection.query_terms', 'codex.skills.shadow_selection.reduction_bps',
+  'codex.turn.ttft.duration_ms', 'codex.turn.ttfm.duration_ms', 'codex.turn.e2e_duration_ms',
+  'codex.turn.network_proxy', 'codex.turn.tool.call', 'codex.turn.memory',
+  'codex.conversation.turn.count',
+  'codex.responses_api_overhead.duration_ms', 'codex.responses_api_inference_time.duration_ms',
+  'codex.responses_api_engine_iapi_ttft.duration_ms', 'codex.responses_api_engine_service_ttft.duration_ms',
+  'codex.responses_api_engine_iapi_tbt.duration_ms', 'codex.responses_api_engine_service_tbt.duration_ms',
+])
 
 // Metrics we DERIVE per-turn usage rows from — sources that have NO per-turn
 // logs path (Codex, Gemini report tokens only as metrics). Claude Code is
@@ -56,6 +98,7 @@ export function deriveSourceFor(metricName: string): string | null {
 
 export function isRecognizedMetric(name: string): boolean {
   return !!TOKEN_METRIC_SOURCE[name] || COST_METRIC_NAMES.has(name) || name.startsWith('gen_ai.')
+    || KNOWN_NON_TOKEN_METRICS.has(name)
 }
 
 // Which agent produced this signal — from the resource service.name, with a

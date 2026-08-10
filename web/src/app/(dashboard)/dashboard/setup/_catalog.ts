@@ -23,13 +23,21 @@ export const ACCURACY_META: Record<Accuracy, { label: string; cls: string; dot: 
   estimated: { label: 'Estimated', cls: 'bg-[var(--amber-bg)] text-[var(--amber)]', dot: 'var(--amber)' },
 }
 
+const OTLP_SOURCES = new Set(['claude_code', 'codex_cli', 'gemini_cli'])
+
 /**
  * Best-effort inference of a connected key's recorder tier + accuracy for the
- * Connected Platforms page, from the key name and the models it recorded.
- * OTLP-native CLI agents (Claude Code / Codex / Gemini) push real counts, so
- * they read as exact telemetry. Everything else is unknown until a poller lands.
+ * Connected Platforms page. `sources` — the actual `usage_events.source`
+ * values this key has recorded — is the ground truth and checked first: it's
+ * set by the OTLP receiver's own detection (otlp/mapping.ts), not guessed.
+ * The key name is only a fallback for keys with no events yet (e.g. right
+ * after `tokenfin login`, before setup's first real event lands) — and it's
+ * a weak one, since `login` names keys after the machine hostname by
+ * default ("pnkj.local"), which rarely contains "claude"/"codex"/"gemini".
  */
-export function inferConnection(name: string, models: string[]): { tier: Tier | null; accuracy: Accuracy | null } {
+export function inferConnection(name: string, models: string[], sources: string[] = []): { tier: Tier | null; accuracy: Accuracy | null } {
+  if (sources.some(s => OTLP_SOURCES.has(s))) return { tier: 'code', accuracy: 'exact' }
+
   const n = (name || '').toLowerCase()
   if (n.includes('claude') || n.includes('codex') || n.includes('gemini')) {
     return { tier: 'code', accuracy: 'exact' }

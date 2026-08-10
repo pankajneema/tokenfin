@@ -39,3 +39,19 @@ export function truncate(s: string, n = 40): string {
 export function slugify(s: string): string {
   return s.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
 }
+
+/** Parse a failed API response ({ error: string } or Zod's { formErrors, fieldErrors })
+ *  into one human-readable line instead of dumping raw JSON in the UI. */
+export async function readApiError(res: Response): Promise<string> {
+  const text = await res.text()
+  try {
+    const data = JSON.parse(text)
+    const err = data?.error
+    if (typeof err === 'string') return err
+    const fieldMsgs = Object.values(err?.fieldErrors ?? {}).flat() as string[]
+    const formMsgs  = (err?.formErrors ?? []) as string[]
+    const msgs = [...formMsgs, ...fieldMsgs]
+    if (msgs.length) return msgs.join(' ')
+  } catch { /* not JSON — fall through to raw text */ }
+  return text || `Request failed (${res.status})`
+}

@@ -173,12 +173,13 @@ export function PromptsClient({
           <div>
             <p className="text-[15px] font-semibold text-[var(--fg)]">No prompt data yet</p>
             <p className="text-[13px] text-[var(--fg-secondary)] mt-1 max-w-sm">
-              Prompt analytics appear once your proxy sends events with metadata.
-              Make sure you&apos;re on proxy version 1.1+.
+              Prompt analytics group events by a <code className="font-mono text-[11.5px]">prompt_hash</code> in
+              the event&apos;s metadata — not part of the default Claude Code / Codex / Gemini capture. Send it
+              via <code className="font-mono text-[11.5px]">/api/v1/ingest</code> to see patterns here.
             </p>
           </div>
           <a href="/dashboard/setup" className="btn-primary text-[13px]">
-            View setup guide →
+            View connections →
           </a>
         </div>
       </div>
@@ -200,7 +201,7 @@ export function PromptsClient({
           <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--amber-bg)] border border-[var(--amber)]/20 rounded-xl">
             <Info size={13} className="text-[var(--amber)] flex-shrink-0" />
             <p className="text-[12px] text-[var(--fg-secondary)]">
-              {coverageP}% of requests have prompt fingerprints · update proxy to capture all
+              {coverageP}% of requests have prompt fingerprints · send prompt_hash in metadata to capture the rest
             </p>
           </div>
         )}
