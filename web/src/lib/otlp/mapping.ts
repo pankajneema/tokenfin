@@ -50,6 +50,11 @@ export const COST_METRIC_NAMES = new Set(['claude_code.cost.usage'])
 // every push. Add more here only once confirmed on a real session, not
 // speculatively — same discipline as the rest of this file.
 export const KNOWN_NON_TOKEN_METRICS = new Set([
+  // OpenCode (opencode-otel-plugin 0.11.1) — session/tool housekeeping,
+  // none token/cost-bearing; names from the plugin's source.
+  'gen_ai.client.operation.duration',
+  'opencode.session.request.count', 'opencode.session.compaction.count',
+  'opencode.file.changes', 'opencode.tool.invocations', 'opencode.vcs.operations',
   // Claude Code
   'claude_code.session.count',
   'claude_code.active_time.total',
@@ -107,10 +112,12 @@ export function detectSource(resourceAttrs: Record<string, unknown>, hint?: stri
   const s = String(resourceAttrs['service.name'] ?? '').toLowerCase()
   if (s.includes('claude')) return 'claude_code'
   if (s.includes('codex'))  return 'codex_cli'
+  if (s.includes('opencode')) return 'opencode'
   if (s.includes('gemini') || s.includes('gen_ai')) return 'gemini_cli'
   const h = (hint ?? '').toLowerCase()
   if (h.includes('claude')) return 'claude_code'
   if (h.includes('codex'))  return 'codex_cli'
+  if (h.includes('opencode')) return 'opencode'
   if (h.startsWith('gen_ai') || h.includes('gemini')) return 'gemini_cli'
   return 'otlp'
 }

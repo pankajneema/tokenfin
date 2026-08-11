@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process')
 const {
   MANAGED_KEYS, readClaudeSettings, writeClaudeSettings, backupClaudeSettings, claudeSettingsPath,
   codexConfigPath, stripCodexBlock, geminiSettingsPath, readGeminiSettings, writeGeminiSettings,
+  opencodeConfigPath, readOpencodeConfig, writeOpencodeConfig, stripOpencodePlugin,
 } = require('./otel')
 
 const log = (m) => process.stdout.write(m + '\n')
@@ -52,6 +53,22 @@ async function remove() {
       else log('· Gemini CLI — no telemetry block')
     }
   } catch (e) { log('· Gemini CLI — could not edit settings.json: ' + e.message) }
+
+  // 3b. OpenCode — drop the opencode-otel-plugin from the plugin array
+  try {
+    const p = opencodeConfigPath()
+    if (fs.existsSync(p)) {
+      const s = readOpencodeConfig()
+      const plugin = stripOpencodePlugin(s.plugin)
+      if (!Array.isArray(s.plugin) || plugin.length !== s.plugin.length) {
+        s.plugin = plugin; writeOpencodeConfig(s); log('✔ OpenCode — removed opencode-otel-plugin from opencode.json')
+      } else {
+        log('· OpenCode — no TokenFin plugin')
+      }
+    } else {
+      log('· OpenCode — ~/.config/opencode/opencode.json not found')
+    }
+  } catch (e) { log('· OpenCode — could not edit opencode.json: ' + e.message) }
 
   // 4. unregister the read-only MCP server
   const r = spawnSync('claude', ['mcp', 'remove', 'tokenfin', '-s', 'user'], { stdio: 'ignore', shell: process.platform === 'win32' })

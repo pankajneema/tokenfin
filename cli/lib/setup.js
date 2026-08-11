@@ -17,6 +17,7 @@ const {
   otelEnv, readClaudeSettings, writeClaudeSettings, backupClaudeSettings, claudeSettingsPath,
   codexConfigPath, codexOtelBlock, upsertCodexBlock,
   geminiSettingsPath, geminiTelemetry, readGeminiSettings, writeGeminiSettings,
+  opencodeConfigPath, readOpencodeConfig, writeOpencodeConfig, upsertOpencodePlugin,
 } = require('./otel')
 const { getConnAll, verifyKey } = require('./api')
 const { DEFAULT_APP_URL } = require('./login')
@@ -75,6 +76,14 @@ function configureGemini(otelEndpoint, key) {
   writeGeminiSettings(s)
   return { ok: true, msg: 'telemetry → ' + p }
 }
+function configureOpencode() {
+  const p = opencodeConfigPath()
+  const s = readOpencodeConfig()
+  if (fs.existsSync(p)) { try { fs.copyFileSync(p, p + '.bak-tokenfin') } catch {} }
+  s.plugin = upsertOpencodePlugin(s.plugin)
+  writeOpencodeConfig(s)
+  return { ok: true, msg: 'plugin → ' + p }
+}
 
 function registerMcp(mcpUrl, key) {
   const win = process.platform === 'win32'
@@ -123,6 +132,10 @@ async function setup(flags) {
   if (installed('gemini', '.gemini')) {
     try { const r = configureGemini(otelEndpoint, key); emit(r.ok, 'Gemini CLI', r.msg) }
     catch (e) { emit(false, 'Gemini CLI', e.message) }
+  }
+  if (installed('opencode', path.join('.config', 'opencode'))) {
+    try { const r = configureOpencode(); emit(r.ok, 'OpenCode', r.msg) }
+    catch (e) { emit(false, 'OpenCode', e.message) }
   }
 
   if (registerMcp(appUrl + '/api/mcp', key)) emit(true, 'MCP', 'read-only server registered (query your dashboard from chat)')

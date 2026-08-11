@@ -140,8 +140,41 @@ function writeGeminiSettings(s) {
   fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n')
 }
 
+// ── OpenCode (~/.config/opencode/opencode.json) ───────────────────────────────
+// OpenCode loads the opencode-otel-plugin from its `plugin` array; the plugin
+// reads the standard OTel env vars (endpoint/headers/exporters) at process
+// init, so `setup` only ensures the plugin is listed — the shell that launches
+// opencode must export OTEL_EXPORTER_OTLP_ENDPOINT / _HEADERS etc. (the same
+// vars MANAGED_KEYS documents for Claude Code).
+const OPENCODE_PLUGIN = 'opencode-otel-plugin'
+const opencodeConfigPath = () => path.join(os.homedir(), '.config', 'opencode', 'opencode.json')
+
+function readOpencodeConfig() {
+  const p = opencodeConfigPath()
+  if (!fs.existsSync(p)) return {}
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')) }
+  catch { throw new Error(p + ' exists but is not valid JSON — fix it, then re-run.') }
+}
+function writeOpencodeConfig(s) {
+  const p = opencodeConfigPath()
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n')
+}
+
+// Ensure the plugin is listed (deduped, exact match). Returns the new array.
+function upsertOpencodePlugin(plugin) {
+  const list = Array.isArray(plugin) ? plugin.filter((p) => typeof p === 'string') : []
+  if (!list.includes(OPENCODE_PLUGIN)) list.push(OPENCODE_PLUGIN)
+  return list
+}
+function stripOpencodePlugin(plugin) {
+  return Array.isArray(plugin) ? plugin.filter((p) => p !== OPENCODE_PLUGIN) : plugin
+}
+
 module.exports = {
   claudeSettingsPath, MANAGED_KEYS, otelEnv, readClaudeSettings, writeClaudeSettings, backupClaudeSettings,
   codexConfigPath, codexOtelBlock, upsertCodexBlock, stripCodexBlock,
   geminiSettingsPath, geminiTelemetry, readGeminiSettings, writeGeminiSettings,
+  OPENCODE_PLUGIN, opencodeConfigPath, readOpencodeConfig, writeOpencodeConfig,
+  upsertOpencodePlugin, stripOpencodePlugin,
 }

@@ -42,7 +42,8 @@ const CATEGORIES: Category[] = [
       { name: 'Claude Code', status: 'push', sourceId: 'claude_code' },
       { name: 'Codex CLI',   status: 'push', sourceId: 'codex_cli' },
       { name: 'Gemini CLI',  status: 'push', sourceId: 'gemini_cli' },
-      { name: 'Aider', status: 'byok' }, { name: 'OpenCode', status: 'byok' }, { name: 'Goose', status: 'byok' },
+      { name: 'OpenCode',    status: 'push', sourceId: 'opencode' },
+      { name: 'Aider', status: 'byok' }, { name: 'Goose', status: 'byok' },
       { name: 'Crush', status: 'byok' }, { name: 'Qwen Code', status: 'byok' },
       { name: 'Amp', status: 'none' }, { name: 'Warp', status: 'none' },
       { name: 'Devin CLI', status: 'none' }, { name: 'Antigravity CLI', status: 'none' },
@@ -97,6 +98,13 @@ function pushConfig(otelEndpoint: string, key: string): Record<string, { file: s
       file: '~/.gemini/settings.json', captures: 'Per-turn tokens from the gen_ai.client.token.usage metric.',
       note: 'Gemini can’t set OTLP headers, so the key rides on the endpoint as ?key=.',
       config: JSON.stringify({ telemetry: { enabled: true, target: 'local', useCollector: true, otlpProtocol: 'http', otlpEndpoint: `${otelEndpoint}?key=${key}`, logPrompts: false } }, null, 2),
+    },
+    opencode: {
+      file: '~/.config/opencode/opencode.json', captures: 'Per-turn tokens + cost from the opencode-otel-plugin (traces + metrics).',
+      note: 'Requires the opencode-otel-plugin npm package in the "plugin" array, and the OTel env vars exported into the shell that launches opencode (endpoint, headers, protocol, exporters).',
+      config: JSON.stringify({
+        plugin: ['opencode-otel-plugin'],
+      }, null, 2),
     },
   }
 }
@@ -165,7 +173,7 @@ export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey }: Pr
         </p>
         <p className="text-[12px] text-[var(--fg-tertiary)]">
           {connectedSourceIds.size === 0 ? (
-            <>0 connected yet — Claude Code, Codex CLI &amp; Gemini CLI are supported, run the command below · the rest are coming soon.</>
+            <>0 connected yet — Claude Code, Codex CLI, Gemini CLI &amp; OpenCode are supported, run the command below · the rest are coming soon.</>
           ) : (
             <>
               <span className="font-semibold text-teal">{connectedSourceIds.size}/{totalPushSources} connected</span>

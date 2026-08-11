@@ -20,7 +20,7 @@
  */
 import crypto from 'crypto'
 import { attrsToMap, num } from './attrs'
-import { tokenFieldFor, deriveSourceFor, costBasisFor, isDeltaTemporality, type TokenField } from './mapping'
+import { tokenFieldFor, deriveSourceFor, detectSource, costBasisFor, isDeltaTemporality, type TokenField } from './mapping'
 import { computeCost } from '@/lib/mcp/pricing'
 import type { KeyCtx } from './auth'
 import type { UsageRow } from './normalize'
@@ -50,7 +50,14 @@ export async function deriveMetricEvents(body: any, ctx: KeyCtx, state: MetricSt
     for (const sm of rm?.scopeMetrics ?? []) {
       for (const m of sm?.metrics ?? []) {
         const name = String(m?.name ?? '')
-        const source = deriveSourceFor(name)
+        // Source is resource-aware: OpenCode derives the SAME gen_ai semconv
+        // metric names as Gemini, so the service.name attribute (not the metric
+        // name) decides which agent it belongs to.
+        let source = deriveSourceFor(name)
+        if (source === 'gemini_cli') {
+          const resSource = detectSource(resAttrs, name)
+          if (resSource === 'opencode') source = 'opencode'
+        }
         if (!source) continue                    // claude_code + non-token metrics: not derived here
 
         const sum = m?.sum

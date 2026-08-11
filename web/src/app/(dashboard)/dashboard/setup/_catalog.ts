@@ -23,7 +23,7 @@ export const ACCURACY_META: Record<Accuracy, { label: string; cls: string; dot: 
   estimated: { label: 'Estimated', cls: 'bg-[var(--amber-bg)] text-[var(--amber)]', dot: 'var(--amber)' },
 }
 
-const OTLP_SOURCES = new Set(['claude_code', 'codex_cli', 'gemini_cli'])
+const OTLP_SOURCES = new Set(['claude_code', 'codex_cli', 'gemini_cli', 'opencode'])
 
 /**
  * Best-effort inference of a connected key's recorder tier + accuracy for the
@@ -39,7 +39,7 @@ export function inferConnection(name: string, models: string[], sources: string[
   if (sources.some(s => OTLP_SOURCES.has(s))) return { tier: 'code', accuracy: 'exact' }
 
   const n = (name || '').toLowerCase()
-  if (n.includes('claude') || n.includes('codex') || n.includes('gemini')) {
+  if (n.includes('claude') || n.includes('codex') || n.includes('gemini') || n.includes('opencode')) {
     return { tier: 'code', accuracy: 'exact' }
   }
   // setup-hub / test keys record through the exact server path.

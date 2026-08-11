@@ -71,6 +71,21 @@ describe('deriveMetricEvents', () => {
     expect(r.rows[0].output_tokens).toBe(8)
   })
 
+  it('attributes the same gen_ai metric to OpenCode when service.name is opencode', async () => {
+    const gdp = (type: string, val: number) => ({
+      timeUnixNano: 1e15, asInt: val,
+      attributes: [{ key: 'gen_ai.token.type', value: { stringValue: type } }, { key: 'gen_ai.request.model', value: { stringValue: 'qwen3.6' } }],
+    })
+    const body = metricsBody([deltaSum('gen_ai.client.token.usage', [gdp('input', 30), gdp('output', 10)])],
+      [{ key: 'service.name', value: { stringValue: 'opencode' } }])
+    const r = await deriveMetricEvents(body, CTX, fakeState())
+    expect(r.rows).toHaveLength(1)
+    expect(r.rows[0].source).toBe('opencode')
+    expect(r.rows[0].model).toBe('qwen3.6')
+    expect(r.rows[0].input_tokens).toBe(30)
+    expect(r.rows[0].output_tokens).toBe(10)
+  })
+
   it('event_id is deterministic across identical exports (persist dedupes)', async () => {
     const body = metricsBody([deltaSum('codex.turn.token_usage', [dp('input', 30)])])
     const a = (await deriveMetricEvents(body, CTX, fakeState())).rows[0].event_id

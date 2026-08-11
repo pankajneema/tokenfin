@@ -2,8 +2,8 @@
 
 LLM cost-attribution / FinOps platform. Tracks token usage and spend across
 projects, models, and team members — for CLI coding agents (Claude Code,
-Codex CLI, Gemini CLI) via their native OpenTelemetry export, and for your
-own backend via a direct ingest API/SDK.
+Codex CLI, Gemini CLI, OpenCode) via their native OpenTelemetry export, and
+for your own backend via a direct ingest API/SDK.
 
 No proxy in the model request path. TokenFin never holds your provider API
 keys. See [`MIGRATION.md`](./MIGRATION.md) for why that's a hard rule, not a
@@ -18,7 +18,7 @@ Start here if you're new to the codebase — read in this order:
 | [`docs/architecture.md`](./docs/architecture.md) | System map, monorepo layout, tech stack, auth flow |
 | [`docs/data-flow.md`](./docs/data-flow.md) | How usage is captured, the metered-vs-notional split, OTLP metric derivation |
 | [`docs/alerts-and-limits.md`](./docs/alerts-and-limits.md) | What limits can actually enforce vs. just warn about, how alert rules fire |
-| [`docs/SETUP_HUB.md`](./docs/SETUP_HUB.md) | Per-agent connection details (Claude Code / Codex / Gemini) |
+| [`docs/SETUP_HUB.md`](./docs/SETUP_HUB.md) | Per-agent connection details (Claude Code / Codex / Gemini / OpenCode) |
 | [`docs/MCP.md`](./docs/MCP.md) | The read-only MCP server — query your dashboard from chat |
 | [`CLAUDE.md`](./CLAUDE.md) | Quick-reference schema table + page→data-source map (for AI coding sessions, but useful for anyone) |
 | [`MIGRATION.md`](./MIGRATION.md) | What was deliberately removed (proxy, hooks, write-capable MCP) and why — read before reintroducing any of it |
@@ -30,7 +30,7 @@ npx tokenfin login    # browser sign-in, stores an ingest key in ~/.tokenfin/con
 npx tokenfin setup    # configures every installed agent, waits for the first real event
 ```
 
-That's the whole setup for Claude Code, Codex CLI, and Gemini CLI. See the
+That's the whole setup for Claude Code, Codex CLI, Gemini CLI, and OpenCode. See the
 [`cli/README.md`](./cli/README.md) for the full command reference
 (`status`, `doctor`, `remove`).
 
@@ -73,6 +73,7 @@ the code:
 - ✅ Claude Code CLI — full capture pipeline confirmed end-to-end
 - ✅ Codex CLI — confirmed end-to-end after fixing three real bugs found during testing (invalid config TOML, unread histogram metrics, double-counted cache tokens) — see [`docs/data-flow.md`](./docs/data-flow.md#deriving-events-from-metrics-codex-gemini)
 - 🟡 Gemini CLI — config matches official docs, not yet run against a real account
+- 🟡 OpenCode — receiver path (protobuf traces, service.name attribution) verified with real payloads; end-to-end session run pending
 - 🟡 Claude Code / Codex IDE extensions (VS Code, JetBrains) — architecturally reasoned to work (same underlying CLI binary, same config file), not empirically tested
 - ✅ Alerts (rule creation → cron evaluation → delivery) — confirmed with a real fired alert
 - ✅ Limits — spend tracking and SDK-side enforcement (`403`/`429`) both confirmed for real; CLI-agent block/throttle is architecturally impossible by design, not a bug (see [`docs/alerts-and-limits.md`](./docs/alerts-and-limits.md))

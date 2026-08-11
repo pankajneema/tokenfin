@@ -14,6 +14,8 @@ import type { NextRequest } from 'next/server'
 import crypto from 'crypto'
 import { createAdminClient } from '@/lib/supabase/server'
 import { computeCost } from '@/lib/mcp/pricing'
+import { readOtlp } from '@/lib/otlp/decode'
+import { detectSource } from '@/lib/otlp/mapping'
 
 interface KeyCtx { orgId: string; projectId: string | null; keyId: string; userId: string | null }
 
@@ -49,7 +51,7 @@ export async function POST(req: NextRequest) {
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
 
   let body: any
-  try { body = await req.json() } catch { return NextResponse.json({ error: 'invalid OTLP json' }, { status: 400 }) }
+  try { body = await readOtlp(req, 'traces') } catch { return NextResponse.json({ error: 'invalid OTLP body' }, { status: 400 }) }
 
   const admin = createAdminClient()
   const spanRows: any[] = []
@@ -57,9 +59,11 @@ export async function POST(req: NextRequest) {
   const traceIds = new Set<string>()
 
   for (const rs of body.resourceSpans ?? []) {
+    const resAttrs = attrsToMap(rs.resource?.attributes ?? [])
     for (const ss of rs.scopeSpans ?? []) {
       for (const sp of ss.spans ?? []) {
         const a = attrsToMap(sp.attributes)
+        const source = detectSource(resAttrs, sp.name ?? '')
         const model = (a['gen_ai.request.model'] ?? a['gen_ai.response.model']) as string | undefined
         const inTok  = Number(a['gen_ai.usage.input_tokens'] ?? a['gen_ai.usage.prompt_tokens'] ?? 0)
         const outTok = Number(a['gen_ai.usage.output_tokens'] ?? a['gen_ai.usage.completion_tokens'] ?? 0)
@@ -81,7 +85,7 @@ export async function POST(req: NextRequest) {
           usageRows.push({
             org_id: ctx.orgId, project_id: ctx.projectId, api_key_id: ctx.keyId, user_id: ctx.userId, model,
             input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok, cost_usd: cost,
-            tags: { source: 'otel' }, metadata: { trace_id: traceId, span_id: spanId },
+            source, tags: { source }, metadata: { trace_id: traceId, span_id: spanId },
           })
         }
       }

@@ -6,18 +6,18 @@
 > for real), see [`data-flow.md`](./data-flow.md).
 
 TokenFin is an **OpenTelemetry receiver**. Coding agents that ship native OTLP (Claude Code, Codex,
-Gemini) push token usage to us directly — no proxy in the request path, no provider keys held, no
-transcript parsing.
+Gemini, OpenCode) push token usage to us directly — no proxy in the request path, no provider keys
+held, no transcript parsing.
 
-## One command, all three agents
+## One command, all four agents
 
 ```bash
 npx tokenfin login
 npx tokenfin setup     # configures every installed agent, waits for the first real event
 ```
 
-`setup` detects Claude Code, Codex CLI, and Gemini CLI and writes each one's own config format —
-below. It only reports success once a **real event** actually lands, not just when config is
+`setup` detects Claude Code, Codex CLI, Gemini CLI, and OpenCode and writes each one's own config
+format — below. It only reports success once a **real event** actually lands, not just when config is
 written. Verify anytime with `npx tokenfin status` or diagnose with `npx tokenfin doctor`. Undo
 with `npx tokenfin remove`.
 
@@ -66,6 +66,29 @@ Writes a `telemetry` block to `~/.gemini/settings.json`. Field names were checke
 CLI's own telemetry docs and match. Given Codex's config *also* looked right until it was tested
 against a real session, treat this as "should work" rather than "confirmed" until someone runs it
 end-to-end with real Gemini credentials.
+
+## OpenCode — receiver verified, end-to-end pending real session
+
+Writes the `opencode-otel-plugin` into the `plugin` array of
+`~/.config/opencode/opencode.json` (`setup`), and the receiver attributes the plugin's
+`gen_ai` traces/metrics to the `opencode` source (resource `service.name=opencode`). The plugin
+reads standard OTel env vars at process init, so the shell that launches opencode must export them
+(the same block `setup` documents for Claude Code — see `cli/README.md`):
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://<app>/api/otel"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <key>"
+export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
+```
+
+The plugin ships traces+metrics only (no logs), and its traces are **protobuf**, which the receiver
+decodes via the same `readOtlp` path as the other agents. Verified: live protobuf/JSON payloads
+accepted by `/v1/traces` and `/v1/metrics`, source attribution correct (service.name discriminates
+OpenCode from Gemini — both emit `gen_ai.client.token.usage`). Pending: an end-to-end run of
+`opencode` with the plugin to confirm the exact metric/span shapes on a real session.
 
 ## Not yet
 
