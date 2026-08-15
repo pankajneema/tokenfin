@@ -751,7 +751,7 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
           At <span className="font-semibold">Warn %</span>, alerts fire for all of it.
           <span className="font-semibold"> Throttle %</span> and <span className="font-semibold">Block %</span> only
           apply to direct API/SDK calls through <code className="font-mono">/api/v1/ingest</code> — TokenFin sits
-          outside Claude Code / Codex / Gemini's request path by design, so it can warn about their
+          outside Claude Code / Codex / Gemini&apos;s request path by design, so it can warn about their
           usage but can&apos;t stop it.
         </div>
       </div>
