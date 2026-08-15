@@ -61,17 +61,29 @@ export default async function ModelsAnalyticsPage({
       .eq('org_id', orgId).gte('bucket', sinceDatePrev).lt('bucket', sinceDateCurr),
     // usage_events is always used for call counts (source of truth, 1 row = 1 call)
     admin.from('usage_events')
-      .select('model,input_tokens,output_tokens,total_tokens,cost_usd')
+      .select('model,input_tokens,output_tokens,total_tokens,cost_usd,cost_basis')
       .eq('org_id', orgId).gte('created_at', sinceTsCurr),
     admin.from('usage_events')
-      .select('model,input_tokens,output_tokens,total_tokens,cost_usd')
+      .select('model,input_tokens,output_tokens,total_tokens,cost_usd,cost_basis')
       .eq('org_id', orgId).gte('created_at', sinceTsPrev).lt('created_at', sinceTsCurr),
   ])
 
-  // Cost/tokens: prefer usage_agg (pre-aggregated), fall back to usage_events
-  const aggHasCost = (curr ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
-  const costSource     = aggHasCost ? (curr ?? []) : (evts ?? [])
-  const costSourcePrev = aggHasCost ? (prev ?? []) : (evtsPrev ?? [])
+  // Cost/tokens: prefer usage_agg (pre-aggregated), fall back to usage_events.
+  // A single nonzero row isn't enough to trust usage_agg wholesale — the async
+  // aggregation worker can partially lag, so compare summed totals instead.
+  // usage_agg only ever holds METERED rows, so exclude notional from the
+  // raw-events side or subscription-usage orgs would always look "incomplete".
+  const aggCostTotal  = (curr ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const evtsCostTotal = (evts ?? []).filter(r => (r as Record<string,unknown>).cost_basis !== 'notional').reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const aggHasCost    = aggCostTotal > 0 && aggCostTotal >= evtsCostTotal * 0.95
+
+  // usage_agg NEVER contains notional rows (by design) — top it up with
+  // notional rows read straight from raw events, or trusting agg silently
+  // drops subscription spend/tokens from every total below.
+  const notionalEvts     = (evts     ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
+  const notionalEvtsPrev = (evtsPrev ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
+  const costSource     = aggHasCost ? [...(curr ?? []), ...notionalEvts]     : (evts     ?? [])
+  const costSourcePrev = aggHasCost ? [...(prev ?? []), ...notionalEvtsPrev] : (evtsPrev ?? [])
 
   /* ── Aggregate current period: cost+tokens from agg, calls from events ── */
   const currMap = new Map<string, { inputTok: number; outputTok: number; totalTok: number; cost: number; calls: number }>()

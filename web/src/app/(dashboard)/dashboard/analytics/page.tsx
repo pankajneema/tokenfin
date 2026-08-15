@@ -116,8 +116,30 @@ export default async function AnalyticsPage() {
       .maybeSingle(),
   ])
 
-  /* ── Use usage_agg for cost/tokens, usage_events for counts ── */
-  const aggHasCost = (agg ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
+  /* ── Use usage_agg for cost/tokens, usage_events for counts ──
+   * A single nonzero row in usage_agg used to be enough to "trust" it
+   * wholesale — but the Go aggregation worker can lag or drop some (not
+   * all) rows, so a partially-populated usage_agg would still pass that
+   * check and silently under-report cost/tokens vs. the complete raw
+   * usage_events table (this is what produced diverging numbers between
+   * pages — e.g. Analytics showing less than Dashboard/My Usage). Compare
+   * totals instead: only trust usage_agg when it accounts for at least
+   * 95% of what the raw events show for the same window.
+   * usage_agg only ever holds METERED rows (persist.ts deliberately excludes
+   * notional/subscription usage from it) — comparing it against a raw total
+   * that still includes notional would make it look permanently incomplete
+   * for any org with subscription usage, so exclude notional here too. */
+  const aggCostTotal  = (agg  ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const evtsCostTotal = (evts ?? []).filter(r => r.cost_basis !== 'notional').reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const aggHasCost    = aggCostTotal > 0 && aggCostTotal >= evtsCostTotal * 0.95
+
+  // usage_agg NEVER contains notional rows (by design), so whenever it's used
+  // as the primary source it must still be topped up with notional rows read
+  // straight from raw events — otherwise trusting agg silently drops
+  // subscription spend from every total below, even though it's complete for
+  // the metered portion it does track.
+  const notionalEvts     = (evts     ?? []).filter(r => r.cost_basis === 'notional')
+  const notionalEvtsPrev = (evtsPrev ?? []).filter(r => r.cost_basis === 'notional')
 
   /* ── Build per-day cost+tokens from usage_agg (or usage_events fallback) ── */
   const costMap     = new Map<string, { cost: number; tokens: number }>()
@@ -131,8 +153,22 @@ export default async function AnalyticsPage() {
       e.tokens += Number(r.total_tokens ?? 0)
       costMap.set(key, e)
     }
+    for (const r of notionalEvts) {
+      const key = toISTDate(r.created_at)
+      const e   = costMap.get(key) ?? { cost: 0, tokens: 0 }
+      e.cost   += Number(r.cost_usd     ?? 0)
+      e.tokens += Number(r.total_tokens ?? 0)
+      costMap.set(key, e)
+    }
     for (const r of aggPrev ?? []) {
       const shifted = toISTDate(new Date(r.bucket).getTime() + 30 * 86400_000)
+      const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
+      e.cost   += Number(r.cost_usd     ?? 0)
+      e.tokens += Number(r.total_tokens ?? 0)
+      costMapPrev.set(shifted, e)
+    }
+    for (const r of notionalEvtsPrev) {
+      const shifted = toISTDate(new Date(r.created_at).getTime() + 30 * 86400_000)
       const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
@@ -194,7 +230,7 @@ export default async function AnalyticsPage() {
   const modelCost  = new Map<string, { cost: number; tokens: number }>()
   const modelCalls = new Map<string, number>()
 
-  const costSource = aggHasCost ? (agg ?? []) : (evts ?? [])
+  const costSource = aggHasCost ? [...(agg ?? []), ...notionalEvts] : (evts ?? [])
   for (const r of costSource) {
     const m = r.model ?? 'unknown'
     const e = modelCost.get(m) ?? { cost: 0, tokens: 0 }

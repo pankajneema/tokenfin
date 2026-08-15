@@ -50,10 +50,10 @@ export default async function ProjectsAnalyticsPage({
       .select('project_id,cost_usd,request_count')
       .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
     admin.from('usage_events')
-      .select('project_id,model,cost_usd,total_tokens,user_id')
+      .select('project_id,model,cost_usd,total_tokens,user_id,cost_basis')
       .eq('org_id', orgId).gte('created_at', since30ts),
     admin.from('usage_events')
-      .select('project_id,cost_usd')
+      .select('project_id,cost_usd,cost_basis')
       .eq('org_id', orgId).gte('created_at', since60ts).lt('created_at', since30ts),
     admin.from('projects').select('id,name,slug').eq('org_id', orgId),
     admin.from('limits').select('project_id,value').eq('org_id', orgId).eq('metric', 'cost'),
@@ -67,10 +67,22 @@ export default async function ProjectsAnalyticsPage({
       .eq('is_active', true),
   ])
 
-  // Cost/tokens: prefer usage_agg; calls: always from usage_events (1 row = 1 call)
-  const aggHasCost = (curr ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
-  const currSource = aggHasCost ? (curr ?? []) : (evts ?? [])
-  const prevSource = aggHasCost ? (prev ?? []) : (evtsPrev ?? [])
+  // Cost/tokens: prefer usage_agg; calls: always from usage_events (1 row = 1 call).
+  // A single nonzero row isn't enough to trust usage_agg wholesale — the async
+  // aggregation worker can partially lag, so compare summed totals instead.
+  // usage_agg only ever holds METERED rows, so exclude notional from the
+  // raw-events side or subscription-usage orgs would always look "incomplete".
+  const aggCostTotal  = (curr ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const evtsCostTotal = (evts ?? []).filter(r => (r as Record<string,unknown>).cost_basis !== 'notional').reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const aggHasCost    = aggCostTotal > 0 && aggCostTotal >= evtsCostTotal * 0.95
+
+  // usage_agg NEVER contains notional rows (by design) — top it up with
+  // notional rows read straight from raw events, or trusting agg silently
+  // drops subscription spend from every total below.
+  const notionalEvts     = (evts     ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
+  const notionalEvtsPrev = (evtsPrev ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
+  const currSource = aggHasCost ? [...(curr ?? []), ...notionalEvts]     : (evts     ?? [])
+  const prevSource = aggHasCost ? [...(prev ?? []), ...notionalEvtsPrev] : (evtsPrev ?? [])
 
   const projNames = new Map((projects ?? []).map(p => [p.id, p.name]))
   const budgetMap = new Map((limits   ?? []).map(l => [l.project_id, l.value]))
@@ -104,19 +116,20 @@ export default async function ProjectsAnalyticsPage({
     inner.set(tid, (inner.get(tid) ?? 0) + 1)
   }
 
-  // Also attribute via usage_events.user_id (covers ingest from users without keys)
-  if (!aggHasCost) {
-    // Only do event-level attribution when falling back to events
-    for (const e of evts ?? []) {
-      const pid = e.project_id
-      const uid = (e as Record<string,unknown>).user_id as string | null
-      if (!pid || !uid) continue
-      const tid = userTeamMap.get(uid)
-      if (!tid) continue
-      if (!projTeamCount.has(pid)) projTeamCount.set(pid, new Map())
-      const inner = projTeamCount.get(pid)!
-      inner.set(tid, (inner.get(tid) ?? 0) + 1)
-    }
+  // Also attribute via usage_events.user_id (covers ingest from users without
+  // keys) — usage_agg has no user_id column at all, so event-level
+  // attribution always has to run over whichever raw-event rows are in play:
+  // all of evts when falling back, or just the notional top-up when agg is
+  // the primary source (agg rows themselves can never carry a user_id).
+  for (const e of (aggHasCost ? notionalEvts : (evts ?? []))) {
+    const pid = e.project_id
+    const uid = (e as Record<string,unknown>).user_id as string | null
+    if (!pid || !uid) continue
+    const tid = userTeamMap.get(uid)
+    if (!tid) continue
+    if (!projTeamCount.has(pid)) projTeamCount.set(pid, new Map())
+    const inner = projTeamCount.get(pid)!
+    inner.set(tid, (inner.get(tid) ?? 0) + 1)
   }
 
   // For each project, pick the team with the most keys

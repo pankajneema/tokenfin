@@ -176,8 +176,15 @@ export default async function DashboardPage() {
       request_count: v.reqs,
     }))
 
-  /* ── Project breakdown: prefer projAgg, fall back to events ── */
-  const projAggHasCost = (projAgg ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
+  /* ── Project breakdown: prefer projAgg, fall back to events ──
+   * A single nonzero row used to be enough to trust projAgg wholesale, which
+   * silently under-counted whenever the aggregation worker only partially
+   * caught up on the 5-day window. Compare against the raw 5-day total
+   * (already bucketed into dayMap above) instead — only trust projAgg when
+   * it accounts for at least 95% of what the raw events show. */
+  const evts5dCostTotal = Array.from(dayMap.values()).reduce((s, v) => s + v.cost, 0)
+  const projAggCostTotal = (projAgg ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const projAggHasCost = projAggCostTotal > 0 && projAggCostTotal >= evts5dCostTotal * 0.95
   const projMap: Record<string, { cost: number; calls: number }> = {}
 
   if (projAggHasCost) {
@@ -188,7 +195,11 @@ export default async function DashboardPage() {
       projMap[pid].calls += Number(r.request_count ?? 0)
     }
   } else {
+    // Match the headline cards above (Total Cost is metered-only, notional
+    // shown as its own separate line) — Top Projects should reconcile with
+    // that same card, not silently include notional spend it never shows.
     for (const e of events30 ?? []) {
+      if (isNotional(e)) continue
       const pid = e.project_id ?? '__none__'
       if (!projMap[pid]) projMap[pid] = { cost: 0, calls: 0 }
       projMap[pid].cost  += Number(e.cost_usd ?? 0)

@@ -41,7 +41,15 @@ export async function persistRows(admin: SupabaseClient, ctx: KeyCtx, rows: Usag
       cache_read_tokens: r.cache_read_tokens, cache_write_tokens: r.cache_write_tokens,
       reasoning_tokens: r.reasoning_tokens, cost_basis: r.cost_basis,
       user_email: r.user_email, session_id: r.session_id,
-      tags: { source: r.source }, metadata: { otlp: true, prompt_id: r.correlation_id },
+      tags: { source: r.source },
+      // prompt_hash: both analytics/prompts and my-usage read this exact key
+      // to group "prompt patterns" — it was previously written as `prompt_id`,
+      // a name neither consumer ever looked for, so this data existed but was
+      // invisible. Claude Code's OTel logs carry no prompt TEXT (by design,
+      // for privacy), so this groups by conversation/session — not true
+      // prompt-content similarity — but that's a real, useful "cost per task"
+      // view, and is exactly what was silently missing before.
+      metadata: { otlp: true, prompt_hash: r.correlation_id },
     }
 
     let inserted: any[] | null = null

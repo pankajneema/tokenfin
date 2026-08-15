@@ -45,18 +45,30 @@ export default async function CostsPage({
       .select('bucket,model,project_id,cost_usd,request_count')
       .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
     admin.from('usage_events')
-      .select('created_at,model,project_id,total_tokens,cost_usd')
+      .select('created_at,model,project_id,total_tokens,cost_usd,cost_basis')
       .eq('org_id', orgId).gte('created_at', since30ts),
     admin.from('usage_events')
-      .select('created_at,model,project_id,cost_usd')
+      .select('created_at,model,project_id,cost_usd,cost_basis')
       .eq('org_id', orgId).gte('created_at', since60ts).lt('created_at', since30ts),
     admin.from('projects').select('id,name').eq('org_id', orgId),
   ])
 
   const projNames = new Map((projects ?? []).map(p => [p.id, p.name]))
 
-  // Fall back to usage_events if usage_agg has no data
-  const aggHasCost = (curr ?? []).some(r => Number(r.cost_usd ?? 0) > 0)
+  // Fall back to usage_events if usage_agg is missing or incomplete — a
+  // single nonzero row isn't enough to trust it wholesale when the aggregation
+  // worker can partially lag, so compare summed totals instead. usage_agg only
+  // ever holds METERED rows (notional/subscription usage is deliberately kept
+  // out of it), so exclude notional from the raw-events side of the comparison
+  // too, or orgs with subscription usage would always look "incomplete".
+  const aggCostTotal  = (curr ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const evtsCostTotal = (evts ?? []).filter(r => (r as Record<string,unknown>).cost_basis !== 'notional').reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const aggHasCost    = aggCostTotal > 0 && aggCostTotal >= evtsCostTotal * 0.95
+
+  // usage_agg NEVER contains notional rows (by design) — top it up with
+  // notional rows read straight from raw events, or trusting agg silently
+  // drops subscription spend/calls from every total below.
+  const notionalEvts = (evts ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
 
   type DayEntry = {
     cost:     number
@@ -80,6 +92,17 @@ export default async function CostsPage({
       if (r.project_id) e.projMap.set(r.project_id,  (e.projMap.get(r.project_id)  ?? 0) + Number(r.cost_usd ?? 0))
       dayMap.set(day, e)
     }
+    // Notional rows on top — never in usage_agg, always from raw events
+    for (const r of notionalEvts) {
+      const day = toISTDate(r.created_at)
+      const e   = dayMap.get(day) ?? { cost:0, tokens:0, calls:0, modelMap:new Map(), projMap:new Map() }
+      e.cost   += Number(r.cost_usd     ?? 0)
+      e.tokens += Number(r.total_tokens ?? 0)
+      e.calls  += 1
+      if (r.model)      e.modelMap.set(r.model,      (e.modelMap.get(r.model)      ?? 0) + Number(r.cost_usd ?? 0))
+      if (r.project_id) e.projMap.set(r.project_id,  (e.projMap.get(r.project_id)  ?? 0) + Number(r.cost_usd ?? 0))
+      dayMap.set(day, e)
+    }
   } else {
     // Fallback — read from usage_events
     for (const r of evts ?? []) {
@@ -95,12 +118,14 @@ export default async function CostsPage({
   }
 
   /* ── Prev period — shifted forward 30 days for chart alignment ── */
+  const notionalEvtsPrev = (evtsPrev ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
   const prevMap = new Map<string, number>()
-  const prevSource = aggHasCost ? (prev ?? []) : (evtsPrev ?? [])
+  const prevSource = aggHasCost ? [...(prev ?? []), ...notionalEvtsPrev] : (evtsPrev ?? [])
   for (const r of prevSource) {
-    const rawDay = aggHasCost
-      ? String((r as Record<string,unknown>).bucket ?? '')
-      : String((r as Record<string,unknown>).created_at ?? '')
+    // prevSource can mix agg rows (bucket) and notional top-up rows
+    // (created_at) when aggHasCost — read whichever field the row has.
+    const row    = r as Record<string,unknown>
+    const rawDay = String(row.bucket ?? row.created_at ?? '')
     if (!rawDay) continue
     const shifted = toISTDate(new Date(rawDay).getTime() + days * 86400_000)
     prevMap.set(shifted, (prevMap.get(shifted) ?? 0) + Number(r.cost_usd ?? 0))

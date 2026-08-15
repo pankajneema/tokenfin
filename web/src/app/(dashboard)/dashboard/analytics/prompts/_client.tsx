@@ -173,9 +173,11 @@ export function PromptsClient({
           <div>
             <p className="text-[15px] font-semibold text-[var(--fg)]">No prompt data yet</p>
             <p className="text-[13px] text-[var(--fg-secondary)] mt-1 max-w-sm">
-              Prompt analytics group events by a <code className="font-mono text-[11.5px]">prompt_hash</code> in
-              the event&apos;s metadata — not part of the default Claude Code / Codex / Gemini capture. Send it
-              via <code className="font-mono text-[11.5px]">/api/v1/ingest</code> to see patterns here.
+              Patterns group events by conversation/session — captured automatically from
+              Claude Code, Codex, and Gemini. Nothing has landed for this org in the last 30
+              days yet; once requests come in, they&apos;ll show up here grouped by task.
+              For grouping by actual prompt text instead of session, route requests through{' '}
+              <code className="font-mono text-[11.5px]">/api/v1/ingest</code>.
             </p>
           </div>
           <a href="/dashboard/setup" className="btn-primary text-[13px]">
