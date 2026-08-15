@@ -67,7 +67,7 @@ export function ModelBreakdown({ data, totalCost }: Props) {
   const pieData = rows.map((r, i) => ({
     name:  shortName(r.name),
     value: r.cost,
-    pct:   r.pct || +(r.cost / total * 100).toFixed(1),
+    pct:   r.pct,
     color: COLORS[i % COLORS.length],
   }))
 
@@ -131,7 +131,7 @@ export function ModelBreakdown({ data, totalCost }: Props) {
             <div className="text-right flex-shrink-0">
               <p className="text-[12px] font-semibold text-[var(--fg)] tabular-nums">{formatCost(row.cost)}</p>
               <p className="text-[10.5px] text-[var(--fg-tertiary)] tabular-nums">
-                {fmtTokens(row.tokens)} · {row.pct || +(row.cost / total * 100).toFixed(1)}%
+                {fmtTokens(row.tokens)} · {row.pct}%
               </p>
             </div>
           </div>

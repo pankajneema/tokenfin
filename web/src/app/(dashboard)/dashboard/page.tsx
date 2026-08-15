@@ -107,10 +107,16 @@ export default async function DashboardPage() {
 
   /* ── Current period aggregations ── */
   // Notional = subscription usage priced at API rates (e.g. Claude Code on
-  // Pro/Max). It is NOT a bill and must never sum into the metered spend total.
-  const isNotional = (r: { cost_basis?: string | null }) => r.cost_basis === 'notional'
-  const totalCost    = (events30 ?? []).filter(r => !isNotional(r)).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  // Pro/Max) — not a real bill. Product decision: the headline "Total Cost"
+  // and breakdowns show the COMBINED figure (metered+notional) as one
+  // coherent number, matching Analytics/Cost Reports/By Project/By Model/My
+  // Usage — metered and notional are still broken out separately wherever a
+  // completeness check needs to compare like-for-like against usage_agg
+  // (which only ever holds metered rows).
+  const isNotional   = (r: { cost_basis?: string | null }) => r.cost_basis === 'notional'
+  const meteredCost  = (events30 ?? []).filter(r => !isNotional(r)).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
   const notionalCost = (events30 ?? []).filter(isNotional).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const totalCost    = meteredCost + notionalCost
   const totalTokens  = (events30 ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
   const totalReqs    = events30?.length ?? 0
   const memberCount  = members?.length  ?? 0
@@ -124,9 +130,11 @@ export default async function DashboardPage() {
   }, 0)
 
   /* ── Prev period ── */
-  const prevCost   = (eventsPrev ?? []).filter(r => !isNotional(r)).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const prevTokens = (eventsPrev ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
-  const prevReqs   = eventsPrev?.length ?? 0
+  const prevMetered  = (eventsPrev ?? []).filter(r => !isNotional(r)).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const prevNotional = (eventsPrev ?? []).filter(isNotional).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const prevCost     = prevMetered + prevNotional
+  const prevTokens   = (eventsPrev ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
+  const prevReqs     = eventsPrev?.length ?? 0
 
   const trends = {
     cost:   trendPct(totalCost,   prevCost),
@@ -134,12 +142,12 @@ export default async function DashboardPage() {
     reqs:   trendPct(totalReqs,   prevReqs),
   }
 
-  /* ── Model breakdown ── */
+  /* ── Model breakdown (combined, matches the headline Total Cost) ── */
   const modelMap: Record<string, { cost: number; tokens: number; reqs: number }> = {}
   for (const e of events30 ?? []) {
     const m = e.model ?? 'unknown'
     if (!modelMap[m]) modelMap[m] = { cost: 0, tokens: 0, reqs: 0 }
-    modelMap[m].cost   += isNotional(e) ? 0 : Number(e.cost_usd ?? 0)
+    modelMap[m].cost   += Number(e.cost_usd ?? 0)
     modelMap[m].tokens += Number(e.total_tokens ?? 0)
     modelMap[m].reqs++
   }
@@ -163,7 +171,7 @@ export default async function DashboardPage() {
     const day = toISTDate(e.created_at)
     if (!dayMap.has(day)) continue
     const entry = dayMap.get(day)!
-    entry.cost   += isNotional(e) ? 0 : Number(e.cost_usd ?? 0)
+    entry.cost   += Number(e.cost_usd ?? 0)
     entry.tokens += Number(e.total_tokens ?? 0)
     entry.reqs++
   }
@@ -179,12 +187,17 @@ export default async function DashboardPage() {
   /* ── Project breakdown: prefer projAgg, fall back to events ──
    * A single nonzero row used to be enough to trust projAgg wholesale, which
    * silently under-counted whenever the aggregation worker only partially
-   * caught up on the 5-day window. Compare against the raw 5-day total
-   * (already bucketed into dayMap above) instead — only trust projAgg when
-   * it accounts for at least 95% of what the raw events show. */
-  const evts5dCostTotal = Array.from(dayMap.values()).reduce((s, v) => s + v.cost, 0)
+   * caught up on the 5-day window. Compare against the raw 5-day METERED
+   * total instead — usage_agg only ever holds metered rows (persist.ts
+   * deliberately excludes notional), so comparing it against a combined
+   * total would make it look permanently incomplete for subscription usage.
+   * Only trust projAgg when it accounts for at least 95% of the metered
+   * events in the same window. */
+  const notionalEvts5d = (events30 ?? []).filter(e => isNotional(e) && dayMap.has(toISTDate(e.created_at)))
+  const evts5dMeteredTotal = Array.from(dayMap.values()).reduce((s, v) => s + v.cost, 0)
+    - notionalEvts5d.reduce((s, e) => s + Number(e.cost_usd ?? 0), 0)
   const projAggCostTotal = (projAgg ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const projAggHasCost = projAggCostTotal > 0 && projAggCostTotal >= evts5dCostTotal * 0.95
+  const projAggHasCost = projAggCostTotal > 0 && projAggCostTotal >= evts5dMeteredTotal * 0.95
   const projMap: Record<string, { cost: number; calls: number }> = {}
 
   if (projAggHasCost) {
@@ -194,12 +207,17 @@ export default async function DashboardPage() {
       projMap[pid].cost  += Number(r.cost_usd      ?? 0)
       projMap[pid].calls += Number(r.request_count ?? 0)
     }
+    // usage_agg never contains notional rows — top it up from raw events so
+    // Top Projects still matches the combined headline Total Cost.
+    for (const e of notionalEvts5d) {
+      const pid = e.project_id ?? '__none__'
+      if (!projMap[pid]) projMap[pid] = { cost: 0, calls: 0 }
+      projMap[pid].cost  += Number(e.cost_usd ?? 0)
+      projMap[pid].calls += 1
+    }
   } else {
-    // Match the headline cards above (Total Cost is metered-only, notional
-    // shown as its own separate line) — Top Projects should reconcile with
-    // that same card, not silently include notional spend it never shows.
+    // Combined (metered + notional), matching the headline Total Cost card.
     for (const e of events30 ?? []) {
-      if (isNotional(e)) continue
       const pid = e.project_id ?? '__none__'
       if (!projMap[pid]) projMap[pid] = { cost: 0, calls: 0 }
       projMap[pid].cost  += Number(e.cost_usd ?? 0)
@@ -301,6 +319,7 @@ export default async function DashboardPage() {
         <StatsCards
           totalCost={totalCost}
           notionalCost={notionalCost}
+          meteredCost={meteredCost}
           totalTokens={totalTokens}
           inputTokens={inputTokens}
           outputTokens={outputTokens}
