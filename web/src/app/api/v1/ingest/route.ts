@@ -21,6 +21,7 @@ import type { NextRequest }                   from 'next/server'
 import { createAdminClient }                  from '@/lib/supabase/server'
 import { rateLimit, rateLimitResponse }       from '@/lib/ratelimit'
 import crypto                                 from 'crypto'
+import { fetchAllRows }                      from '@/lib/supabase/paginate'
 
 /* ── Pricing (per 1M tokens) ── */
 const PRICE: Record<string, { in: number; out: number }> = {
@@ -58,7 +59,7 @@ async function checkLimitsAndNotify(
   // Fetch active monthly org-scoped limits
   const { data: limits } = await admin
     .from('limits')
-    .select('budget_usd, warn_at, block_at')
+    .select('budget_usd, warn_at, throttle_at, block_at')
     .eq('org_id', orgId)
     .eq('scope', 'org')
     .eq('period', 'monthly')
@@ -66,16 +67,18 @@ async function checkLimitsAndNotify(
 
   if (!limits?.length) return
 
-  // Current-month spend from usage_agg
+  // Read raw events so alerts include old history and never hit Supabase's
+  // default 1,000-row response cap. This also covers subscription/notional
+  // usage, which is still important for account usage alerts.
   const monthStart = new Date()
   monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
-  const { data: aggRows } = await admin
-    .from('usage_agg')
+  const spendRows = await fetchAllRows((from, to) => admin.from('usage_events')
     .select('cost_usd')
     .eq('org_id', orgId)
-    .gte('bucket', monthStart.toISOString().slice(0, 10))
+    .gte('created_at', monthStart.toISOString())
+    .range(from, to))
 
-  const totalSpend = (aggRows ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const totalSpend = spendRows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
   const today = new Date().toISOString().slice(0, 10)
 
   for (const limit of limits) {
@@ -84,6 +87,7 @@ async function checkLimitsAndNotify(
 
     const pct     = (totalSpend / budget) * 100
     const warnAt  = Number(limit.warn_at  ?? 70)
+    const throttleAt = Number(limit.throttle_at ?? 90)
     const blockAt = Number(limit.block_at ?? 100)
 
     let notifType: string | null = null
@@ -92,8 +96,12 @@ async function checkLimitsAndNotify(
 
     if (pct >= blockAt) {
       notifType = 'alert'
-      title     = 'Usage limit reached — requests may be blocked'
-      body      = `Monthly spend $${totalSpend.toFixed(2)} has hit ${pct.toFixed(0)}% of your $${budget.toFixed(2)} budget.`
+      title     = 'Usage limit reached — review required'
+      body      = `Usage is at ${pct.toFixed(0)}% ($${totalSpend.toFixed(2)} of $${budget.toFixed(2)}). New requests may be blocked.`
+    } else if (pct >= throttleAt) {
+      notifType = 'warning'
+      title     = `High usage alert — ${pct.toFixed(0)}% of budget used`
+      body      = `You have crossed the ${throttleAt}% warning level. Usage is $${totalSpend.toFixed(2)} of $${budget.toFixed(2)}; review account and tool usage now.`
     } else if (pct >= warnAt) {
       notifType = 'warning'
       title     = `Usage warning — ${pct.toFixed(0)}% of monthly budget used`
@@ -146,13 +154,13 @@ async function evaluateSpendLimit(
 
   const monthStart = new Date()
   monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
-  const { data: aggRows } = await admin
-    .from('usage_agg')
+  const spendRows = await fetchAllRows((from, to) => admin.from('usage_events')
     .select('cost_usd')
     .eq('org_id', orgId)
-    .gte('bucket', monthStart.toISOString().slice(0, 10))
+    .gte('created_at', monthStart.toISOString())
+    .range(from, to))
 
-  const totalSpend = (aggRows ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  const totalSpend = spendRows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
 
   let action: 'allow' | 'throttle' | 'block' = 'allow'
   let worstPct = 0
@@ -178,7 +186,7 @@ async function evaluateSpendLimit(
 }
 
 /* ── Direct Supabase ingest (fallback) ── */
-async function directIngest(apiKey: string, body: Record<string, unknown>) {
+async function directIngest(apiKey: string, body: Record<string, unknown>, idempotencyKey: string | null = null) {
   const admin = createAdminClient()
 
   // 1. Look up API key
@@ -216,20 +224,43 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
 
   // 3. Validate body
   const model       = String(body.model ?? '')
-  const inputTok    = Number(body.input_tokens  ?? 0)
-  const outputTok   = Number(body.output_tokens ?? 0)
+  const inputTok    = Math.max(0, Number(body.input_tokens  ?? 0) || 0)
+  const outputTok   = Math.max(0, Number(body.output_tokens ?? 0) || 0)
   // Accept total_tokens as fallback when input/output aren't split (e.g. direct SDK usage)
-  const totalTokFallback = Number(body.total_tokens ?? 0)
+  const totalTokFallback = Math.max(0, Number(body.total_tokens ?? 0) || 0)
   const totalTok    = inputTok + outputTok > 0
     ? inputTok + outputTok
     : totalTokFallback
   // Derive split from total when only total was provided (70/30 estimate)
   const effectiveInput  = inputTok  > 0 ? inputTok  : Math.round(totalTok * 0.7)
   const effectiveOutput = outputTok > 0 ? outputTok : totalTok - Math.round(totalTok * 0.7)
-  const costUsd     = typeof body.cost_usd === 'number' ? body.cost_usd : computeCost(model, effectiveInput, effectiveOutput)
+  const suppliedCost = typeof body.cost_usd === 'number' ? body.cost_usd : null
+  const costUsd     = suppliedCost !== null && Number.isFinite(suppliedCost) && suppliedCost >= 0
+    ? suppliedCost
+    : computeCost(model, effectiveInput, effectiveOutput)
   const projectId   = String(body.project_id ?? keyRow.project_id ?? '')
-  const tags        = (body.tags    as Record<string,string>)   ?? {}
-  const metadata    = (body.metadata as Record<string,unknown>) ?? {}
+  const incomingTags = (body.tags as Record<string,string>) ?? {}
+  const incomingMetadata = (body.metadata as Record<string,unknown>) ?? {}
+  const source      = String(body.source ?? incomingMetadata.source ?? 'direct')
+  const toolName    = String(body.tool ?? body.tool_name ?? incomingMetadata.tool ?? source)
+  const provider    = String(body.provider ?? incomingMetadata.provider ?? '') || null
+  const actorId     = String(body.actor_id ?? body.account_id ?? incomingMetadata.actor_id ?? '') || null
+  const actorName   = String(body.actor_name ?? body.username ?? body.user_name ?? incomingMetadata.actor_name ?? '') || null
+  const userEmail   = String(body.user_email ?? body.email ?? incomingMetadata.user_email ?? '') || null
+  const sessionId   = String(body.session_id ?? incomingMetadata.session_id ?? '') || null
+  const promptText  = typeof body.prompt_text === 'string' ? body.prompt_text : null
+  const promptHash  = String(body.prompt_hash ?? incomingMetadata.prompt_hash ?? (promptText ? hashKey(promptText) : '')) || null
+  const promptPreview = String(body.prompt_preview ?? incomingMetadata.prompt_preview ?? (promptText ? promptText.slice(0, 120) : '')) || null
+  const promptChars = Number(body.prompt_chars ?? incomingMetadata.prompt_chars ?? 0) || null
+  const { prompt_text: _promptText, response_text: _responseText, ...safeMetadata } = incomingMetadata
+  const metadata    = {
+    ...safeMetadata,
+    source, tool: toolName, provider, actor_id: actorId, actor_name: actorName,
+    user_email: userEmail, session_id: sessionId, prompt_hash: promptHash,
+    prompt_preview: promptPreview, prompt_chars: promptChars,
+    input_tokens: effectiveInput, output_tokens: effectiveOutput,
+  }
+  const tags = { ...incomingTags, source, tool: toolName, ...(provider ? { provider } : {}) }
 
   if (!model)         return NextResponse.json({ error: 'model is required' }, { status: 400 })
   if (totalTok <= 0)  return NextResponse.json({ error: 'input_tokens + output_tokens must be > 0' }, { status: 400 })
@@ -274,8 +305,13 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
     )
   }
 
-  // 4. Insert usage event
-  const { error: evtErr } = await admin.from('usage_events').insert({
+  // Verify an explicitly supplied project belongs to this org. Without this
+  // check, a valid key could write into another project's analytics bucket.
+  const { data: project } = await admin.from('projects').select('id').eq('id', resolvedProjectId).eq('org_id', orgId).maybeSingle()
+  if (!project) return NextResponse.json({ error: 'project_id does not belong to this organization' }, { status: 422 })
+
+  const eventId = idempotencyKey ? `direct:${orgId}:${idempotencyKey}` : null
+  const eventRecord = {
     org_id:        orgId,
     project_id:    resolvedProjectId,
     api_key_id:    keyRow.id,   // attribute usage to the key that sent it
@@ -285,12 +321,50 @@ async function directIngest(apiKey: string, body: Record<string, unknown>) {
     output_tokens: effectiveOutput,
     total_tokens:  totalTok,
     cost_usd:      costUsd,
+    event_id:      eventId,
+    request_idempotency_key: idempotencyKey,
+    source,
+    tool_name:     toolName,
+    provider,
+    actor_id:      actorId,
+    actor_name:    actorName,
+    user_email:    userEmail,
+    session_id:    sessionId,
+    prompt_hash:   promptHash,
+    prompt_preview: promptPreview,
+    prompt_chars:  promptChars,
     tags,
     metadata,
-  })
+  }
+  const { data: insertedEvent, error: evtErr } = await admin.from('usage_events')
+    .upsert(eventRecord, { onConflict: idempotencyKey ? 'org_id,request_idempotency_key' : 'event_id', ignoreDuplicates: true })
+    .select('id')
   if (evtErr) {
     console.error('[ingest direct] usage_events insert error:', evtErr)
     return NextResponse.json({ error: 'Failed to record event' }, { status: 500 })
+  }
+
+  // A replay with the same idempotency key is acknowledged but must not
+  // increment usage_agg a second time.
+  if (!insertedEvent?.length) {
+    return NextResponse.json({ ok: true, duplicate: true, model, total_tokens: totalTok })
+  }
+
+  // Full prompt/response text is opt-in and isolated from usage_events. The
+  // default path stores only a fingerprint and short preview for analytics.
+  if (process.env.CAPTURE_PROMPTS !== '0' && promptText) {
+    await admin.from('prompt_captures').insert({
+      org_id: orgId,
+      project_id: resolvedProjectId,
+      user_id: keyRow.user_id ?? null,
+      model,
+      prompt_hash: promptHash,
+      prompt_text: promptText,
+      response_text: typeof body.response_text === 'string' ? body.response_text : null,
+      input_tokens: effectiveInput,
+      output_tokens: effectiveOutput,
+      cost_usd: costUsd,
+    })
   }
 
   // 5. Upsert usage_agg
@@ -379,7 +453,11 @@ export async function POST(req: NextRequest) {
 
       const upstream = await fetch(GO_INGEST_URL, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+          ...(req.headers.get('Idempotency-Key') ? { 'Idempotency-Key': req.headers.get('Idempotency-Key')! } : {}),
+        },
         body:    JSON.stringify(body),
         signal:  controller.signal,
       })
@@ -398,7 +476,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return directIngest(rawKey, body)
+  const idempotencyKey = req.headers.get('Idempotency-Key') ?? (typeof body.idempotency_key === 'string' ? body.idempotency_key : null)
+  return directIngest(rawKey, body, idempotencyKey)
 }
 
 export async function GET() {

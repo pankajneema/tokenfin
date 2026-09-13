@@ -1,8 +1,9 @@
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
-import { toISTDate, daysAgoIST, tsNDaysAgo } from '@/lib/dates'
+import { toISTDate } from '@/lib/dates'
 import { AnalyticsClient }    from './_client'
 import type { AnalyticsData, DayData, ModelSlice, ProjectSlice, PlatformSlice, SourceSlice } from './_types'
+import { fetchAllRows } from '@/lib/supabase/paginate'
 
 /* ── Platform detection from usage_events.tags ─────────────────
  * Tags set by proxy: { source: 'proxy', tool: 'codex' }
@@ -54,7 +55,7 @@ function fmtDay(iso: string) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export default async function AnalyticsPage() {
+export default async function AnalyticsPage({ searchParams }: { searchParams?: { days?: string; from?: string; to?: string } }) {
   const supabase = createClient()
   const admin    = createAdminClient()
 
@@ -65,10 +66,17 @@ export default async function AnalyticsPage() {
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const since30     = tsNDaysAgo(30)    // UTC ts for usage_events.created_at
-  const since60     = tsNDaysAgo(60)
-  const since30date = daysAgoIST(30)   // IST date for usage_agg.bucket
-  const since60date = daysAgoIST(60)
+  const requestedDays = Math.min(Math.max(Number(searchParams?.days ?? 30) || 30, 1), 3650)
+  const customFrom = searchParams?.from && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.from) ? searchParams.from : null
+  const customTo = searchParams?.to && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.to) ? searchParams.to : null
+  const end = customTo ? new Date(`${customTo}T23:59:59.999Z`) : new Date()
+  const start = customFrom ? new Date(`${customFrom}T00:00:00.000Z`) : new Date(end.getTime() - requestedDays * 86400_000)
+  const periodDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400_000))
+  const since30 = start.toISOString()
+  const since60 = new Date(start.getTime() - periodDays * 86400_000).toISOString()
+  const endIso = end.toISOString()
+  const since30date = toISTDate(start.toISOString())
+  const since60date = toISTDate(new Date(start.getTime() - periodDays * 86400_000).toISOString())
 
   /**
    * Strategy: split the two concerns cleanly.
@@ -85,24 +93,24 @@ export default async function AnalyticsPage() {
   const [
     { data: agg     },   // current 30d from usage_agg
     { data: aggPrev },   // prior 30d from usage_agg
-    { data: evts    },   // current 30d from usage_events (source of truth for counts)
-    { data: evtsPrev},   // prior 30d from usage_events
+    evts,                  // current 30d from usage_events (source of truth for counts)
+    evtsPrev,              // prior 30d from usage_events
     { data: projects},
     { data: apiKeys },
     { data: orgLimit },
   ] = await Promise.all([
     admin.from('usage_agg')
       .select('bucket,model,project_id,total_tokens,cost_usd')
-      .eq('org_id', orgId).gte('bucket', since30date),
+      .eq('org_id', orgId).gte('bucket', since30date).lte('bucket', toISTDate(end.toISOString())),
     admin.from('usage_agg')
       .select('bucket,model,project_id,total_tokens,cost_usd')
       .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
-    admin.from('usage_events')
+    fetchAllRows((from, to) => admin.from('usage_events')
       .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis')
-      .eq('org_id', orgId).gte('created_at', since30),
-    admin.from('usage_events')
+      .eq('org_id', orgId).gte('created_at', since30).lt('created_at', endIso).range(from, to)),
+    fetchAllRows((from, to) => admin.from('usage_events')
       .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis')
-      .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30),
+      .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30).range(from, to)),
     admin.from('projects').select('id,name').eq('org_id', orgId),
     admin.from('api_keys').select('id,name,project_id').eq('org_id', orgId).eq('is_active', true),
     // Org-level cost limit (scope='org', metric='cost', no project_id)
@@ -161,14 +169,14 @@ export default async function AnalyticsPage() {
       costMap.set(key, e)
     }
     for (const r of aggPrev ?? []) {
-      const shifted = toISTDate(new Date(r.bucket).getTime() + 30 * 86400_000)
+      const shifted = toISTDate(new Date(r.bucket).getTime() + periodDays * 86400_000)
       const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
       costMapPrev.set(shifted, e)
     }
     for (const r of notionalEvtsPrev) {
-      const shifted = toISTDate(new Date(r.created_at).getTime() + 30 * 86400_000)
+      const shifted = toISTDate(new Date(r.created_at).getTime() + periodDays * 86400_000)
       const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
@@ -184,7 +192,7 @@ export default async function AnalyticsPage() {
       costMap.set(key, e)
     }
     for (const r of evtsPrev ?? []) {
-      const shifted = toISTDate(new Date(r.created_at).getTime() + 30 * 86400_000)
+      const shifted = toISTDate(new Date(r.created_at).getTime() + periodDays * 86400_000)
       const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
       e.cost   += Number(r.cost_usd     ?? 0)
       e.tokens += Number(r.total_tokens ?? 0)
@@ -200,7 +208,7 @@ export default async function AnalyticsPage() {
     callMap.set(key, (callMap.get(key) ?? 0) + 1)
   }
   for (const r of evtsPrev ?? []) {
-    const shifted = toISTDate(new Date(r.created_at).getTime() + 30 * 86400_000)
+    const shifted = toISTDate(new Date(r.created_at).getTime() + periodDays * 86400_000)
     callMapPrev.set(shifted, (callMapPrev.get(shifted) ?? 0) + 1)
   }
 
@@ -351,6 +359,7 @@ export default async function AnalyticsPage() {
   const tokensUsed = Array.from(costMap.values()).reduce((s, v) => s + v.tokens, 0)
 
   const analyticsData: AnalyticsData = {
+    rangeDays: periodDays,
     daily, byModel, byProject, byPlatform, bySource,
     totalCost, totalPrev, orgBudget, tokensUsed,
     inputTokens:  totalInputTokens,

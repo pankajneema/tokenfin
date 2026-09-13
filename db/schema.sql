@@ -172,6 +172,36 @@ CREATE TABLE notifications (
 
 CREATE INDEX notifications_user_read ON notifications(user_id, is_read, created_at DESC);
 
+-- Durable event dimensions. Keep external agent identity separate from the
+-- TokenFin member user_id so account/tool switches remain distinguishable.
+ALTER TABLE usage_events
+  ADD COLUMN IF NOT EXISTS actor_id       TEXT,
+  ADD COLUMN IF NOT EXISTS actor_name     TEXT,
+  ADD COLUMN IF NOT EXISTS tool_name      TEXT,
+  ADD COLUMN IF NOT EXISTS provider       TEXT,
+  ADD COLUMN IF NOT EXISTS prompt_hash    TEXT,
+  ADD COLUMN IF NOT EXISTS prompt_preview TEXT,
+  ADD COLUMN IF NOT EXISTS prompt_chars   INT,
+  ADD COLUMN IF NOT EXISTS request_idempotency_key TEXT;
+
+CREATE INDEX IF NOT EXISTS usage_events_org_actor_created
+  ON usage_events(org_id, actor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS usage_events_org_tool_created
+  ON usage_events(org_id, tool_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS usage_events_org_provider_created
+  ON usage_events(org_id, provider, created_at DESC);
+CREATE INDEX IF NOT EXISTS usage_events_org_prompt_hash
+  ON usage_events(org_id, prompt_hash)
+  WHERE prompt_hash IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS usage_events_org_idempotency_uq
+  ON usage_events(org_id, request_idempotency_key)
+  WHERE request_idempotency_key IS NOT NULL;
+
+-- Full prompt captures are opt-in and retained long enough for historical
+-- analysis; usage_events itself has no expiry policy.
+ALTER TABLE prompt_captures
+  ALTER COLUMN expires_at SET DEFAULT NOW() + INTERVAL '3650 days';
+
 -- ── org_integrations ─────────────────────────────────────────
 CREATE TABLE org_integrations (
   id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

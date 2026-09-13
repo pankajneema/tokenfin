@@ -90,7 +90,7 @@ function pushConfig(otelEndpoint: string, key: string): Record<string, { file: s
     codex_cli: {
       file: '~/.codex/config.toml  (user-level only)', captures: 'Per-turn tokens from the codex.turn.token_usage metric.',
       note: 'metrics_exporter must be otlp-http — Codex defaults it to statsig, which sends metrics to OpenAI, not us.',
-      config: ['[otel]', 'exporter = "none"', 'metrics_exporter = "otlp-http"', 'log_user_prompt = false', '',
+      config: ['[otel]', 'exporter = "none"', 'metrics_exporter = "otlp-http"', 'log_user_prompt = true', '',
         '[otel.metrics_exporter.otlp-http]', `endpoint = "${otelEndpoint}/v1/metrics"`, 'protocol = "json"', '',
         '[otel.metrics_exporter.otlp-http.headers]', `Authorization = "Bearer ${key}"`].join('\n'),
     },

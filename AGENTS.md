@@ -70,7 +70,7 @@ prevMap.set(shifted, prev + cost)
 | `members` | `id, org_id, user_id, role` | teams page, analytics/projects |
 | `teams` | `id, org_id, name` | limits page (scope), teams page |
 | `api_keys` | `id, org_id, project_id, name, key_prefix, key_hash, env, scopes, is_active, expires_at, last_used_at, created_by` | keys settings, mcp page |
-| `usage_events` | `id, org_id, project_id, user_id, model, total_tokens, cost_usd, created_at, tags, metadata` | dashboard recent events, sparklines |
+| `usage_events` | `id, org_id, project_id, user_id, model, total_tokens, cost_usd, created_at, tags, metadata, actor_id, actor_name, tool_name, provider, prompt_hash` | dashboard recent events, sparklines, attribution filters |
 | `usage_agg` | `org_id, project_id, model, bucket (date), total_tokens, cost_usd, request_count` | ALL analytics pages, dashboard KPIs |
 | `limits` | `id, org_id, project_id, team_id, scope, metric, period, value, warn_at, throttle_at, block_at, budget_usd, is_active` | limits page, analytics/projects budget |
 | `alert_rules` | `id, org_id, name, trigger_type, condition, scope, channels, is_active, fired_count, last_fired_at, cooldown_hours` | alerts page |
@@ -81,7 +81,13 @@ prevMap.set(shifted, prev + cost)
 ### `usage_agg` is the central analytics table
 - Pre-aggregated daily by `(org_id, project_id, model, bucket)`
 - Written by the ingest pipeline when usage events arrive
-- Query with `.gte('bucket', since30)` for 30-day windows
+- Query with `.gte('bucket', since30)` for 30-day windows. Raw event analytics must use paginated reads; Supabase's 1,000-row response cap is transport-only, never a data limit.
+
+### Attribution and retention
+- `user_id` is the TokenFin member assigned to an API key; `actor_id`/`actor_name`/`user_email` identify the external Claude/Codex/Gemini account seen in the event. They must not be conflated.
+- `source`, `tool_name`, and `provider` are stored per event so switching accounts or tools creates separate analytics dimensions.
+- Usage events are retained; there is no usage-event purge job. Full prompt text is opt-in (`CAPTURE_PROMPTS=1`) and belongs in `prompt_captures`, which has its own expiry policy. Normal usage events store only a fingerprint/preview.
+- Analytics API supports `project_id`, `model`, `actor_id`, `user_email`, `source`, `tool`, and `provider` filters and returns data-quality counters.
 
 ---
 

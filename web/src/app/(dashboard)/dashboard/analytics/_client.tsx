@@ -13,7 +13,7 @@ import type { AnalyticsData, DayData } from './_types'
 /* ═══════════════════════════════════════════════════════════
    TYPES
 ═══════════════════════════════════════════════════════════ */
-type Range  = '7D' | '30D'
+type Range  = '7D' | '30D' | '1Y' | 'ALL'
 type Metric = 'cost' | 'tokens' | 'calls'
 
 /* ═══════════════════════════════════════════════════════════
@@ -230,17 +230,30 @@ interface Props { initialData: AnalyticsData }
 export function AnalyticsClient({ initialData }: Props) {
   const router                      = useRouter()
   const [isPending, startTransition] = useTransition()
-  const [range,   setRange]   = useState<Range>('30D')
+  const [range,   setRange]   = useState<Range>(initialData.rangeDays <= 7 ? '7D' : initialData.rangeDays <= 30 ? '30D' : initialData.rangeDays <= 365 ? '1Y' : 'ALL')
   const [metric,  setMetric]  = useState<Metric>('cost')
   const [compare, setCompare] = useState(true)
   const [hovIdx,  setHovIdx]  = useState<number | null>(null)
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
+
+  function chooseRange(next: Range) {
+    setRange(next)
+    const days = next === '7D' ? 7 : next === '30D' ? 30 : next === '1Y' ? 365 : 3650
+    router.push(`/dashboard/analytics?days=${days}`)
+  }
+
+  function applyCustomRange() {
+    if (!customFrom || !customTo) return
+    router.push(`/dashboard/analytics?from=${encodeURIComponent(customFrom)}&to=${encodeURIComponent(customTo)}`)
+  }
 
   function refresh() {
     startTransition(() => { router.refresh() })
   }
 
   const data = useMemo(() =>
-    range === '7D' ? initialData.daily.slice(-7) : initialData.daily,
+    range === '7D' ? initialData.daily.slice(-7) : range === '30D' ? initialData.daily.slice(-30) : initialData.daily,
     [range, initialData.daily])
 
   const totCost      = useMemo(() => data.reduce((s, d) => s + d.cost,  0), [data])
@@ -288,13 +301,19 @@ export function AnalyticsClient({ initialData }: Props) {
             <TrendingUp size={12} /> Compare prev period
           </button>
           <div className="flex gap-0.5 p-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl">
-            {(['7D','30D'] as Range[]).map(r => (
-              <button key={r} onClick={() => setRange(r)}
+            {(['7D','30D','1Y','ALL'] as Range[]).map(r => (
+              <button key={r} onClick={() => chooseRange(r)}
                 className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all',
                   range === r ? 'bg-[var(--fg)] text-[var(--bg)]' : 'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-                {r}
+                {r === '1Y' ? '1 year' : r === 'ALL' ? 'All' : r}
               </button>
             ))}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <input aria-label="From date" type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} className="text-[11px] px-2 py-1.5 rounded-lg border border-[var(--border)] bg-transparent text-[var(--fg)]" />
+            <span className="text-[11px] text-[var(--fg-tertiary)]">to</span>
+            <input aria-label="To date" type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} className="text-[11px] px-2 py-1.5 rounded-lg border border-[var(--border)] bg-transparent text-[var(--fg)]" />
+            <button onClick={applyCustomRange} className="btn-secondary text-[11px] py-1.5">Custom</button>
           </div>
           <button
             onClick={refresh}

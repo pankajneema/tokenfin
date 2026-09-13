@@ -14,6 +14,7 @@ import { NextResponse }               from 'next/server'
 import type { NextRequest }           from 'next/server'
 import { createAdminClient }          from '@/lib/supabase/server'
 import { requireOrgMemberWithRole, dbError } from '@/lib/api/auth'
+import { fetchAllPages } from '@/lib/supabase/paginate'
 
 export interface PromptPattern {
   hash:               string
@@ -39,7 +40,7 @@ export interface PromptPattern {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const orgId = searchParams.get('org_id')
-  const days  = Math.min(90, Math.max(1, parseInt(searchParams.get('days') ?? '30')))
+  const days  = Math.min(3650, Math.max(1, parseInt(searchParams.get('days') ?? '30')))
 
   const guard = await requireOrgMemberWithRole(orgId)
   if (guard instanceof NextResponse) return guard
@@ -47,14 +48,14 @@ export async function GET(req: NextRequest) {
   const admin = createAdminClient()
   const since = new Date(Date.now() - days * 86_400_000).toISOString()
 
-  const { data: rows, error } = await admin
+  const baseQuery = admin
     .from('usage_events')
-    .select('model, cost_usd, metadata, created_at')
+    .select('model, cost_usd, input_tokens, output_tokens, total_tokens, metadata, created_at')
     .eq('org_id', orgId!)
     .gte('created_at', since)
     .not('metadata', 'is', null)
     .order('created_at', { ascending: false })
-    .limit(5_000) // cap to prevent huge in-process aggregation
+  const { data: rows, error } = await fetchAllPages<any>((from, to) => baseQuery.range(from, to))
 
   if (error) return dbError(error, 'GET analytics/prompts')
 
@@ -94,8 +95,8 @@ export async function GET(req: NextRequest) {
 
     existing.count++
     existing.totalCost   += Number(row.cost_usd ?? 0)
-    existing.totalInput  += Number(meta?.input_tokens  ?? 0)
-    existing.totalOutput += Number(meta?.output_tokens ?? 0)
+    existing.totalInput  += Number(meta?.input_tokens  ?? (row as any).input_tokens ?? 0)
+    existing.totalOutput += Number(meta?.output_tokens ?? (row as any).output_tokens ?? 0)
 
     // Keep the first non-null preview we encounter for this hash
     if (!existing.promptPreview && meta?.prompt_preview) {

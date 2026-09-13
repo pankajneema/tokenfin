@@ -13,7 +13,10 @@
 import { Ratelimit }  from '@upstash/ratelimit'
 import { Redis }      from '@upstash/redis'
 
-/* ── Per-plan limits (requests per minute) ─────────────────────────────────── */
+/* ── Optional infrastructure burst guard (requests per minute) ──────────────
+ * Product plans do not use these values. The guard is opt-in via
+ * TOKENFIN_ENFORCE_RATE_LIMITS=1 for deployments that need abuse protection.
+ */
 export const PLAN_LIMITS: Record<string, number> = {
   free:       60,
   pro:        300,
@@ -64,6 +67,11 @@ export async function rateLimit(
   apiKeyId: string,
   plan = 'free',
 ): Promise<RateLimitResult> {
+  // Plans are unlimited during early access. Operators can opt into the
+  // infrastructure burst guard without changing product entitlements.
+  if (process.env.TOKENFIN_ENFORCE_RATE_LIMITS !== '1') {
+    return { allowed: true, limit: Number.MAX_SAFE_INTEGER, remaining: Number.MAX_SAFE_INTEGER, resetAt: 0, retryAfter: 0 }
+  }
   const limiter = getLimiter(plan)
   const maxReqs = PLAN_LIMITS[plan] ?? PLAN_LIMITS.free
 
@@ -98,7 +106,7 @@ export function rateLimitResponse(result: RateLimitResult): NextResponse {
   return NextResponse.json(
     {
       error:      'Rate limit exceeded.',
-      message:    `Too many requests. You can send up to ${result.limit} events per minute on your current plan.`,
+      message:    `Too many requests in a short burst. Please retry after ${result.retryAfter} seconds.`,
       retry_after: result.retryAfter,
       reset_at:   new Date(result.resetAt).toISOString(),
     },

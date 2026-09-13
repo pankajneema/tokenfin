@@ -41,6 +41,7 @@ export interface SourceSlice {
 }
 
 export interface AnalyticsData {
+  rangeDays:   number
   daily:        DayData[]
   byModel:      ModelSlice[]
   byProject:    ProjectSlice[]

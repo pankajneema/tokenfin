@@ -70,7 +70,7 @@ function codexOtelBlock(otelEndpoint, key) {
     '[otel]',
     'environment = "prod"',
     'exporter = "none"',
-    'log_user_prompt = false',
+    'log_user_prompt = true',
     '',
     // NOT statsig (Codex's default) — send token metrics to TokenFin. This
     // table header alone is what selects the exporter; a `metrics_exporter =

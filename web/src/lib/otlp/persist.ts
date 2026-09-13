@@ -41,7 +41,11 @@ export async function persistRows(admin: SupabaseClient, ctx: KeyCtx, rows: Usag
       cache_read_tokens: r.cache_read_tokens, cache_write_tokens: r.cache_write_tokens,
       reasoning_tokens: r.reasoning_tokens, cost_basis: r.cost_basis,
       user_email: r.user_email, session_id: r.session_id,
-      tags: { source: r.source },
+      actor_id: r.actor_id ?? null, actor_name: r.actor_name ?? null,
+      tool_name: r.tool_name ?? r.source, provider: r.provider ?? null,
+      prompt_hash: r.prompt_hash ?? r.correlation_id,
+      prompt_preview: r.prompt_preview ?? null, prompt_chars: r.prompt_chars ?? null,
+      tags: { source: r.source, tool: r.tool_name ?? r.source, provider: r.provider ?? null },
       // prompt_hash: both analytics/prompts and my-usage read this exact key
       // to group "prompt patterns" — it was previously written as `prompt_id`,
       // a name neither consumer ever looked for, so this data existed but was
@@ -49,7 +53,24 @@ export async function persistRows(admin: SupabaseClient, ctx: KeyCtx, rows: Usag
       // for privacy), so this groups by conversation/session — not true
       // prompt-content similarity — but that's a real, useful "cost per task"
       // view, and is exactly what was silently missing before.
-      metadata: { otlp: true, prompt_hash: r.correlation_id },
+      // Keep normalized dimensions in metadata too, so exports and prompt
+      // analytics remain useful on databases without optional new columns.
+      metadata: {
+        otlp: true,
+        prompt_hash: r.correlation_id,
+        prompt_preview: r.prompt_preview ?? null,
+        prompt_chars: r.prompt_chars ?? null,
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+        session_id: r.session_id,
+        user_email: r.user_email,
+        source: r.source,
+        actor_id: r.actor_id ?? null,
+        actor_name: r.actor_name ?? null,
+        tool_name: r.tool_name ?? r.source,
+        provider: r.provider ?? null,
+        latency_ms: r.latency_ms ?? null,
+      },
     }
 
     let inserted: any[] | null = null
@@ -61,11 +82,37 @@ export async function persistRows(admin: SupabaseClient, ctx: KeyCtx, rows: Usag
       ;({ data, error } = await admin.from('usage_events')
         .upsert(legacy, { onConflict: 'event_id', ignoreDuplicates: true }).select('id'))
     }
+    if (error && /(actor_id|tool_name|prompt_hash|request_idempotency_key)/.test(error.message)) {
+      // Keep receivers deployable during a rolling migration. The SQL
+      // migration remains required for attribution, but old rows should still
+      // ingest rather than disappear while the application is being upgraded.
+      const legacy = { ...record }
+      for (const key of ['actor_id', 'actor_name', 'tool_name', 'provider', 'prompt_hash', 'prompt_preview', 'prompt_chars', 'request_idempotency_key']) {
+        delete legacy[key]
+      }
+      ;({ data, error } = await admin.from('usage_events')
+        .upsert(legacy, { onConflict: 'event_id', ignoreDuplicates: true }).select('id'))
+    }
     if (error) throw new Error(`usage_events upsert failed: ${error.message}`)
     inserted = data
 
     if (!inserted || inserted.length === 0) { res.duplicate++; continue }  // conflict → skip agg
     res.inserted++
+
+    if (process.env.CAPTURE_PROMPTS !== '0' && r.prompt_text) {
+      const { error: promptError } = await admin.from('prompt_captures').insert({
+        org_id: ctx.orgId,
+        project_id: projectId,
+        user_id: ctx.userId,
+        model: r.model,
+        prompt_hash: r.prompt_hash ?? r.correlation_id,
+        prompt_text: r.prompt_text,
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+        cost_usd: r.cost_usd,
+      })
+      if (promptError) console.error('[otlp] prompt capture failed:', promptError.message)
+    }
 
     // Roll only fresh, METERED rows into daily aggregates. usage_agg has no
     // cost_basis column, so notional (subscription) dollars must never enter it

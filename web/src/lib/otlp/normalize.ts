@@ -8,7 +8,7 @@
  * so /v1/metrics is health-only (temporality + unrecognized-name checks).
  */
 import crypto from 'crypto'
-import { attrsToMap, nanoToIso, num } from './attrs'
+import { attrVal, attrsToMap, nanoToIso, num } from './attrs'
 import { detectSource, costBasisFor, isRecognizedMetric, isDeltaTemporality, warnUnrecognizedMetric } from './mapping'
 import { computeCost } from '@/lib/mcp/pricing'
 import type { KeyCtx } from './auth'
@@ -29,6 +29,15 @@ export interface UsageRow {
   cost_basis: string
   user_email: string | null
   session_id: string | null
+  actor_id?: string | null
+  actor_name?: string | null
+  tool_name?: string | null
+  provider?: string | null
+  prompt_hash?: string | null
+  prompt_preview?: string | null
+  prompt_chars?: number | null
+  prompt_text?: string | null
+  latency_ms?: number | null
 }
 
 const sha = (s: string) => crypto.createHash('sha256').update(s).digest('hex')
@@ -42,14 +51,18 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
     for (const sl of rl?.scopeLogs ?? []) {
       for (const rec of sl?.logRecords ?? []) {
         const a = attrsToMap(rec?.attributes ?? [])
+        // Agent/account identity is commonly exported on the OTLP resource,
+        // while token counts live on the individual record. Merge both so
+        // changing Claude/Codex accounts cannot silently lose attribution.
+        const identity = { ...resAttrs, ...a }
         const eventName = String(rec?.eventName ?? a['event.name'] ?? '')
-        const model = String(a['model'] ?? a['gen_ai.request.model'] ?? '')
+        const model = String(a['model'] ?? a['gen_ai.request.model'] ?? identity['model'] ?? '')
 
-        const input  = num(a['input_tokens'] ?? a['gen_ai.usage.input_tokens'])
-        const output = num(a['output_tokens'] ?? a['gen_ai.usage.output_tokens'])
-        const cacheR = num(a['cache_read_tokens'])
-        const cacheW = num(a['cache_creation_tokens'] ?? a['cache_write_tokens'])
-        const reason = num(a['reasoning_tokens'])
+        const input  = Math.max(0, num(a['input_tokens'] ?? a['gen_ai.usage.input_tokens']))
+        const output = Math.max(0, num(a['output_tokens'] ?? a['gen_ai.usage.output_tokens']))
+        const cacheR = Math.max(0, num(a['cache_read_tokens']))
+        const cacheW = Math.max(0, num(a['cache_creation_tokens'] ?? a['cache_write_tokens']))
+        const reason = Math.max(0, num(a['reasoning_tokens']))
 
         // Only turn-bearing events: has a model and some tokens. Skips prompts,
         // tool results, errors, refusals — none of which carry token counts.
@@ -57,8 +70,20 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
         if (/error|refusal/.test(eventName)) continue
 
         const source = detectSource(resAttrs, eventName || model)
-        const providerReqId = (a['request_id'] ?? a['gen_ai.response.id'] ?? null) as string | null
-        const correlationId = (a['prompt.id'] ?? a['conversation.id'] ?? a['session.id'] ?? null) as string | null
+        const userEmail = String(identity['user.email'] ?? identity['user_email'] ?? identity['email'] ?? '') || null
+        const actorId = String(identity['user.id'] ?? identity['user_id'] ?? identity['account.id'] ?? identity['account_id'] ?? '') || null
+        const actorName = String(identity['user.name'] ?? identity['user.username'] ?? identity['username'] ?? '') || null
+        const toolName = String(identity['tool.name'] ?? identity['client.name'] ?? resAttrs['service.name'] ?? '') || null
+        const provider = String(identity['gen_ai.system'] ?? identity['provider'] ?? '') || null
+        const promptHash = String(identity['prompt_hash'] ?? identity['prompt.id'] ?? identity['conversation.id'] ?? identity['session.id'] ?? '') || null
+        const promptPreview = String(identity['prompt_preview'] ?? identity['prompt.preview'] ?? '') || null
+        const bodyValue = attrVal(rec?.body)
+        const promptTextValue = identity['prompt_text'] ?? identity['prompt.text'] ?? identity['user_prompt'] ?? identity['user.prompt']
+        const promptText = String(promptTextValue ?? (typeof bodyValue === 'string' && /prompt|request/i.test(eventName) ? bodyValue : '')) || null
+        const promptChars = num(identity['prompt_chars'] ?? identity['prompt.length']) || null
+        const latencyMs = num(identity['latency_ms'] ?? identity['gen_ai.server.request.duration_ms']) || null
+        const providerReqId = (identity['request_id'] ?? identity['gen_ai.response.id'] ?? null) as string | null
+        const correlationId = (identity['prompt.id'] ?? identity['conversation.id'] ?? identity['session.id'] ?? null) as string | null
         const timeNano = rec?.timeUnixNano ?? rec?.observedTimeUnixNano
         const ts = nanoToIso(timeNano) ?? new Date().toISOString()
 
@@ -87,8 +112,17 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
           reasoning_tokens: reason,
           cost_usd: +cost.toFixed(8),
           cost_basis: costBasisFor(source),
-          user_email: (a['user.email'] ?? null) as string | null,
-          session_id: (a['session.id'] ?? null) as string | null,
+          user_email: userEmail,
+          session_id: (identity['session.id'] ?? identity['session_id'] ?? null) as string | null,
+          actor_id: actorId,
+          actor_name: actorName,
+          tool_name: toolName,
+          provider,
+          prompt_hash: promptHash,
+          prompt_preview: promptPreview,
+          prompt_text: promptText,
+          prompt_chars: promptChars,
+          latency_ms: latencyMs,
         })
         idx++
       }
