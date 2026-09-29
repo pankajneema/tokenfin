@@ -150,7 +150,7 @@ async function safePost(url: URL, body: string): Promise<Response> {
 
 // ─── Senders ──────────────────────────────────────────────────────────────────
 
-export async function sendEmail(to: string[], subject: string, text: string): Promise<{ sent: boolean; reason?: string }> {
+export async function sendEmail(to: string[], subject: string, text: string, html?: string): Promise<{ sent: boolean; reason?: string }> {
   const key = process.env.RESEND_API_KEY
   const from = process.env.ALERT_EMAIL_FROM || 'TokenFin <alerts@tokenfin.curiousdevs.com>'
   const recipients = to.filter(Boolean)
@@ -162,7 +162,7 @@ export async function sendEmail(to: string[], subject: string, text: string): Pr
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: recipients, subject, text }),
+      body: JSON.stringify({ from, to: recipients, subject, text, ...(html ? { html } : {}) }),
       signal: ctrl.signal,
     })
     return { sent: res.ok, reason: res.ok ? undefined : `resend ${res.status}` }

@@ -16,6 +16,8 @@ import type { NextRequest }    from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { dbError }             from '@/lib/api/auth'
 import type { Role }           from '@/lib/rbac'
+import { ORG_COOKIE }         from '@/lib/org-context'
+import { audit }              from '@/lib/audit'
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -28,7 +30,8 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}))
-  const name = typeof body.name === 'string' ? body.name.trim() : null
+  const name = typeof body.name === 'string' ? body.name.trim().slice(0, 100) : null
+  const passwordSet = body.password_set === true
 
   // 2. Find pending invitation for this email
   const { data: invite, error: invErr } = await admin
@@ -76,14 +79,25 @@ export async function POST(req: NextRequest) {
     .update({ status: 'accepted' })
     .eq('id', invite.id)
 
-  // 7. Update display name if provided
-  if (name) {
+  // 7. Display name + clear the "set a password" flag once one is set.
+  const meta: Record<string, unknown> = {}
+  if (name) meta.full_name = name
+  if (passwordSet) { meta.tf_needs_password = false; meta.tf_password_set = true }
+  if (Object.keys(meta).length) {
     await admin.auth.admin.updateUserById(user.id, {
-      user_metadata: { full_name: name },
+      user_metadata: { ...(user.user_metadata ?? {}), ...meta },
     })
   }
 
-  return NextResponse.json({ ok: true, org_id: invite.org_id, role: invite.role })
+  if (!existing) {
+    await audit({ orgId: invite.org_id, actorUserId: user.id, action: 'member.join', targetType: 'member', targetId: user.id, details: { via: 'invitation', role: invite.role ?? 'member' } })
+  }
+
+  // Open the joined workspace next (people who already had their own
+  // workspace would otherwise land back in it).
+  const res = NextResponse.json({ ok: true, org_id: invite.org_id, role: invite.role })
+  res.cookies.set(ORG_COOKIE, invite.org_id, { path: '/', httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 60 * 60 * 24 * 365 })
+  return res
 }
 
 /**

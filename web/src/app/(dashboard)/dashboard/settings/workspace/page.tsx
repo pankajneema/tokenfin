@@ -1,5 +1,5 @@
+import { requireOrgContext } from '@/lib/org-context'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
-import { getOrgRole } from '@/lib/api/auth'
 import { DEFAULT_TIMEZONE } from '@/lib/dates'
 import { WorkspaceClient } from './_client'
 
@@ -11,12 +11,11 @@ export default async function WorkspacePage() {
   const admin    = createAdminClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
-  const { data: membership } = await admin
-    .from('members').select('org_id').eq('user_id', user.id).order('joined_at', { ascending: true }).limit(1)
-  const orgId = membership?.[0]?.org_id ?? ''
+  const ctx = await requireOrgContext()   // honours the selected workspace (tf_org)
+  const orgId = ctx.orgId
   const [{ data: org }, role] = await Promise.all([
     admin.from('organizations').select('name, slug, timezone, capture_prompts').eq('id', orgId).maybeSingle(),
-    getOrgRole(user.id, orgId),
+    Promise.resolve(ctx.role),
   ])
   return (
     <WorkspaceClient

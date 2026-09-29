@@ -11,13 +11,16 @@ interface Props {
   orgId:   string
   role:    string
   expired: boolean
+  /** true for accounts created by the invite (no password yet) */
+  needsPassword: boolean
+  initialName:   string
 }
 
-export function AcceptInvitationClient({ email, orgName, role, expired }: Props) {
+export function AcceptInvitationClient({ email, orgName, role, expired, needsPassword, initialName }: Props) {
   const router   = useRouter()
   const supabase = createClient()
 
-  const [name,        setName]        = useState('')
+  const [name,        setName]        = useState(initialName)
   const [password,    setPassword]    = useState('')
   const [confirm,     setConfirm]     = useState('')
   const [showPass,    setShowPass]    = useState(false)
@@ -36,20 +39,22 @@ export function AcceptInvitationClient({ email, orgName, role, expired }: Props)
     setError(null)
 
     if (!name.trim())                       return setError('Please enter your name.')
-    if (password.length < 8)               return setError('Password must be at least 8 characters.')
-    if (password !== confirm)              return setError('Passwords do not match.')
+    if (needsPassword && password.length < 8) return setError('Password must be at least 8 characters.')
+    if (needsPassword && password !== confirm) return setError('Passwords do not match.')
 
     setLoading(true)
     try {
-      // 1. Set password on the already-authenticated account
-      const { error: passErr } = await supabase.auth.updateUser({ password })
-      if (passErr) throw new Error(passErr.message)
+      // 1. New accounts: set a password so they can sign in normally later.
+      if (needsPassword) {
+        const { error: passErr } = await supabase.auth.updateUser({ password })
+        if (passErr) throw new Error(passErr.message)
+      }
 
-      // 2. Accept invite — creates membership + sets display name
+      // 2. Accept invite — creates membership, sets display name, switches to the org
       const res = await fetch('/api/v1/invites/accept', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ name: name.trim() }),
+        body:    JSON.stringify({ name: name.trim(), password_set: needsPassword }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Failed to accept invitation.')
@@ -168,6 +173,7 @@ export function AcceptInvitationClient({ email, orgName, role, expired }: Props)
           />
         </div>
 
+        {needsPassword && (<>
         {/* Password */}
         <div className="space-y-1.5">
           <label className="text-[12.5px] font-semibold text-[var(--fg-secondary)]">
@@ -231,6 +237,8 @@ export function AcceptInvitationClient({ email, orgName, role, expired }: Props)
             </p>
           )}
         </div>
+
+        </>)}
 
         {/* Error */}
         {error && (

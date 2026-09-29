@@ -8,6 +8,7 @@
  * Server-only (uses the service-role client for the membership read — identity
  * is verified first via supabase.auth.getUser()).
  */
+import { findPendingInvite, ACCEPT_PATH } from '@/lib/invites'
 import * as React from 'react'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
@@ -86,10 +87,17 @@ export const getOrgContext = cache(async (): Promise<
   return { user, orgId: picked.orgId, role: picked.role, timezone: await getOrgTimezone(picked.orgId) }
 })
 
-/** Like getOrgContext but redirects: signed out → /login, no org → /welcome. */
+/**
+ * Like getOrgContext but redirects: signed out → /login; no org → the pending
+ * invitation for their email (/accept-invitation) if there is one, else /welcome
+ * (which creates a new workspace).
+ */
 export async function requireOrgContext(): Promise<OrgContext> {
   const ctx = await getOrgContext()
   if (!ctx) redirect('/login')
-  if (!ctx.orgId) redirect('/welcome')
+  if (!ctx.orgId) {
+    const invite = await findPendingInvite(createAdminClient(), ctx.user.email)
+    redirect(invite ? ACCEPT_PATH : '/welcome')
+  }
   return ctx as OrgContext
 }

@@ -31,6 +31,10 @@ cd /path/to/tokenfin && for f in db/migrations/0*.sql; do echo "== $f"; psql "po
 Every migration is idempotent and safe to re-run. On a hosted Supabase project, run the same files in
 order in the SQL editor, or with `psql` against the project's session-pooler connection string.
 
+**Upgrading a project that already has 001–006:** run the single file `db/upgrade_006_to_019.sql`
+(migrations 007–019 concatenated, in one transaction — all or nothing). Regenerate it after adding a
+migration.
+
 ## 4. Configure and run the web app
 
 ```bash

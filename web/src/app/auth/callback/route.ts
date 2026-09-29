@@ -17,6 +17,7 @@ import { cookies }                               from 'next/headers'
 import { NextResponse }                          from 'next/server'
 import type { NextRequest }                      from 'next/server'
 import { createAdminClient }                     from '@/lib/supabase/server'
+import { findPendingInvite, ACCEPT_PATH }        from '@/lib/invites'
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
@@ -32,14 +33,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(url.toString())
   }
 
-  // ── No code → something went wrong ───────────────────────────────────────
+  // ── No code ──────────────────────────────────────────────────────────────
+  // Supabase-mailer invite / magic links arrive with the session in the URL
+  // HASH (#access_token=…), which a server never sees. Hand off to /login with
+  // no error: the browser keeps the hash across this redirect and the login
+  // page finishes the sign-in, then continues to `next`.
   if (!code) {
-    return NextResponse.redirect(`${origin}/login?error=auth_callback_failed`)
+    const rawNext = searchParams.get('next')
+    const url = new URL(`${origin}/login`)
+    if (rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//')) url.searchParams.set('next', rawNext)
+    return NextResponse.redirect(url.toString())
   }
 
   // Validate the `next` param — only allow relative paths to prevent open redirects.
   const rawNext = searchParams.get('next') ?? '/dashboard'
-  const next    = rawNext.startsWith('/') ? rawNext : '/dashboard'
+  const next    = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/dashboard'
 
   const cookieStore = await cookies()
 
@@ -88,8 +96,9 @@ export async function GET(request: NextRequest) {
       .limit(1)
 
     if (!members || members.length === 0) {
-      console.log('[auth/callback] new user — no membership, redirecting to /welcome')
-      return NextResponse.redirect(`${origin}/welcome`)
+      // Invited but not yet joined → accept page, never a brand-new workspace.
+      const invite = await findPendingInvite(admin, sessionData?.user?.email)
+      return NextResponse.redirect(`${origin}${invite ? ACCEPT_PATH : '/welcome'}`)
     }
   }
 

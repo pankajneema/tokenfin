@@ -25,7 +25,7 @@ const LABEL: Record<string, string> = {
   'limit.create': 'Created budget limit', 'limit.update': 'Changed budget limit', 'limit.delete': 'Deleted budget limit',
   'project.create': 'Created project', 'project.update': 'Changed project', 'project.delete': 'Deleted project',
   'team.create': 'Created team', 'team.update': 'Changed team', 'team.delete': 'Deleted team',
-  'member.invite': 'Invited members', 'member.role_change': 'Changed member role', 'member.remove': 'Removed member',
+  'member.invite': 'Invited members', 'member.join': 'Joined via invitation', 'member.role_change': 'Changed member role', 'member.remove': 'Removed member',
   'org.update': 'Changed workspace settings', 'org.timezone': 'Changed time zone', 'org.privacy': 'Changed prompt capture',
   'allocation.create': 'Added an allocation rule', 'allocation.update': 'Changed an allocation rule', 'allocation.delete': 'Removed an allocation rule',
   'data.delete': 'Deleted monitoring data', 'data.retention': 'Changed data retention',

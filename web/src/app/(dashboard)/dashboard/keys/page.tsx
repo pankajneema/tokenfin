@@ -1,6 +1,6 @@
+import { requireOrgContext } from '@/lib/org-context'
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
-import { getOrgRole }          from '@/lib/api/auth'
 import { can }                 from '@/lib/rbac'
 import { redirect }            from 'next/navigation'
 import { KeysClient }          from './_client'
@@ -54,14 +54,9 @@ export default async function KeysPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data: _mb } = await admin
-    .from('members')
-    .select('org_id')
-    .eq('user_id', user!.id)
-    .limit(1)
-
-  const orgId = _mb?.[0]?.org_id ?? ''
-  const role  = await getOrgRole(user.id, orgId)
+  const ctx   = await requireOrgContext()   // honours the selected workspace (tf_org)
+  const orgId = ctx.orgId
+  const role  = ctx.role
 
   // Only owner/admin can access the keys page
   if (!can(role, 'keys:view')) redirect('/dashboard')

@@ -1,6 +1,6 @@
+import { requireOrgContext } from '@/lib/org-context'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { fetchAllRows } from '@/lib/supabase/paginate'
-import { getOrgRole } from '@/lib/api/auth'
 import { can } from '@/lib/rbac'
 import { buildCodingToolsView, type ToolSummaryRow } from '@/lib/connectors/summary'
 import { loadMergedPrData } from '@/lib/connectors/merged-prs'
@@ -29,10 +29,9 @@ export default async function CodingToolsPage({ searchParams }: { searchParams?:
   const admin    = createAdminClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
-  const { data: mb } = await admin
-    .from('members').select('org_id').eq('user_id', user.id).order('joined_at', { ascending: true }).limit(1)
-  const orgId = mb?.[0]?.org_id ?? ''
-  const role  = orgId ? await getOrgRole(user.id, orgId) : 'viewer'
+  const ctx = await requireOrgContext()   // honours the selected workspace (tf_org)
+  const orgId = ctx.orgId
+  const role  = ctx.role
 
   const now = new Date()
   const sinceMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - (days - 1) * 86400_000

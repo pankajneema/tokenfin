@@ -1,3 +1,4 @@
+import { requireOrgContext } from '@/lib/org-context'
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
 import { ProfileClient }      from './_client'
@@ -11,14 +12,8 @@ export default async function ProfilePage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  // Use admin client — bypasses RLS so membership is always found
-  const { data: memberRows } = await admin
-    .from('members')
-    .select('role, org_id')
-    .eq('user_id', user.id)
-    .limit(1)
-
-  const membership = memberRows?.[0] ?? null
+  const ctx = await requireOrgContext()   // honours the selected workspace (tf_org)
+  const membership = { role: ctx.role, org_id: ctx.orgId }
 
   // Fetch org name
   let orgName = ''

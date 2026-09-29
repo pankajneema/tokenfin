@@ -119,7 +119,9 @@ Migrations 011–015: 011 rollups + ingest (event ids are org-prefixed; `purge_o
 | `/api/v1/budget` | GET | Admin | Budget vs spend summary |
 | `/api/v1/models` | GET | Admin | Model usage summary |
 | `/api/v1/teams` | GET POST PATCH DELETE | Admin | Manage teams |
-| `/api/v1/invites` | POST | Admin | Send member invites |
+| `/api/v1/invites` | POST | Admin | Send member invites (`lib/invites.ts`: branded email via Resend with a `/auth/confirm` link; existing accounts get a sign-in link; falls back to Supabase's mailer — templates in `docs/email-templates`) |
+| `/api/v1/invites/pending` | GET | Session | The caller's pending invitation (used by /welcome) |
+| `/api/v1/invites/accept` | POST DELETE | Session | Join the invited org (sets `tf_org` so it opens next) / decline |
 | `/api/v1/provision` | POST | Admin | Bulk onboard members + auto-generate keys (one-time reveal links) + service accounts |
 | `/api/v1/keys/reveal` | POST | Token (single-use) | Reveal a provisioned raw key exactly once |
 | `/api/mcp` | POST | API key (Bearer, read) | Remote MCP server — Streamable HTTP, JSON-RPC, read-only FinOps tools |
@@ -143,7 +145,13 @@ Migrations 011–015: 011 rollups + ingest (event ids are org-prefixed; `purge_o
 | `/api/v1/ask` | POST | Session | ⌘K "ask your spend": deterministic intent parser (`lib/ask`), optional Claude mapping when `ANTHROPIC_API_KEY` is set (question + intent schema only, never usage rows); answers from rollups, member-scoped |
 | `/api/v1/insights` | GET | API key (read) or session | Waste findings + spikes (`lib/insights`) |
 | `/api/health` | GET | — | `{ok, db latency, version, migrations}` (10 s cache, no secrets) |
-| `/auth/callback` | GET | — | Supabase OAuth callback |
+| `/auth/callback` | GET | — | Supabase OAuth callback (no `?code` → hands off to /login, whose hash handler finishes Supabase-mailer links) |
+| `/auth/confirm` | GET | — | Server-side email-link verification (`verifyOtp` with `token_hash`) → `next`. Used by invites and custom templates |
+
+### Invitations (IMPORTANT)
+- Signed in without a workspace → `requireOrgContext()` / `/auth/callback` / `/welcome` send the user to `/accept-invitation` if a pending invitation matches their email; only otherwise is a new workspace created.
+- People who already have a workspace see a "You've been invited" banner (dashboard layout).
+- Pages pick the workspace ONLY via `requireOrgContext()` (never `members … limit(1)`), so the `tf_org` choice is consistent everywhere.
 
 ### Key security model (IMPORTANT)
 - API keys are stored ONLY as `key_hash` (SHA-256) + a **masked** `key_prefix` (e.g. `tfk_prod_abc1_…c05a`). The raw key is returned **once** in the POST response, never again.

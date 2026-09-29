@@ -7,7 +7,7 @@
  * Reaches here after Supabase magic-link verifies and /auth/callback redirects.
  * The user is already authenticated at this point; they just need to:
  *   1. Set their display name
- *   2. Set a password
+ *   2. Set a password (only brand-new accounts created by the invite)
  *   3. Accept (or cancel) the invitation
  */
 import { redirect }           from 'next/navigation'
@@ -22,7 +22,7 @@ export default async function AcceptInvitationPage() {
 
   // ── Must be authenticated (magic link already set the session) ────────────
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  if (!user) redirect('/login?next=/accept-invitation')
 
   // ── Find pending invitation for this email ────────────────────────────────
   const { data: invite } = await admin
@@ -55,6 +55,12 @@ export default async function AcceptInvitationPage() {
 
   const orgName = org?.name ?? 'your team'
 
+  // Brand-new accounts created by the invite have no password yet; people who
+  // already had an account (sent a sign-in link instead) keep theirs.
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>
+  const needsPassword = meta.tf_needs_password === true || (!!meta.invited_by && meta.tf_password_set !== true)
+  const initialName = typeof meta.full_name === 'string' ? meta.full_name : ''
+
   return (
     <AcceptInvitationClient
       email={user.email!}
@@ -62,6 +68,8 @@ export default async function AcceptInvitationPage() {
       orgId={invite.org_id}
       role={invite.role ?? 'member'}
       expired={expired}
+      needsPassword={needsPassword}
+      initialName={initialName}
     />
   )
 }

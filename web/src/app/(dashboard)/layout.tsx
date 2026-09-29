@@ -2,6 +2,8 @@ import { redirect }          from 'next/navigation'
 import { createAdminClient } from '@/lib/supabase/server'
 import { requireOrgContext } from '@/lib/org-context'
 import { AppShell }           from '@/components/layout/app-shell'
+import Link                   from 'next/link'
+import { findPendingInvite, ACCEPT_PATH } from '@/lib/invites'
 
 /* ── Map DB notification type → UI type ── */
 type NotifType     = 'alert' | 'info' | 'success' | 'warning'
@@ -37,7 +39,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const admin = createAdminClient()
   const membership = { org_id: orgId }
 
-  const { data: projects } = await admin.from('projects').select('id').eq('org_id', orgId).limit(1)
+  // A pending invitation to ANOTHER workspace (people who already had one).
+  const [{ data: projects }, pendingInvite, { data: myOrgs }] = await Promise.all([
+    admin.from('projects').select('id').eq('org_id', orgId).limit(1),
+    findPendingInvite(admin, user.email),
+    admin.from('members').select('org_id').eq('user_id', user.id),
+  ])
+  const invite = pendingInvite && !(myOrgs ?? []).some(m => m.org_id === pendingInvite.org_id) ? pendingInvite : null
   if (!projects?.[0]) {
     console.log('[DashboardLayout] no project for org', orgId)
     redirect('/onboarding')
@@ -72,7 +80,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <>
       <a href="#main-content" className="skip-link">Skip to main content</a>
-      <AppShell user={user} notifications={notifications}>{children}</AppShell>
+      <AppShell user={user} notifications={notifications}>
+        {invite && (
+          <div role="status" className="mx-4 mt-4 md:mx-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--blue-bg)] px-4 py-3">
+            <p className="text-[13px] text-[var(--fg)]">
+              You’ve been invited to join <span className="font-semibold">{invite.org_name}</span>.
+            </p>
+            <Link href={ACCEPT_PATH} className="btn-primary text-[12.5px]">Review invitation</Link>
+          </div>
+        )}
+        {children}
+      </AppShell>
     </>
   )
 }

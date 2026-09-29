@@ -1,0 +1,14 @@
+<!-- Supabase → Authentication → Emails → "Magic Link". Subject: Your TokenFin sign-in link -->
+<!-- Also used when an EXISTING account is invited to another workspace. -->
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#1a1a2e">
+  <p style="font-size:15px;font-weight:700;color:#E8533A;margin:0 0 20px">TokenFin</p>
+  <h2 style="font-size:20px;margin:0 0 8px">Sign in to TokenFin</h2>
+  <p style="font-size:14px;line-height:1.6;color:#4a4a5e;margin:0 0 24px">
+    Use the button below to sign in. If a team invited you, you'll be taken to the invitation next.
+  </p>
+  <p style="margin:0 0 24px">
+    <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=magiclink&next=/accept-invitation"
+       style="display:inline-block;background:#E8533A;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 22px;border-radius:10px">Sign in →</a>
+  </p>
+  <p style="font-size:12px;line-height:1.6;color:#8a8a9a;margin:0">This link works once and expires soon.</p>
+</div>

@@ -3,6 +3,7 @@ import { can } from '@/lib/rbac'
 import type { Role } from '@/lib/rbac'
 import { getOrCreateSetupKey } from '@/lib/setup/key'
 import { SetupClient } from './_client'
+import { requireOrgContext } from '@/lib/org-context'
 import { getRollout, type RolloutRow } from './_rollout'
 
 export const metadata = { title: 'Connections — TokenFin' }
@@ -19,14 +20,9 @@ export default async function SetupPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data: member } = await admin
-    .from('members').select('org_id, role')
-    .eq('user_id', user.id)
-    .order('joined_at', { ascending: true })
-    .limit(1).maybeSingle()
-
-  const orgId = (member?.org_id as string | undefined) ?? ''
-  const role = (member?.role as Role | undefined) ?? 'viewer'
+  const ctx = await requireOrgContext()   // honours the selected workspace (tf_org)
+  const orgId = ctx.orgId
+  const role: Role = ctx.role
   const isAdmin = can(role, 'keys:create')
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://tokenfin.curiousdevs.com'

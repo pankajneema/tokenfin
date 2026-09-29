@@ -143,8 +143,20 @@ export default function LoginPage() {
     const access_token  = hash.get('access_token')
     const refresh_token = hash.get('refresh_token')
     if (!access_token || !refresh_token) {
-      if (new URLSearchParams(window.location.search).get('error') === 'auth_callback_failed')
+      // Errors arrive as ?error=… (our /auth/confirm + /auth/callback) or, for an
+      // expired Supabase email link, as #error_code=otp_expired&error_description=…
+      const qErr = new URLSearchParams(window.location.search).get('error')
+      const hErr = hash.get('error_code') || hash.get('error')
+      if (hErr) {
+        setError(hErr === 'otp_expired'
+          ? 'That email link has expired or was already used. Sign in below (use “Forgot password” if you never set one), or ask for a new invite.'
+          : (hash.get('error_description') ?? 'That sign-in link is invalid.').replace(/\+/g, ' '))
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      } else if (qErr === 'auth_callback_failed') {
         setError('That sign-in link is invalid or has expired. Sign in below, or ask for a new invite.')
+      } else if (qErr) {
+        setError(qErr.slice(0, 300))
+      }
       return
     }
     const type = hash.get('type')

@@ -10,7 +10,7 @@ export type AuditAction =
   | 'limit.create' | 'limit.update' | 'limit.delete'
   | 'project.create' | 'project.update' | 'project.delete'
   | 'team.create' | 'team.update' | 'team.delete'
-  | 'member.invite' | 'member.role_change' | 'member.remove'
+  | 'member.invite' | 'member.join' | 'member.role_change' | 'member.remove'
   | 'org.update' | 'org.timezone' | 'org.privacy'
   | 'allocation.create' | 'allocation.update' | 'allocation.delete'
   | 'data.delete' | 'data.retention'

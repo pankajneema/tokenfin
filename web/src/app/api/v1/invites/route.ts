@@ -4,6 +4,7 @@ import { requireOrgMemberWithRole, requirePermission, dbError } from '@/lib/api/
 import { can } from '@/lib/rbac'
 import { z } from 'zod'
 import { audit } from '@/lib/audit'
+import { sendInvite } from '@/lib/invites'
 
 function db() { return createAdminClient() }
 
@@ -24,29 +25,22 @@ export async function POST(req: NextRequest) {
   if (guard instanceof NextResponse) return guard
 
   const admin  = createAdminClient()
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://tokenfin.curiousdevs.com'
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin).replace(/\/$/, '')
+
+  const [{ data: org }, { data: inviterData }] = await Promise.all([
+    admin.from('organizations').select('name').eq('id', org_id).maybeSingle(),
+    admin.auth.admin.getUserById(guard.userId),
+  ])
+  const orgName = (org?.name as string | undefined) ?? 'your team'
+  const iu = inviterData?.user
+  const inviter = (iu?.user_metadata?.full_name as string | undefined) || iu?.email || null
 
   const results: { email: string; status: 'sent' | 'failed'; error?: string }[] = []
 
   for (const email of emails) {
-
-    // 1. Send real invite email via Supabase Auth
-    //    Invited user lands on /auth/callback → redirected to /dashboard
-    const { error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${appUrl}/auth/callback?next=/accept-invitation`,
-      data: { org_id, invited_by: guard.userId },
-    })
-
-    if (inviteErr) {
-      // User may already exist in auth — still record invitation
-      console.warn(`[invites] ${email}:`, inviteErr.message)
-      results.push({ email, status: 'failed', error: inviteErr.message })
-    } else {
-      results.push({ email, status: 'sent' })
-    }
-
-    // 2. Always upsert into invitations table (for pending list UI)
-    await db()
+    // Record the invitation FIRST: the accept page and the "no workspace yet"
+    // routing look it up by email, whichever way the person signs in.
+    const { error: rowErr } = await db()
       .from('invitations')
       .upsert(
         {
@@ -59,6 +53,14 @@ export async function POST(req: NextRequest) {
         },
         { onConflict: 'org_id,email' },
       )
+    if (rowErr) { results.push({ email, status: 'failed', error: 'could not record the invitation' }); continue }
+
+    const r = await sendInvite(admin, { email, orgId: org_id, orgName, inviterId: guard.userId, inviter, appUrl })
+    if (r.status === 'sent') results.push({ email, status: 'sent' })
+    else {
+      console.warn(`[invites] ${email}: ${r.error}`)
+      results.push({ email, status: 'failed', error: r.error })
+    }
   }
 
   const sent   = results.filter(r => r.status === 'sent').length

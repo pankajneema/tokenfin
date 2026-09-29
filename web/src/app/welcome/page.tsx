@@ -19,6 +19,10 @@ export default function WelcomePage() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { router.replace('/login'); return }
 
+    // Invited? Join that team instead of creating an empty workspace.
+    const pending = await fetch('/api/v1/invites/pending').then(r => r.ok ? r.json() : null).catch(() => null)
+    if (pending?.invite) { router.replace('/accept-invitation'); return }
+
     const base = user.email!.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '-')
     const res = await fetch('/api/v1/orgs', {
       method:  'POST',

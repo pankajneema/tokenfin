@@ -1,5 +1,5 @@
+import { requireOrgContext } from '@/lib/org-context'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
-import { getOrgRole } from '@/lib/api/auth'
 import { fetchAllPages, fetchAllRows } from '@/lib/supabase/paginate'
 import { getOrgTimezone } from '@/lib/org-timezone'
 import { toZonedDate } from '@/lib/dates'
@@ -20,13 +20,12 @@ export default async function AllocationPage() {
   const admin    = createAdminClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
-  const { data: membership } = await admin
-    .from('members').select('org_id').eq('user_id', user.id).order('joined_at', { ascending: true }).limit(1)
-  const orgId = membership?.[0]?.org_id as string | undefined
+  const ctx = await requireOrgContext()   // honours the selected workspace (tf_org)
+  const orgId: string | undefined = ctx.orgId
   if (!orgId) return null
 
   const [role, tz, ruleRows, memberTeam, projects, teams] = await Promise.all([
-    getOrgRole(user.id, orgId),
+    Promise.resolve(ctx.role),
     getOrgTimezone(orgId),
     loadRuleRows(admin, orgId),
     loadMemberTeams(admin, orgId),
