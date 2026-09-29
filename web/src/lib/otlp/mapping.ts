@@ -131,6 +131,7 @@ const AGENT_SERVICES: Array<[RegExp, string]> = [
   [/^codex/, 'codex_cli'],              // codex, codex_cli_rs, codex-cli, codex_exec
   [/^opencode/, 'opencode'],
   [/^gemini([-_ ]?cli)?$|^gemini[-_ ]?cli/, 'gemini_cli'],
+  [/^cowork$/, 'cowork'],               // Claude Cowork (desktop app), Admin settings → Cowork → OTLP
 ]
 // Event / metric name prefixes the agents emit (used only when service.name is
 // absent or unrecognised). Model names are NOT a hint: a generic app calling

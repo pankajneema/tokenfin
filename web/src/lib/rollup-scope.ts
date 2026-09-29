@@ -274,6 +274,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   codex_cli:   'Codex',
   gemini_cli:  'Gemini CLI',
   opencode:    'OpenCode',
+  cowork:      'Claude Cowork',
   sdk:         'SDK',
   mcp:         'MCP',
   proxy:       'Proxy',

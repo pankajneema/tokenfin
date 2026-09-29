@@ -248,6 +248,7 @@ const AGENT_SERVICE: Array<[RegExp, string]> = [
   [/^codex/i, 'codex_cli'],               // codex_cli_rs, codex-cli, codex_exec
   [/^gemini[-_ ]?cli/i, 'gemini_cli'],
   [/^opencode/i, 'opencode'],
+  [/^cowork$/i, 'cowork'],                // its logs own usage; spans (3P deployments) are not mirrored
 ]
 // Stricter than mapping.ts detectSource (which matches any service containing
 // "claude"): an app named "claude-support-bot" is a generic app whose spans

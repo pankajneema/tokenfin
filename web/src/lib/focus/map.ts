@@ -83,7 +83,7 @@ export function providerName(provider: string | null, model: string): string {
 }
 
 const SOURCES: Record<string, string> = {
-  claude_code: 'Claude Code', 'claude-code': 'Claude Code', codex: 'Codex CLI', codex_cli: 'Codex CLI',
+  claude_code: 'Claude Code', 'claude-code': 'Claude Code', cowork: 'Claude Cowork', codex: 'Codex CLI', codex_cli: 'Codex CLI',
   gemini_cli: 'Gemini CLI', 'gemini-cli': 'Gemini CLI', cursor: 'Cursor',
 }
 

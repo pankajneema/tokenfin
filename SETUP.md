@@ -1,7 +1,7 @@
 # TokenFin — Developer Setup
 
 TokenFin is one Next.js app (`web/`) on Supabase Postgres, plus the `tokenfin` CLI (`cli/`) and SDKs (`sdk/`).
-There are no other services to run. For production deployment see [README.md](./README.md#deployment);
+There are no other services to run. For production deployment see [Deploy](#8-deploy-vercel--supabase) below;
 for rolling TokenFin out to a team see [docs/ROLLOUT.md](./docs/ROLLOUT.md).
 
 ## 1. Prerequisites
@@ -78,3 +78,18 @@ cd web && npx tsc --noEmit && npm run lint && npm test
 ```
 
 SDK tests live in `sdk/` (TypeScript) and `sdk/python` (`python -m pytest tests`).
+
+## 8. Deploy (Vercel + Supabase)
+
+1. Create a Supabase project. Run every file in `db/migrations/` in order (SQL editor or `psql`); an
+   existing project already at 006 can run the single file `db/upgrade_006_to_019.sql`.
+2. Supabase → Authentication → URL Configuration: **Site URL** = your app URL, and add
+   `https://<your-app>/**` to **Redirect URLs**.
+3. Import the repo in Vercel with **Root Directory = `web`**. Add the variables from
+   `web/.env.production.example` (at minimum the three Supabase values, `NEXT_PUBLIC_APP_URL`,
+   `KEY_ENCRYPTION_SECRET`, `CRON_SECRET`; `RESEND_API_KEY` for branded invite and alert emails).
+4. Deploy. `web/vercel.json` schedules the daily jobs; `.github/workflows/cron.yml` runs the alert
+   sweep every 15 minutes once you set the `CRON_SECRET` secret and `TOKENFIN_URL` variable in GitHub.
+5. Check `https://<your-app>/api/health` returns `{"ok":true,…}`.
+
+Every push to `main` then redeploys.

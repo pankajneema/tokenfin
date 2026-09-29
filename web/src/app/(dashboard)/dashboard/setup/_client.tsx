@@ -76,7 +76,8 @@ const CATEGORIES: Category[] = [
   {
     id: 'desktop', label: 'Desktop & chat', hint: 'Subscription apps — no per-token cost', Icon: MonitorSmartphone,
     tools: [
-      { name: 'Claude Desktop', status: 'subscription' }, { name: 'ChatGPT', status: 'subscription' }, { name: 'Gemini (web)', status: 'subscription' },
+      { name: 'Claude Cowork', status: 'push', sourceId: 'cowork' },
+      { name: 'Claude Desktop (chat)', status: 'subscription' }, { name: 'ChatGPT', status: 'subscription' }, { name: 'Gemini (web)', status: 'subscription' },
     ],
   },
 ]
@@ -100,6 +101,13 @@ function pushConfig(otelEndpoint: string, key: string, prompts: boolean): Record
       file: '~/.gemini/settings.json', captures: 'Per-turn tokens from the gen_ai.client.token.usage metric.',
       note: 'Gemini can’t set OTLP headers, so the key rides on the endpoint as ?key=.',
       config: JSON.stringify({ telemetry: geminiTelemetry(otelEndpoint, key, { prompts }) }, null, 2),
+    },
+    cowork: {
+      file: 'Claude → Admin settings → Cowork  (Team / Enterprise, org owner)',
+      captures: 'Per-request model, input / output / cache tokens, cost and latency for everyone in your Claude organization (api_request events), attributed by user email'
+        + (prompts ? '. Prompt text only if you also enable otlpContentCapture → userPrompts.' : '. Prompt text capture is off for this workspace.'),
+      note: 'One org-wide setting — no per-person install. Uses the key shown here; people are matched to TokenFin members by their Claude account email. Start a NEW Cowork session after saving (settings load at session start). Needs Claude desktop app 1.1.4173+.',
+      config: ['OTLP endpoint:  ' + otelEndpoint, 'OTLP protocol:  http/json', 'OTLP headers:   Authorization=Bearer ' + key].join('\n'),
     },
     opencode: {
       file: '~/.config/opencode/opencode.json', captures: 'Per-turn tokens + cost from the opencode-otel-plugin (traces + metrics).',
@@ -182,7 +190,7 @@ export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey, roll
         </p>
         <p className="text-[12px] text-[var(--fg-tertiary)]">
           {connectedSourceIds.size === 0 ? (
-            <>0 connected yet — Claude Code, Codex CLI, Gemini CLI &amp; OpenCode are supported, run the command below · the rest are coming soon.</>
+            <>0 connected yet — Claude Code, Codex CLI, Gemini CLI, OpenCode &amp; Claude Cowork are supported, run the command below · the rest are coming soon.</>
           ) : (
             <>
               <span className="font-semibold text-teal">{connectedSourceIds.size}/{totalPushSources} connected</span>
@@ -334,7 +342,8 @@ const STATUS_META: Record<RolloutRow['status'], { label: string; cls: string }> 
   no_device: { label: 'Not set up',      cls: 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]' },
   invited:   { label: 'Invited',         cls: 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]' },
 }
-const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—')
+// Fixed locale + zone so the server render and the browser agree (no hydration mismatch).
+const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : '—')
 const ago = (iso: string | null) => {
   if (!iso) return '—'
   const m = Math.round((Date.now() - Date.parse(iso)) / 60000)
@@ -445,7 +454,7 @@ function RolloutSection({ orgId, otelEndpoint, ingestKey, prompts, rows, copied,
                     <td className="px-3 py-2"><span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${STATUS_META[r.status].cls}`}>{STATUS_META[r.status].label}</span></td>
                     <td className="px-3 py-2 tabular-nums text-[var(--fg-secondary)]">{r.devices || '—'}</td>
                     <td className="px-3 py-2 text-[var(--fg-secondary)]">{fmtDate(r.firstEventAt)}</td>
-                    <td className="px-3 py-2 text-[var(--fg-secondary)]">{ago(r.lastSeenAt)}</td>
+                    <td className="px-3 py-2 text-[var(--fg-secondary)]" suppressHydrationWarning>{ago(r.lastSeenAt)}</td>
                     <td className="px-3 py-2 font-mono text-[11.5px] text-[var(--fg-secondary)]">{r.source ?? '—'}</td>
                   </tr>
                 ))}

@@ -10,7 +10,7 @@ Thanks for your interest in improving TokenFin. This guide covers how to get set
 
 ## Development setup
 
-Follow [Local development](./README.md#local-development) in the README. In short:
+Follow [SETUP.md](./SETUP.md) for the full local setup. In short:
 
 ```bash
 make install                              # web dependencies

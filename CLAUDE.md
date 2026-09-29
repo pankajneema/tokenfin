@@ -186,6 +186,10 @@ removed — see `MIGRATION.md`). `npx tokenfin setup` writes an OTel `env` block
 - **Mapping is versioned in one file** (`otlp/mapping.ts`); unrecognized metric names are logged,
   never silently dropped. `detectSource` matches CLI agents by service.name **prefix** (`claude-code`, `codex*`,
   `gemini-cli`, `opencode*`) or event-name prefix — never by model name — so a generic app calling claude-* models stays metered `otlp`.
+- **Claude Cowork** (Team/Enterprise): org-wide, no per-person install. Admin settings → Cowork → OTLP endpoint
+  `<app>/api/otel`, protocol `http/json`, headers `Authorization=Bearer <ingest key>`. Events are bare
+  `api_request` / `user_prompt` / `tool_result` with `service.name=cowork` → source `cowork`, notional,
+  attributed by `user.email`. Shown on /dashboard/setup (Desktop & chat).
 - **Codex/Gemini (Phase 4, needs a real-session confirm)**: they report tokens only as metric
   counters. `otlp/metrics.ts` derives per-turn rows by cumulative-diffing (first-seen = baseline,
   emit nothing). `setup` writes `~/.codex/config.toml` (`[otel]`, user-level, `metrics_exporter=otlp-http`

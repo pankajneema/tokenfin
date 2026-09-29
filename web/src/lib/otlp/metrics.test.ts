@@ -85,6 +85,35 @@ describe('deriveMetricEvents', () => {
     expect(r.rows[0].output_tokens).toBe(10)
   })
 
+  it('OpenCode CUMULATIVE histogram (plugin default) is diffed, not re-added each export', async () => {
+    const hdp = (type: string, sum: number, time: number) => ({
+      timeUnixNano: time, sum, count: 3,
+      attributes: [kv('gen_ai.token.type', type), kv('gen_ai.request.model', 'claude-opus-4-8'), kv('gen_ai.conversation.id', 'ses1')],
+    })
+    const hist = (pts: any[], temporality = 2) => ({ name: 'gen_ai.client.token.usage', histogram: { aggregationTemporality: temporality, dataPoints: pts } })
+    const res = [kv('service.name', 'opencode')]
+    const st = fakeState()
+    const first = await deriveMetricEvents(metricsBody([hist([hdp('input', 1000, 1e15), hdp('output', 200, 1e15)])], res), CTX, st)
+    expect(first.rows).toHaveLength(0)                       // baseline only
+    const second = await deriveMetricEvents(metricsBody([hist([hdp('input', 1500, 2e15), hdp('output', 260, 2e15)])], res), CTX, st)
+    expect(second.rows).toHaveLength(1)
+    expect(second.rows[0].input_tokens).toBe(500)            // 1500 − 1000, not 1500
+    expect(second.rows[0].output_tokens).toBe(60)
+    const idle = await deriveMetricEvents(metricsBody([hist([hdp('input', 1500, 3e15), hdp('output', 260, 3e15)])], res), CTX, st)
+    expect(idle.rows).toHaveLength(0)                        // unchanged total → nothing new
+    // DELTA temporality (recommended setup) is taken as-is.
+    const d = await deriveMetricEvents(metricsBody([hist([hdp('input', 40, 4e15)], 1)], res), CTX, fakeState())
+    expect(d.rows[0].input_tokens).toBe(40)
+  })
+
+  it('Codex histograms stay per-turn (delta) whatever temporality they report', async () => {
+    const body = metricsBody([{ name: 'codex.turn.token_usage', histogram: { aggregationTemporality: 2, dataPoints: [
+      { timeUnixNano: 1e15, sum: 70, count: 1, attributes: [kv('token_type', 'input'), kv('model', 'gpt-5-codex')] }] } }])
+    const r = await deriveMetricEvents(body, CTX, fakeState())
+    expect(r.rows).toHaveLength(1)
+    expect(r.rows[0].input_tokens).toBe(70)
+  })
+
   it('event_id is deterministic across identical exports (persist dedupes)', async () => {
     const body = metricsBody([deltaSum('codex.turn.token_usage', [dp('input', 30)])])
     const a = (await deriveMetricEvents(body, CTX, fakeState())).rows[0].event_id

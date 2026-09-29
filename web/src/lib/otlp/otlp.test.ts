@@ -83,6 +83,8 @@ describe('mapping', () => {
     expect(detectSource({ 'service.name': 'codex_cli_rs' })).toBe('codex_cli')
     expect(detectSource({ 'service.name': 'gemini-cli' })).toBe('gemini_cli')
     expect(detectSource({}, 'claude_code.api_request')).toBe('claude_code')
+    expect(detectSource({ 'service.name': 'cowork' }, 'api_request')).toBe('cowork')
+    expect(detectSource({ 'service.name': 'coworking-app' })).toBe('otlp')
   })
   it('costBasisFor is notional for CLI agents', () => {
     expect(costBasisFor('claude_code')).toBe('notional')

@@ -23,7 +23,7 @@ export const ACCURACY_META: Record<Accuracy, { label: string; cls: string; dot: 
   estimated: { label: 'Estimated', cls: 'bg-[var(--amber-bg)] text-[var(--amber)]', dot: 'var(--amber)' },
 }
 
-const OTLP_SOURCES = new Set(['claude_code', 'codex_cli', 'gemini_cli', 'opencode'])
+const OTLP_SOURCES = new Set(['claude_code', 'codex_cli', 'gemini_cli', 'opencode', 'cowork'])
 
 /**
  * Best-effort inference of a connected key's recorder tier + accuracy for the

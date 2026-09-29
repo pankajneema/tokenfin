@@ -111,12 +111,17 @@ export async function deriveMetricEvents(body: any, ctx: KeyCtx, state: MetricSt
         const sum = m?.sum
         const histogram = m?.histogram
         const dps: any[] = sum?.dataPoints ?? m?.gauge?.dataPoints ?? histogram?.dataPoints ?? []
-        // Histograms have no cumulative-counter concept — each data point IS
-        // one fresh observation (e.g. Codex's codex.turn.token_usage: one
-        // data point per token_type per turn, confirmed on a real session
-        // 2026-08-10), so always treat them as delta, regardless of the
-        // aggregationTemporality they report.
-        const isDelta = !!histogram || (!!sum && isDeltaTemporality(sum.aggregationTemporality))
+        // Codex's codex.turn.token_usage histogram: each data point IS one fresh
+        // observation (one per token_type per turn, confirmed on a real session
+        // 2026-08-10) whatever temporality it reports → always delta.
+        // OpenCode (opencode-otel-plugin, OTel JS SDK) is different: with the
+        // default CUMULATIVE temporality its histogram `sum` is a running total
+        // re-sent every export, so it must be diffed like a counter (treating it
+        // as delta would re-add the whole session each minute). Honour the
+        // reported temporality for every histogram except Codex's.
+        const isDelta = histogram
+          ? (source === 'codex_cli' || isDeltaTemporality(histogram.aggregationTemporality))
+          : (!!sum && isDeltaTemporality(sum.aggregationTemporality))
 
         for (const dp of dps) {
           const a = attrsToMap(dp?.attributes ?? [])
