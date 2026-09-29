@@ -5,6 +5,7 @@ import { inputPrice } from './pricing'
 import { judgeFaithfulness, judgeCorrectness } from '@/lib/eval/judge'
 import { resolveJudge } from '@/lib/eval/config'
 import type { KeyCtx } from './types'
+import { selectAll } from '@/lib/supabase/paginate'
 
 // Executes a single MCP tool, scoped to the caller's org. Every query filters by
 // ctx.orgId — the authorization boundary.
@@ -20,7 +21,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       return { projects: data ?? [] }
     }
     case 'get_spend': {
-      const { data } = await admin.from('usage_agg').select('cost_usd, total_tokens, request_count').eq('org_id', ctx.orgId).gte('bucket', since)
+      const { data } = await selectAll<{ model: string; bucket: string; cost_usd: number; total_tokens: number; request_count: number }>(() => admin.from('usage_agg').select('cost_usd, total_tokens, request_count').eq('org_id', ctx.orgId).gte('bucket', since))
       const rows = data ?? []
       return {
         period_days: days,
@@ -30,7 +31,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       }
     }
     case 'get_usage_by_model': {
-      const { data } = await admin.from('usage_agg').select('model, cost_usd, total_tokens, request_count').eq('org_id', ctx.orgId).gte('bucket', since)
+      const { data } = await selectAll<{ model: string; bucket: string; cost_usd: number; total_tokens: number; request_count: number }>(() => admin.from('usage_agg').select('model, cost_usd, total_tokens, request_count').eq('org_id', ctx.orgId).gte('bucket', since))
       const byModel = new Map<string, { model: string; cost_usd: number; total_tokens: number; requests: number }>()
       for (const r of data ?? []) {
         const m = byModel.get(r.model) ?? { model: r.model, cost_usd: 0, total_tokens: 0, requests: 0 }
@@ -40,7 +41,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       return { period_days: days, models: Array.from(byModel.values()).map(m => ({ ...m, cost_usd: +m.cost_usd.toFixed(4) })).sort((a, b) => b.cost_usd - a.cost_usd) }
     }
     case 'get_daily_costs': {
-      const { data } = await admin.from('usage_agg').select('bucket, cost_usd').eq('org_id', ctx.orgId).gte('bucket', since)
+      const { data } = await selectAll<{ model: string; bucket: string; cost_usd: number; total_tokens: number; request_count: number }>(() => admin.from('usage_agg').select('bucket, cost_usd').eq('org_id', ctx.orgId).gte('bucket', since))
       const byDay = new Map<string, number>()
       for (const r of data ?? []) byDay.set(r.bucket, (byDay.get(r.bucket) ?? 0) + Number(r.cost_usd ?? 0))
       return { period_days: days, daily: Array.from(byDay.entries()).map(([day, cost]) => ({ day, cost_usd: +cost.toFixed(4) })).sort((a, b) => a.day.localeCompare(b.day)) }
@@ -49,7 +50,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       const monthStart = new Date(); monthStart.setDate(1)
       const [{ data: limits }, { data: agg }] = await Promise.all([
         admin.from('limits').select('scope, period, budget_usd, warn_at, throttle_at, block_at').eq('org_id', ctx.orgId).eq('is_active', true),
-        admin.from('usage_agg').select('cost_usd').eq('org_id', ctx.orgId).gte('bucket', monthStart.toISOString().slice(0, 10)),
+        selectAll<{ model: string; bucket: string; cost_usd: number; total_tokens: number; request_count: number }>(() => admin.from('usage_agg').select('cost_usd').eq('org_id', ctx.orgId).gte('bucket', monthStart.toISOString().slice(0, 10))),
       ])
       const spend = (agg ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
       return {
@@ -87,9 +88,9 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       return content == null ? { found: false, note: 'Original not found or expired.' } : { found: true, content }
     }
     case 'savings_stats': {
-      const { data } = await admin.from('usage_events')
+      const { data } = await selectAll<{ input_tokens_saved: number; baseline_cost_usd: number }>(() => admin.from('usage_events')
         .select('input_tokens_saved, baseline_cost_usd')
-        .eq('org_id', ctx.orgId).gte('created_at', since).gt('input_tokens_saved', 0)
+        .eq('org_id', ctx.orgId).gte('created_at', since).gt('input_tokens_saved', 0))
       const rows = data ?? []
       return {
         period_days: days,

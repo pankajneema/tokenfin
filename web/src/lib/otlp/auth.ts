@@ -29,11 +29,16 @@ export async function authOtlp(req: NextRequest): Promise<KeyCtx | null> {
   const keyHash = crypto.createHash('sha256').update(raw).digest('hex')
   const { data } = await createAdminClient()
     .from('api_keys')
-    .select('id, org_id, project_id, user_id, is_active, expires_at')
+    .select('id, org_id, project_id, user_id, is_active, expires_at, scopes')
     .eq('key_hash', keyHash)
     .maybeSingle()
 
   if (!data || !data.is_active) return null
   if (data.expires_at && new Date(data.expires_at) < new Date()) return null
+  // Ingest is a write: a read-only (e.g. MCP analytics) key must not be able to
+  // push usage. Legacy keys with no recorded scopes stay allowed, matching the
+  // SDK ingest route.
+  const scopes = (data.scopes as string[] | null) ?? []
+  if (scopes.length > 0 && !scopes.includes('write') && !scopes.includes('ingest')) return null
   return { orgId: data.org_id, projectId: data.project_id ?? null, keyId: data.id, userId: data.user_id ?? null }
 }

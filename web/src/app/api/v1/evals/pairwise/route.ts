@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/lib/api/auth'
 import { generate, judgePairwise } from '@/lib/eval/judge'
-import { resolveJudge } from '@/lib/eval/config'
+import { resolveJudge, ALLOWED_EVAL_MODELS } from '@/lib/eval/config'
 import { z } from 'zod'
 
 /* POST /api/v1/evals/pairwise — A/B two models on one prompt, judge the winner.
@@ -12,9 +12,9 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const schema = z.object({
     org_id:  z.string().uuid(),
-    prompt:  z.string().min(1),
-    model_a: z.string().min(1),
-    model_b: z.string().min(1),
+    prompt:  z.string().min(1).max(20_000),
+    model_a: z.enum(ALLOWED_EVAL_MODELS),
+    model_b: z.enum(ALLOWED_EVAL_MODELS),
     save_as: z.string().max(120).optional(),   // optional prompt name → saves a version
   })
   const parsed = schema.safeParse(body)
@@ -24,15 +24,17 @@ export async function POST(req: NextRequest) {
   const guard = await requirePermission(org_id, 'alerts:write')
   if (guard instanceof NextResponse) return guard
   const cfg = await resolveJudge(org_id)
-  if (!cfg.key) return NextResponse.json({ error: 'No eval key — set your provider key in Evals settings (or EVAL_JUDGE_KEY).' }, { status: 400 })
+  if (!cfg.key) return NextResponse.json({ error: 'No eval key — set your provider key in Evals settings.' }, { status: 400 })
 
   const admin = createAdminClient()
   let answerA = '', answerB = '', verdict
   try {
     ;[answerA, answerB] = await Promise.all([generate(cfg, model_a, prompt), generate(cfg, model_b, prompt)])
     verdict = await judgePairwise(cfg, prompt, answerA, answerB)
+    answerA = answerA.slice(0, 20_000); answerB = answerB.slice(0, 20_000)
   } catch (e) {
-    return NextResponse.json({ error: `pairwise failed: ${(e as Error).message}` }, { status: 502 })
+    console.error('[evals/pairwise] provider/judge error:', e)
+    return NextResponse.json({ error: 'pairwise evaluation failed' }, { status: 502 })
   }
 
   await admin.from('eval_scores').insert({

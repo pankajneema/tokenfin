@@ -674,7 +674,7 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
         {[
-          { label: 'Total budget capped', value: `$${(totalBudget / 1000).toFixed(1)}k / mo`, icon: Shield,        color: 'text-[var(--blue)]',  bg: 'bg-[var(--blue-bg)]'  },
+          { label: 'Total budget capped', value: `${fmtUsd(totalBudget)} / mo`, icon: Shield,        color: 'text-[var(--blue)]',  bg: 'bg-[var(--blue-bg)]'  },
           { label: 'Active limits',       value: activeCount.toString(),                       icon: Activity,      color: 'text-teal',            bg: 'bg-[var(--green-bg)]' },
           { label: 'At risk (>70%)',      value: atRisk.toString(),                            icon: AlertTriangle, color: 'text-[var(--amber)]',  bg: 'bg-[var(--amber-bg)]' },
           { label: 'Blocked scopes',      value: blocked.toString(),                           icon: Ban,           color: 'text-[var(--red)]',    bg: 'bg-[var(--red-bg)]'   },

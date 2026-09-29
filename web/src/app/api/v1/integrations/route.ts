@@ -3,6 +3,7 @@ import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
 import { requireOrgMember, requirePermission, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
+import { validateOutboundUrl }                        from '@/lib/notify/send'
 
 function db() { return createAdminClient() }
 
@@ -31,11 +32,11 @@ export async function GET(req: NextRequest) {
 
 /* POST /api/v1/integrations */
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     org_id:      z.string().uuid(),
     integration: z.string().min(1).max(64),
-    detail:      z.string().max(256).optional(),
+    detail:      z.string().max(256).nullable().optional(),
     config:      z.record(z.unknown()).optional(),
   })
   const parsed = schema.safeParse(body)
@@ -45,6 +46,17 @@ export async function POST(req: NextRequest) {
   if (guard instanceof NextResponse) return guard
 
   const { org_id, integration, detail, config } = parsed.data
+
+  // SSRF: any URL the alert engine may POST to must pass the same checks used
+  // at send time (https, Slack host allow-list, no private/reserved targets).
+  for (const field of ['webhook_url', 'url', 'endpoint'] as const) {
+    const v = config?.[field]
+    if (v === undefined || v === null || v === '') continue
+    if (typeof v !== 'string' || v.length > 2048)
+      return NextResponse.json({ error: `config.${field} must be a URL string` }, { status: 422 })
+    const check = await validateOutboundUrl(v.trim(), integration === 'slack' ? 'slack' : 'webhook')
+    if (!check.ok) return NextResponse.json({ error: `config.${field}: ${check.reason}` }, { status: 422 })
+  }
   const { data, error } = await db()
     .from('org_integrations')
     .upsert({
@@ -75,7 +87,7 @@ export async function DELETE(req: NextRequest) {
     .from('org_integrations')
     .delete()
     .eq('org_id', orgId!)
-    .eq('integration', integration)
+    .eq('provider', integration)
   if (error) return dbError(error, 'DELETE integrations')
   return NextResponse.json({ ok: true })
 }

@@ -39,9 +39,10 @@ func (c *Client) Close() error {
 
 // ─── API Key Cache ────────────────────────────────────────────────────────────
 
-const apiKeyCacheTTL = 5 * time.Minute
+// apiKeyCacheTTL bounds how long a revoked/expired/rescoped key keeps working.
+const apiKeyCacheTTL = 60 * time.Second
 
-// GetAPIKey returns the cached "orgID:projectID" for a hashed API key.
+// GetAPIKey returns the cached (auth-encoded) value for a hashed API key.
 // Returns ("", goredis.Nil) if not cached.
 func (c *Client) GetAPIKey(ctx context.Context, hash string) (string, error) {
 	return c.rdb.Get(ctx, apiKeyK(hash)).Result()
@@ -121,11 +122,19 @@ func (c *Client) SetLimit(ctx context.Context, orgID, metric string, value float
 
 const idempotencyTTL = 24 * time.Hour
 
-// SetIfNew returns true if this key was never seen before (first occurrence).
-// Returns false if the key already exists (duplicate — skip processing).
+// SetIfNew returns true if this idempotency key was never seen before for the
+// org (first occurrence). Returns false if it already exists (duplicate — skip).
+// Keys are scoped per org so two tenants can never collide on the same key.
 // Uses a fixed 24h TTL — for deduplicating ingest events.
-func (c *Client) SetIfNew(ctx context.Context, key string) (bool, error) {
-	return c.rdb.SetNX(ctx, "idem:"+key, 1, idempotencyTTL).Result()
+func (c *Client) SetIfNew(ctx context.Context, orgID, key string) (bool, error) {
+	return c.rdb.SetNX(ctx, idemK(orgID, key), 1, idempotencyTTL).Result()
+}
+
+// ReleaseIdem forgets an idempotency key — called when the event it guarded
+// was not accepted (limit hit, publish failed) so a client retry is not
+// silently dropped as a duplicate.
+func (c *Client) ReleaseIdem(ctx context.Context, orgID, key string) error {
+	return c.rdb.Del(ctx, idemK(orgID, key)).Err()
 }
 
 // SetIfNewTTL is like SetIfNew but with a caller-specified TTL.
@@ -136,7 +145,10 @@ func (c *Client) SetIfNewTTL(ctx context.Context, key string, ttl time.Duration)
 
 // ─── Key builders — single source of truth for Redis key names ───────────────
 
-func apiKeyK(hash string) string             { return "apikey:" + hash }
-func usageTokenK(orgID, month string) string { return fmt.Sprintf("org:%s:usage:tokens:%s", orgID, month) }
-func usageCostK(orgID, month string) string  { return fmt.Sprintf("org:%s:usage:cost:%s", orgID, month) }
-func limitK(orgID, metric string) string     { return fmt.Sprintf("org:%s:limit:%s", orgID, metric) }
+func apiKeyK(hash string) string     { return "apikey:" + hash }
+func idemK(orgID, key string) string { return fmt.Sprintf("idem:%s:%s", orgID, key) }
+func usageTokenK(orgID, month string) string {
+	return fmt.Sprintf("org:%s:usage:tokens:%s", orgID, month)
+}
+func usageCostK(orgID, month string) string { return fmt.Sprintf("org:%s:usage:cost:%s", orgID, month) }
+func limitK(orgID, metric string) string    { return fmt.Sprintf("org:%s:limit:%s", orgID, metric) }

@@ -4,6 +4,7 @@
  * (single rule). Server-only. Fail-open delivery (see notify/send).
  */
 import { sendEmail, sendSlack, sendWebhook } from '@/lib/notify/send'
+import { selectAll } from '@/lib/supabase/paginate'
 
 type Admin = ReturnType<typeof import('@/lib/supabase/server')['createAdminClient']>
 type Window = 'daily' | 'weekly' | 'monthly'
@@ -117,8 +118,35 @@ export function inCooldown(rule: AlertRule): boolean {
   return Date.now() - new Date(rule.last_fired_at).getTime() < hours * 3600_000
 }
 
-// Deliver a fired alert across the rule's channels + bump counters. Fail-open.
-export async function deliverAlert(admin: Admin, rule: AlertRule, ctx: OrgCtx, message: string, opts: { test?: boolean } = {}) {
+/**
+ * Atomically claim a firing slot for `rule`: bumps last_fired_at/fired_count ONLY
+ * if the rule is not in cooldown *in the database right now*. Postgres re-checks
+ * the WHERE clause under the row lock, so of two concurrent sweeps exactly one
+ * gets a row back. Returns true if this caller won the claim and should deliver.
+ * (fired_count is derived from the snapshot the caller read; the cooldown guard
+ * is what prevents double delivery.)
+ */
+export async function claimFire(admin: Admin, rule: AlertRule): Promise<boolean> {
+  const hours  = rule.cooldown_hours ?? 4
+  const cutoff = new Date(Date.now() - hours * 3600_000).toISOString()
+  const { data, error } = await admin
+    .from('alert_rules')
+    .update({ last_fired_at: new Date().toISOString(), fired_count: (rule.fired_count ?? 0) + 1 })
+    .eq('id', rule.id)
+    .or(`last_fired_at.is.null,last_fired_at.lt."${cutoff}"`)
+    .select('id')
+  if (error) throw error
+  return (data ?? []).length > 0
+}
+
+// Deliver a fired alert across the rule's channels. Fail-open.
+// Non-test deliveries must hold a claim (claimFire); if the caller hasn't
+// claimed already, we claim here and skip delivery when the claim is lost.
+export async function deliverAlert(admin: Admin, rule: AlertRule, ctx: OrgCtx, message: string, opts: { test?: boolean; claimed?: boolean } = {}) {
+  if (!opts.test && !opts.claimed) {
+    const won = await claimFire(admin, rule)
+    if (!won) return { skipped: 'cooldown' } as Record<string, unknown>
+  }
   const ch = rule.channels ?? {}
   const title = (opts.test ? '[Test] ' : '') + rule.name
   const results: Record<string, unknown> = {}
@@ -134,9 +162,6 @@ export async function deliverAlert(admin: Admin, rule: AlertRule, ctx: OrgCtx, m
   if (ch.slack) results.slack = await sendSlack(ctx.slackUrl, `:rotating_light: *${title}*\n${message}`)
   if (ch.webhook) results.webhook = await sendWebhook(ctx.webhookUrl, { rule: rule.name, org_id: ctx.orgId, message, test: !!opts.test, at: new Date().toISOString() })
 
-  if (!opts.test) {
-    await admin.from('alert_rules').update({ fired_count: (rule.fired_count ?? 0) + 1, last_fired_at: new Date().toISOString() }).eq('id', rule.id)
-  }
   return results
 }
 
@@ -145,11 +170,11 @@ export async function buildOrgCtx(admin: Admin, orgId: string, emailByUser: Map<
   const since = new Date(Date.now() - 31 * 86400_000).toISOString().slice(0, 10)
   const sinceTs = since + 'T00:00:00Z'
   const [{ data: events }, { data: members }, { data: limits }, { data: projects }, { data: integ }] = await Promise.all([
-    admin.from('usage_events').select('user_id, project_id, cost_usd, created_at').eq('org_id', orgId).gte('created_at', sinceTs),
+    selectAll(() => admin.from('usage_events').select('user_id, project_id, cost_usd, created_at').eq('org_id', orgId).gte('created_at', sinceTs)),
     admin.from('members').select('user_id, role').eq('org_id', orgId),
     admin.from('limits').select('scope, project_id, budget_usd, warn_at').eq('org_id', orgId).eq('is_active', true),
     admin.from('projects').select('id, name').eq('org_id', orgId),
-    admin.from('org_integrations').select('provider, config, detail, status').eq('org_id', orgId),
+    admin.from('org_integrations').select('provider, config, detail, status').eq('org_id', orgId).eq('is_active', true),
   ])
 
   const evs = (events ?? []) as { user_id: string | null; project_id: string | null; cost_usd: number; created_at: string }[]
@@ -173,8 +198,11 @@ export async function buildOrgCtx(admin: Admin, orgId: string, emailByUser: Map<
     const row = ((integ ?? []) as { provider: string; config: Record<string, unknown> | null; detail: string | null }[])
       .find(i => i.provider === provider)
     if (!row) return null
+    // Only the admin-configured config URL is used — never the free-text `detail`
+    // column. The URL is re-validated against SSRF rules at send time.
     const c = row.config ?? {}
-    return (c.webhook_url as string) || (c.url as string) || (c.endpoint as string) || row.detail || null
+    const url = [c.webhook_url, c.url, c.endpoint].find(v => typeof v === 'string' && v.trim())
+    return (url as string | undefined)?.trim() ?? null
   }
 
   return {

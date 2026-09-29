@@ -150,9 +150,9 @@ export function PromptsClient({
     })
   }, [patterns, sortKey, sortDir])
 
-  const coverageP = totalRequests > 0
-    ? Math.round((hashedRequests / totalRequests) * 100)
-    : 0
+  // One decimal below 1% so a handful of fingerprinted calls never reads as "0%".
+  const coverageRaw = totalRequests > 0 ? (hashedRequests / totalRequests) * 100 : 0
+  const coverageP = coverageRaw > 0 && coverageRaw < 1 ? +coverageRaw.toFixed(1) : Math.round(coverageRaw)
 
   const verboseCount = patterns.filter(p => (p.io_ratio ?? 0) > 3).length
   const slowCount    = patterns.filter(p => (p.avg_latency_ms ?? 0) > 3000).length

@@ -21,7 +21,7 @@ interface Props {
 const ROLE_BADGE: Record<string, string> = {
   owner:     'bg-[#8B5CF6]/10 text-[#8B5CF6]',
   admin:     'bg-[var(--blue-bg)] text-[var(--blue)]',
-  developer: 'bg-[var(--green-bg)] text-teal',
+  member:    'bg-[var(--green-bg)] text-teal',
   viewer:    'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]',
 }
 
@@ -106,7 +106,7 @@ export function TeamBreakdown({ memberRows, memberCount }: Props) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <p className="text-[12px] font-medium text-[var(--fg)] truncate leading-tight">{m.name}</p>
-                    {m.role !== 'developer' && (
+                    {m.role !== 'member' && (
                       <span className={cn('px-1.5 py-px rounded-full text-[9.5px] font-semibold capitalize flex-shrink-0',
                         ROLE_BADGE[m.role] ?? ROLE_BADGE.viewer)}>
                         {m.role}

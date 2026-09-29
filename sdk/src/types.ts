@@ -2,12 +2,12 @@
 
 /** Configuration for the TokenFin client. */
 export interface TokenFinConfig {
-  /** API key — starts with "tf_". Required. */
+  /** API key — starts with "tfk_". Required. */
   apiKey: string
 
   /**
    * Base URL of your TokenFin instance.
-   * @default "https://app.tokenfin.io"
+   * @default "https://tokenfin.curiousdevs.com"
    */
   baseUrl?: string
 

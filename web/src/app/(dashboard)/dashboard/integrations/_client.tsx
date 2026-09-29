@@ -11,7 +11,7 @@ import type { OrgIntegration } from './_types'
    CATALOG — 8 top integrations for LLM FinOps
    Selected by: category coverage, adoption rate, FinOps relevance
 ══════════════════════════════════════════════════════════════ */
-type Category = 'notifications' | 'observability' | 'data' | 'devtools' | 'billing'
+type Category = 'notifications' | 'observability' | 'data' | 'devtools'
 
 interface CatalogItem {
   id:        string
@@ -82,14 +82,6 @@ const CATALOG: CatalogItem[] = [
     keyLabel: 'Private Key', endpointLabel: 'Account Identifier', endpointPlaceholder: 'orgname-accountname',
   },
   {
-    id: 'stripe', name: 'Stripe', category: 'billing',
-    desc: 'Metered billing for internal chargeback. Bill teams per token consumed and generate invoices via Stripe.',
-    initials: 'ST', color: 'text-[#635BFF]', bg: 'bg-[#635BFF]/10', dot: '#635BFF',
-    features: ['Metered usage records', 'Subscriptions', 'Invoicing', 'Customer portal'],
-    docsUrl: '#', needsKey: true, needsEndpoint: false, isOAuth: false,
-    keyLabel: 'Stripe Secret Key (sk_live_…)',
-  },
-  {
     id: 'github-actions', name: 'GitHub Actions', category: 'devtools',
     desc: 'Official action to post CI cost summaries on PRs and block merges that exceed per-run token budgets.',
     initials: 'GA', color: 'text-[#24292E]', bg: 'bg-[#24292E]/10', dot: '#24292E',
@@ -104,7 +96,6 @@ const CATEGORY_META: Record<Category, { label: string; desc: string }> = {
   observability: { label: 'Observability',    desc: 'Metrics, traces & dashboards'},
   data:          { label: 'Data & Analytics', desc: 'Warehouses & BI'             },
   devtools:      { label: 'Dev Tools',        desc: 'CI/CD & engineering'         },
-  billing:       { label: 'Billing',          desc: 'Metered billing & invoicing' },
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -476,7 +467,7 @@ export function IntegrationsClient({ initialConnected, orgId }: Props) {
 
       {/* Category filter */}
       <div className="flex items-center gap-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl p-1 w-fit flex-wrap">
-        {(['all', 'notifications', 'observability', 'data', 'devtools', 'billing'] as const).map(cat => {
+        {(['all', 'notifications', 'observability', 'data', 'devtools'] as const).map(cat => {
           const count = cat === 'all' ? CATALOG.length : CATALOG.filter(i => i.category === cat).length
           const active = catFilter === cat
           return (

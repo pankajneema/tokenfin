@@ -8,7 +8,14 @@ import type { KeyCtx } from './types'
 // Accepts the key via (in order): Authorization: Bearer, x-api-key header, or a
 // ?key= / ?api_key= query param — the query form lets clients that can't set a
 // header (e.g. Claude's web custom connector) still authenticate.
-// Returns null on any failure (caller responds 401).
+// Returns null when the key is missing/unknown/inactive/expired (caller responds
+// 401). Throws AuthUnavailableError when the key lookup itself fails (DB/network)
+// so the caller can answer 503 — a transient outage must not look like a
+// revoked key to clients that drop credentials on 401.
+export class AuthUnavailableError extends Error {
+  constructor() { super('auth backend unavailable') }
+}
+
 export async function authenticate(req: NextRequest): Promise<KeyCtx | null> {
   const auth = req.headers.get('authorization') ?? ''
   const raw =
@@ -17,11 +24,15 @@ export async function authenticate(req: NextRequest): Promise<KeyCtx | null> {
     (req.nextUrl.searchParams.get('key') ?? req.nextUrl.searchParams.get('api_key') ?? '').trim()
   if (!raw) return null
   const keyHash = crypto.createHash('sha256').update(raw).digest('hex')
-  const { data } = await createAdminClient()
+  const { data, error } = await createAdminClient()
     .from('api_keys')
     .select('id, org_id, project_id, user_id, is_active, expires_at, scopes')
     .eq('key_hash', keyHash)
     .maybeSingle()
+  if (error) {
+    console.error('[mcp] api key lookup failed:', error.message)
+    throw new AuthUnavailableError()
+  }
   if (!data || !data.is_active) return null
   if (data.expires_at && new Date(data.expires_at) < new Date()) return null
   return {
@@ -31,6 +42,13 @@ export async function authenticate(req: NextRequest): Promise<KeyCtx | null> {
     userId: (data.user_id as string | null) ?? null,
     scopes: (data.scopes as string[] | null) ?? [],
   }
+}
+
+export function authUnavailable(): NextResponse {
+  return NextResponse.json(
+    { jsonrpc: '2.0', id: null, error: { code: -32002, message: 'Service temporarily unavailable' } },
+    { status: 503, headers: { 'Retry-After': '5' } },
+  )
 }
 
 export function unauthorized(): NextResponse {

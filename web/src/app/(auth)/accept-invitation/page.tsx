@@ -38,7 +38,7 @@ export default async function AcceptInvitationPage() {
   if (!invite) {
     const { data: members } = await admin
       .from('members').select('id').eq('user_id', user.id).limit(1)
-    redirect(members?.length ? '/dashboard' : '/plans')
+    redirect(members?.length ? '/dashboard' : '/welcome')
   }
 
   // Expired invite

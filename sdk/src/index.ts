@@ -7,7 +7,7 @@
  * ```ts
  * import { TokenFinClient } from '@tokenfin/sdk'
  *
- * const tf = new TokenFinClient({ apiKey: 'tf_live_...' })
+ * const tf = new TokenFinClient({ apiKey: 'tfk_prod_...' })
  *
  * // After any LLM call — fire-and-forget, never throws
  * tf.track({ model: 'gpt-4o', inputTokens: 800, outputTokens: 120 })

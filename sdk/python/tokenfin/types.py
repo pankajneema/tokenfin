@@ -12,9 +12,9 @@ class TokenFinConfig:
     """Configuration for the TokenFin client."""
 
     api_key: str
-    """API key — must start with 'tf_'. Required."""
+    """API key — must start with 'tfk_'. Required."""
 
-    base_url: str = "https://app.tokenfin.io"
+    base_url: str = "https://tokenfin.curiousdevs.com"
     """Base URL of your TokenFin instance. Override for self-hosted deployments."""
 
     timeout: float = 3.0

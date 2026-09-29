@@ -9,7 +9,7 @@
  * After exchanging the code for a session:
  *  - Password reset     → /reset-password
  *  - Invite acceptance  → /accept-invitation  (skip membership check — they have none yet)
- *  - New user, no org   → /plans
+ *  - New user, no org   → /welcome
  *  - Existing user      → `next` (default /dashboard)
  */
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
   const rawNext = searchParams.get('next') ?? '/dashboard'
   const next    = rawNext.startsWith('/') ? rawNext : '/dashboard'
 
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
   }
 
   // For new users (OAuth signup or email confirm), check if they have an org.
-  // If not, send them to /plans. Existing users go to `next` (/dashboard).
+  // If not, send them to /welcome. Existing users go to `next` (/dashboard).
   const userId = sessionData?.user?.id
   if (userId) {
     const admin = createAdminClient()
@@ -88,8 +88,8 @@ export async function GET(request: NextRequest) {
       .limit(1)
 
     if (!members || members.length === 0) {
-      console.log('[auth/callback] new user — no membership, redirecting to /plans')
-      return NextResponse.redirect(`${origin}/plans`)
+      console.log('[auth/callback] new user — no membership, redirecting to /welcome')
+      return NextResponse.redirect(`${origin}/welcome`)
     }
   }
 

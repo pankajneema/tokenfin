@@ -150,14 +150,28 @@ func (c *Consumer) processBatch(ctx context.Context, msgs []goredis.XMessage) {
 		return
 	}
 
-	// Write events — leave unACKed on failure so they retry
-	if err := c.db.BulkInsertEvents(ctx, events); err != nil {
-		c.log.Error("bulk insert failed — will retry", "count", len(events), "err", err)
-		return
+	// Write events — leave unACKed on transient failure so they retry.
+	written, allIDs := events, goodIDs
+	inserted, err := c.db.BulkInsertEvents(ctx, events)
+	if err != nil {
+		if !db.IsClientError(err) {
+			c.log.Error("bulk insert failed — will retry", "count", len(events), "err", err)
+			return
+		}
+		// 4xx: one bad row poisons the whole array insert. Retry row by row
+		// so only the failing rows are dead-lettered and good events land.
+		c.log.Warn("bulk insert rejected — isolating bad rows", "count", len(events), "err", err)
+		written, allIDs, inserted = c.insertIndividually(ctx, events, goodIDs, msgs)
+		if len(written) == 0 {
+			return
+		}
 	}
+	events, goodIDs = written, allIDs
 
-	// Upsert daily aggregates — non-fatal; reconciler corrects drift
-	if err := c.db.UpsertAgg(ctx, events); err != nil {
+	// Upsert daily aggregates only for rows actually inserted — duplicates
+	// (redeliveries / replayed idempotency keys) were skipped by the DB and
+	// must not be counted again. Non-fatal; reconciler corrects drift.
+	if err := c.db.UpsertAgg(ctx, inserted); err != nil {
 		c.log.Warn("agg upsert failed — reconciler will correct", "err", err)
 	}
 
@@ -165,7 +179,40 @@ func (c *Consumer) processBatch(ctx context.Context, msgs []goredis.XMessage) {
 		c.log.Error("ACK failed — messages may be redelivered", "count", len(goodIDs), "err", err)
 	}
 
-	c.log.Debug("batch written", "events", len(events), "acked", len(goodIDs))
+	c.log.Debug("batch written", "events", len(events), "inserted", len(inserted), "acked", len(goodIDs))
+}
+
+// insertIndividually inserts each event on its own. Rows rejected with a 4xx
+// go to the DLQ (which ACKs them); rows hit by a transient error are left
+// unACKed for redelivery. Returns the events/IDs that were written and still
+// need ACK, plus the subset that was newly inserted (needs agg upsert).
+func (c *Consumer) insertIndividually(ctx context.Context, events []*models.UsageEvent, ids []string, msgs []goredis.XMessage) ([]*models.UsageEvent, []string, []*models.UsageEvent) {
+	payloads := make(map[string]string, len(msgs))
+	for _, m := range msgs {
+		if p, ok := extractPayload(m); ok {
+			payloads[m.ID] = p
+		}
+	}
+
+	var okEvents, newEvents []*models.UsageEvent
+	var okIDs []string
+	for i, e := range events {
+		ins, err := c.db.BulkInsertEvents(ctx, []*models.UsageEvent{e})
+		switch {
+		case err == nil:
+			okEvents = append(okEvents, e)
+			okIDs = append(okIDs, ids[i])
+			newEvents = append(newEvents, ins...)
+		case db.IsClientError(err):
+			c.log.Error("event rejected by db — DLQ", "id", ids[i], "org_id", e.OrgID, "err", err)
+			if derr := c.redis.MoveToDLQ(ctx, ids[i], payloads[ids[i]], fmt.Sprintf("insert: %v", err)); derr != nil {
+				c.log.Error("DLQ move failed", "id", ids[i], "err", derr)
+			}
+		default:
+			c.log.Error("single insert failed — will retry", "id", ids[i], "err", err)
+		}
+	}
+	return okEvents, okIDs, newEvents
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

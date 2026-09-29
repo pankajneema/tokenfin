@@ -1,7 +1,8 @@
 import { NextResponse }                                          from 'next/server'
 import type { NextRequest }                                     from 'next/server'
 import { createAdminClient }                                    from '@/lib/supabase/server'
-import { requireOrgMember, requirePermission, requireResourceOwner, dbError } from '@/lib/api/auth'
+import { requireOrgMemberWithRole, requirePermission, assertOrgOwnsIds, dbError } from '@/lib/api/auth'
+import { can } from '@/lib/rbac'
 import crypto                                                    from 'crypto'
 import { sealKey }                                               from '@/lib/crypto/key-reveal'
 import { z }                                                     from 'zod'
@@ -26,18 +27,21 @@ function maskKey(raw: string): string {
   return `${head}_…${raw.slice(-4)}`
 }
 
-/* GET /api/v1/keys?org_id=xxx */
+/* GET /api/v1/keys?org_id=xxx
+   Owners/admins (keys:view) see every key in the org; members/viewers see only
+   the keys assigned to them (user_id = caller). */
 export async function GET(req: NextRequest) {
   const orgId = req.nextUrl.searchParams.get('org_id')
-  const guard = await requireOrgMember(orgId)
+  const guard = await requireOrgMemberWithRole(orgId)
   if (guard instanceof NextResponse) return guard
 
   // key_hash is NEVER selected — only key_prefix
-  const { data, error } = await db()
+  let q = db()
     .from('api_keys')
     .select('id, name, key_prefix, env, scopes, expires_at, is_active, last_used_at, created_at, created_by, user_id, project_id, projects(name)')
     .eq('org_id', orgId!)
-    .order('created_at', { ascending: false })
+  if (!can(guard.role, 'keys:view')) q = q.eq('user_id', guard.userId)
+  const { data, error } = await q.order('created_at', { ascending: false })
   if (error) return dbError(error, 'GET keys')
 
   const { data: authData } = await db().auth.admin.listUsers({ perPage: 1000 })
@@ -58,12 +62,12 @@ export async function GET(req: NextRequest) {
 
 /* POST /api/v1/keys */
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     org_id:     z.string().uuid(),
     project_id: z.string().uuid(),
     name:       z.string().min(1).max(64),
-    created_by: z.string().uuid(),
+    created_by: z.string().uuid().optional(),             // IGNORED — always the caller
     user_id:    z.string().uuid(),                        // team member — required
     team_id:    z.string().uuid().nullable().optional(),  // team attribution — optional
     env:        z.enum(['production', 'staging', 'development']).default('production'),
@@ -76,7 +80,13 @@ export async function POST(req: NextRequest) {
   const guard = await requirePermission(parsed.data.org_id, 'keys:create')
   if (guard instanceof NextResponse) return guard
 
-  const { org_id, project_id, name, created_by, user_id, team_id, env, scopes, expires_at } = parsed.data
+  const { org_id, project_id, name, user_id, team_id, env, scopes, expires_at } = parsed.data
+  const created_by = guard.userId   // never trust a client-supplied creator
+
+  // ── Validation: every referenced id must belong to this org ──
+  const bad = await assertOrgOwnsIds(org_id, { project_id, team_id, user_id })
+  if (bad) return bad
+
   const rawKey    = generateApiKey(project_id, env)
   const keyHash   = crypto.createHash('sha256').update(rawKey).digest('hex')
   const keyPrefix = maskKey(rawKey)   // store ONLY a masked display value — never the raw key
@@ -189,7 +199,7 @@ export async function POST(req: NextRequest) {
 
 /* PATCH /api/v1/keys — toggle is_active */
 export async function PATCH(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     id:        z.string().uuid(),
     is_active: z.boolean(),
@@ -204,7 +214,7 @@ export async function PATCH(req: NextRequest) {
   const guard = await requirePermission(keyRow.org_id, 'keys:toggle')
   if (guard instanceof NextResponse) return guard
 
-  const { error } = await db().from('api_keys').update({ is_active: parsed.data.is_active }).eq('id', parsed.data.id)
+  const { error } = await db().from('api_keys').update({ is_active: parsed.data.is_active }).eq('id', parsed.data.id).eq('org_id', keyRow.org_id)
   if (error) return dbError(error, 'PATCH keys')
   return NextResponse.json({ ok: true })
 }
@@ -218,7 +228,7 @@ export async function DELETE(req: NextRequest) {
   const guard = await requirePermission(keyRow.org_id, 'keys:delete')
   if (guard instanceof NextResponse) return guard
 
-  const { error } = await db().from('api_keys').delete().eq('id', id!)
+  const { error } = await db().from('api_keys').delete().eq('id', id!).eq('org_id', keyRow.org_id)
   if (error) return dbError(error, 'DELETE keys')
   return NextResponse.json({ ok: true })
 }

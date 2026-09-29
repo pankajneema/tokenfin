@@ -48,8 +48,8 @@ export default function TermsPage() {
             body: 'Your use of the Service is also governed by our Privacy Policy. By using TokenFin, you consent to the collection and use of data as described therein.',
           },
           {
-            title: '6. Billing & Subscriptions',
-            body: 'Paid plans are billed monthly or annually. You may cancel at any time; access continues until the end of the current billing period. We do not offer refunds for partial periods.',
+            title: '6. Pricing',
+            body: 'TokenFin is free to use with unlimited monitoring. There are no paid plans, usage caps or charges. If this ever changes, we will give you advance notice and nothing will be charged without your explicit consent.',
           },
           {
             title: '7. Intellectual Property',

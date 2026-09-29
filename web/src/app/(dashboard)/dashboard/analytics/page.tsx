@@ -12,6 +12,9 @@ import { fetchAllRows } from '@/lib/supabase/paginate'
  * No tags / unknown → "Direct API"
  * ─────────────────────────────────────────────────────────────── */
 const PLATFORM_COLORS: Record<string, string> = {
+  'Claude Code':     '#E8533A',
+  'Gemini CLI':      '#4285F4',
+  'OpenCode':        '#0EA5E9',
   'Codex':           '#00C48C',
   'Claude CLI':      '#E8533A',
   'Claude Web':      '#8B5CF6',
@@ -23,7 +26,18 @@ const PLATFORM_COLORS: Record<string, string> = {
   'Proxy':           '#94A3B8',
 }
 
-function detectPlatform(tags: Record<string, string> | null): string {
+// usage_events.source values written by the OTLP receiver (lib/otlp/mapping.ts).
+const SOURCE_PLATFORM: Record<string, string> = {
+  claude_code: 'Claude Code',
+  codex_cli:   'Codex',
+  gemini_cli:  'Gemini CLI',
+  opencode:    'OpenCode',
+  sdk:         'SDK',
+  mcp:         'MCP',
+}
+
+function detectPlatform(tags: Record<string, string> | null, eventSource?: string | null): string {
+  if (eventSource && SOURCE_PLATFORM[eventSource]) return SOURCE_PLATFORM[eventSource]
   if (!tags) return 'Direct API'
   const source = tags.source ?? ''
   const tool   = tags.tool   ?? ''
@@ -55,7 +69,8 @@ function fmtDay(iso: string) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export default async function AnalyticsPage({ searchParams }: { searchParams?: { days?: string; from?: string; to?: string } }) {
+export default async function AnalyticsPage({ searchParams: searchParamsPromise }: { searchParams?: Promise<{ days?: string; from?: string; to?: string }> }) {
+  const searchParams = await searchParamsPromise
   const supabase = createClient()
   const admin    = createAdminClient()
 
@@ -106,10 +121,10 @@ export default async function AnalyticsPage({ searchParams }: { searchParams?: {
       .select('bucket,model,project_id,total_tokens,cost_usd')
       .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
     fetchAllRows((from, to) => admin.from('usage_events')
-      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis')
+      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis,source')
       .eq('org_id', orgId).gte('created_at', since30).lt('created_at', endIso).range(from, to)),
     fetchAllRows((from, to) => admin.from('usage_events')
-      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis')
+      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis,source')
       .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30).range(from, to)),
     admin.from('projects').select('id,name').eq('org_id', orgId),
     admin.from('api_keys').select('id,name,project_id').eq('org_id', orgId).eq('is_active', true),
@@ -329,7 +344,7 @@ export default async function AnalyticsPage({ searchParams }: { searchParams?: {
   const sourceMap = new Map<string, { calls: number; tokens: number; cost: number }>()
   for (const r of evts ?? []) {
     const tags     = (r as Record<string,unknown>).tags as Record<string,string> | null
-    const platform = detectPlatform(tags)
+    const platform = detectPlatform(tags, (r as Record<string,unknown>).source as string | null)
     const entry    = sourceMap.get(platform) ?? { calls: 0, tokens: 0, cost: 0 }
     entry.calls  += 1
     entry.tokens += Number(r.total_tokens ?? 0)

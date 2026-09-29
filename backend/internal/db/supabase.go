@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/tokenfin/backend/internal/models"
@@ -73,10 +76,10 @@ func (c *Client) LoadActiveLimits(ctx context.Context) ([]*OrgLimit, error) {
 func (c *Client) InsertNotification(ctx context.Context, orgID, title, body, notifType string) error {
 	url := c.baseURL + "/rest/v1/notifications"
 	payload := map[string]any{
-		"org_id": orgID,
-		"title":  title,
-		"body":   body,
-		"type":   notifType, // "warn" | "block"
+		"org_id":  orgID,
+		"title":   title,
+		"body":    body,
+		"type":    notifType, // "warn" | "block"
 		"is_read": false,
 	}
 	if err := c.post(ctx, url, payload); err != nil {
@@ -87,18 +90,20 @@ func (c *Client) InsertNotification(ctx context.Context, orgID, title, body, not
 
 // ─── API Keys ─────────────────────────────────────────────────────────────────
 
-// LookupAPIKey finds org_id + project_id for a given key hash.
-// Returns (nil, nil) if not found — not an error.
+// LookupAPIKey finds org_id, project_id, scopes and expiry for a key hash.
+// Returns (nil, nil) if not found — not an error. project_id may be "" for
+// org-wide keys; callers resolve a project with FirstProjectID.
 func (c *Client) LookupAPIKey(ctx context.Context, hash string) (*models.APIKey, error) {
 	url := fmt.Sprintf(
-		"%s/rest/v1/api_keys?key_hash=eq.%s&is_active=eq.true&select=org_id,project_id,scopes&limit=1",
-		c.baseURL, hash,
+		"%s/rest/v1/api_keys?key_hash=eq.%s&is_active=eq.true&select=org_id,project_id,scopes,expires_at&limit=1",
+		c.baseURL, url.QueryEscape(hash),
 	)
 
 	var rows []struct {
-		OrgID     string   `json:"org_id"`
-		ProjectID string   `json:"project_id"`
-		Scopes    []string `json:"scopes"`
+		OrgID     string     `json:"org_id"`
+		ProjectID *string    `json:"project_id"`
+		Scopes    []string   `json:"scopes"`
+		ExpiresAt *time.Time `json:"expires_at"`
 	}
 
 	if err := c.get(ctx, url, &rows); err != nil {
@@ -108,26 +113,113 @@ func (c *Client) LookupAPIKey(ctx context.Context, hash string) (*models.APIKey,
 		return nil, nil
 	}
 
-	return &models.APIKey{
+	key := &models.APIKey{
 		OrgID:     rows[0].OrgID,
-		ProjectID: rows[0].ProjectID,
 		Scopes:    rows[0].Scopes,
-	}, nil
+		ExpiresAt: rows[0].ExpiresAt,
+	}
+	if rows[0].ProjectID != nil {
+		key.ProjectID = *rows[0].ProjectID
+	}
+	return key, nil
+}
+
+// FirstProjectID returns the org's oldest project id, or "" if it has none.
+// usage_events.project_id is NOT NULL, so keys without a project fall back to
+// this (same rule as the web direct-ingest route).
+func (c *Client) FirstProjectID(ctx context.Context, orgID string) (string, error) {
+	u := fmt.Sprintf(
+		"%s/rest/v1/projects?org_id=eq.%s&select=id&order=created_at.asc&limit=1",
+		c.baseURL, url.QueryEscape(orgID),
+	)
+	var rows []struct {
+		ID string `json:"id"`
+	}
+	if err := c.get(ctx, u, &rows); err != nil {
+		return "", fmt.Errorf("first project lookup: %w", err)
+	}
+	if len(rows) == 0 {
+		return "", nil
+	}
+	return rows[0].ID, nil
 }
 
 // ─── Usage Events ─────────────────────────────────────────────────────────────
 
 // BulkInsertEvents writes a batch of events in a single HTTP call.
-// Supabase accepts an array for bulk insert.
-func (c *Client) BulkInsertEvents(ctx context.Context, events []*models.UsageEvent) error {
+// Supabase accepts an array for bulk insert. Rows whose event_id already exists
+// are skipped (ON CONFLICT (event_id) DO NOTHING), so stream redeliveries and
+// replays of the same idempotency key never double-insert.
+//
+// It returns only the events that were actually inserted (PostgREST returns
+// the inserted rows and omits the skipped duplicates), so callers aggregate
+// into usage_agg exactly once per event.
+//
+// A 4xx response is returned as *HTTPError (see IsClientError) so the caller
+// can isolate the bad row instead of failing the whole batch.
+func (c *Client) BulkInsertEvents(ctx context.Context, events []*models.UsageEvent) ([]*models.UsageEvent, error) {
 	if len(events) == 0 {
-		return nil
+		return nil, nil
 	}
-	url := c.baseURL + "/rest/v1/usage_events"
-	if err := c.postArray(ctx, url, events); err != nil {
-		return fmt.Errorf("bulk insert events: %w", err)
+	for _, e := range events {
+		normalizeEvent(e)
 	}
-	return nil
+	url := c.baseURL + "/rest/v1/usage_events?on_conflict=event_id&select=id,event_id"
+	var returned []InsertedRow
+	if err := c.sendDecode(ctx, http.MethodPost, url, events, "resolution=ignore-duplicates,return=representation", &returned); err != nil {
+		return nil, fmt.Errorf("bulk insert events: %w", err)
+	}
+	return FilterInserted(events, returned), nil
+}
+
+// InsertedRow is one row PostgREST returned from an insert.
+type InsertedRow struct {
+	ID      string  `json:"id"`
+	EventID *string `json:"event_id"`
+}
+
+// FilterInserted keeps the events that appear in the returned (inserted) rows,
+// matched by event_id. Events without an event_id cannot be skipped by the
+// ON CONFLICT (event_id) arbiter, so they are always new.
+func FilterInserted(events []*models.UsageEvent, returned []InsertedRow) []*models.UsageEvent {
+	inserted := make(map[string]struct{}, len(returned))
+	for _, r := range returned {
+		if r.EventID != nil {
+			inserted[*r.EventID] = struct{}{}
+		}
+	}
+	out := make([]*models.UsageEvent, 0, len(events))
+	for _, e := range events {
+		if e.EventID == nil || *e.EventID == "" {
+			out = append(out, e)
+			continue
+		}
+		if _, ok := inserted[*e.EventID]; ok {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// normalizeEvent fills NOT NULL JSONB columns so every object in a bulk
+// payload has identical keys and valid values, and gives keyless events an
+// event_id derived from their stream-assigned id ("ingest:{id}") so a stream
+// redelivery is skipped by ON CONFLICT (event_id) instead of hitting the
+// primary key and failing the batch.
+func normalizeEvent(e *models.UsageEvent) {
+	if (e.EventID == nil || *e.EventID == "") && e.ID != "" {
+		id := "ingest:" + e.ID
+		e.EventID = &id
+	}
+	if e.Tags == nil {
+		e.Tags = map[string]string{}
+	}
+	if e.Metadata == nil {
+		e.Metadata = map[string]any{}
+	}
+	if e.Optimizations == nil {
+		e.Optimizations = map[string]any{}
+	}
 }
 
 // ─── Usage Aggregates ─────────────────────────────────────────────────────────
@@ -137,7 +229,7 @@ type aggRow struct {
 	OrgID        string  `json:"p_org_id"`
 	ProjectID    string  `json:"p_project_id"`
 	Model        string  `json:"p_model"`
-	Bucket       string  `json:"p_bucket"`       // YYYY-MM-DD
+	Bucket       string  `json:"p_bucket"` // YYYY-MM-DD
 	TotalTokens  int     `json:"p_tokens"`
 	CostUSD      float64 `json:"p_cost"`
 	RequestCount int     `json:"p_requests"`
@@ -175,7 +267,11 @@ func (c *Client) UpsertAgg(ctx context.Context, events []*models.UsageEvent) err
 		agg[k].CostUSD += e.CostUSD
 		agg[k].RequestCount++
 		agg[k].TokensSaved += e.InputTokensSaved + e.OutputTokensSaved
-		agg[k].CostSaved += e.BaselineCostUSD - e.CostUSD
+		// Only events with a real baseline carry savings; a zero baseline
+		// (plain ingest path) would otherwise record negative savings.
+		if e.BaselineCostUSD > 0 {
+			agg[k].CostSaved += e.BaselineCostUSD - e.CostUSD
+		}
 		if e.WasHoldout {
 			agg[k].HoldoutCount++
 		}
@@ -207,20 +303,20 @@ func (c *Client) GetAggCostSum(ctx context.Context, orgID, month string) (float6
 	}
 
 	url := fmt.Sprintf(
-		"%s/rest/v1/usage_agg?org_id=eq.%s&bucket=gte.%s&bucket=lt.%s&select=cost_usd",
+		"%s/rest/v1/usage_agg?org_id=eq.%s&bucket=gte.%s&bucket=lt.%s&select=cost_usd&order=bucket.asc,project_id.asc,model.asc",
 		c.baseURL, orgID, start, end,
 	)
 
-	var rows []struct {
-		CostUSD float64 `json:"cost_usd"`
-	}
-	if err := c.get(ctx, url, &rows); err != nil {
-		return 0, fmt.Errorf("get agg cost sum: %w", err)
-	}
-
 	var sum float64
-	for _, r := range rows {
-		sum += r.CostUSD
+	err = getAllPages(ctx, c, url, func(rows []struct {
+		CostUSD float64 `json:"cost_usd"`
+	}) {
+		for _, r := range rows {
+			sum += r.CostUSD
+		}
+	})
+	if err != nil {
+		return 0, fmt.Errorf("get agg cost sum: %w", err)
 	}
 	return math.Round(sum*1e8) / 1e8, nil
 }
@@ -236,20 +332,20 @@ func (c *Client) GetAggTokenSum(ctx context.Context, orgID, month string) (int64
 	}
 
 	url := fmt.Sprintf(
-		"%s/rest/v1/usage_agg?org_id=eq.%s&bucket=gte.%s&bucket=lt.%s&select=total_tokens",
+		"%s/rest/v1/usage_agg?org_id=eq.%s&bucket=gte.%s&bucket=lt.%s&select=total_tokens&order=bucket.asc,project_id.asc,model.asc",
 		c.baseURL, orgID, start, end,
 	)
 
-	var rows []struct {
-		TotalTokens int64 `json:"total_tokens"`
-	}
-	if err := c.get(ctx, url, &rows); err != nil {
-		return 0, fmt.Errorf("get agg sum: %w", err)
-	}
-
 	var sum int64
-	for _, r := range rows {
-		sum += r.TotalTokens
+	err = getAllPages(ctx, c, url, func(rows []struct {
+		TotalTokens int64 `json:"total_tokens"`
+	}) {
+		for _, r := range rows {
+			sum += r.TotalTokens
+		}
+	})
+	if err != nil {
+		return 0, fmt.Errorf("get agg sum: %w", err)
 	}
 	return sum, nil
 }
@@ -290,6 +386,71 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
 
+// HTTPError is a non-2xx response from Supabase.
+type HTTPError struct {
+	Method string
+	Status int
+	Body   string
+}
+
+func (e *HTTPError) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("%s → %d: %s", e.Method, e.Status, e.Body)
+	}
+	return fmt.Sprintf("%s → %d", e.Method, e.Status)
+}
+
+// IsClientError reports whether err wraps a 4xx Supabase response — a
+// data/request error that will fail identically on retry.
+func IsClientError(err error) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && he.Status >= 400 && he.Status < 500
+}
+
+// pageSize is the PostgREST page we request; the server's max-rows (default
+// 1000) may cap it lower, which getAllPages tolerates.
+const pageSize = 1000
+
+// getAllPages GETs every row of a (stably ordered) query using Range headers,
+// calling fn for each page. It stops on the first empty page, so a server-side
+// max-rows smaller than pageSize can never truncate the result.
+func getAllPages[T any](ctx context.Context, c *Client, url string, fn func([]T)) error {
+	for from := 0; ; {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		c.setHeaders(req)
+		req.Header.Set("Range-Unit", "items")
+		req.Header.Set("Range", fmt.Sprintf("%d-%d", from, from+pageSize-1))
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("GET: %w", err)
+		}
+		// 416 = requested range starts past the end → done.
+		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			resp.Body.Close()
+			return nil
+		}
+		if resp.StatusCode >= 400 {
+			resp.Body.Close()
+			return &HTTPError{Method: "GET", Status: resp.StatusCode}
+		}
+		var rows []T
+		err = json.NewDecoder(resp.Body).Decode(&rows)
+		resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("decode page: %w", err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		fn(rows)
+		from += len(rows)
+	}
+}
+
 func (c *Client) get(ctx context.Context, url string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -304,13 +465,13 @@ func (c *Client) get(ctx context.Context, url string, out any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("GET %s → %d", url, resp.StatusCode)
+		return &HTTPError{Method: "GET", Status: resp.StatusCode}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func (c *Client) post(ctx context.Context, url string, body any) error {
-	return c.send(ctx, http.MethodPost, url, body)
+	return c.send(ctx, http.MethodPost, url, body, "return=minimal")
 }
 
 // ModelRoute is an active eval-informed routing rule (migration 021).
@@ -352,10 +513,16 @@ func (c *Client) InsertPromptCapture(ctx context.Context, p *PromptCapture) erro
 
 // postArray sends an array body — used for bulk inserts.
 func (c *Client) postArray(ctx context.Context, url string, body any) error {
-	return c.send(ctx, http.MethodPost, url, body)
+	return c.send(ctx, http.MethodPost, url, body, "return=minimal")
 }
 
-func (c *Client) send(ctx context.Context, method, url string, body any) error {
+// send issues a write with the given PostgREST Prefer header.
+func (c *Client) send(ctx context.Context, method, url string, body any, prefer string) error {
+	return c.sendDecode(ctx, method, url, body, prefer, nil)
+}
+
+// sendDecode is send that JSON-decodes a 2xx response body into out (if non-nil).
+func (c *Client) sendDecode(ctx context.Context, method, url string, body any, prefer string, out any) error {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
@@ -380,21 +547,33 @@ func (c *Client) send(ctx context.Context, method, url string, body any) error {
 		}
 		c.setHeaders(req)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Prefer", "return=minimal") // skip response body — faster
+		req.Header.Set("Prefer", prefer)
 
 		resp, err := c.http.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("%s: %w", method, err)
 			continue // network error — retry
 		}
+		var errBody []byte
+		if resp.StatusCode >= 400 {
+			errBody, _ = io.ReadAll(io.LimitReader(resp.Body, 512))
+		} else if out != nil {
+			derr := json.NewDecoder(resp.Body).Decode(out)
+			resp.Body.Close()
+			if derr != nil {
+				return fmt.Errorf("%s: decode response: %w", method, derr)
+			}
+			return nil // success
+		}
 		resp.Body.Close()
 
 		if resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("%s %s → %d", method, url, resp.StatusCode)
+			lastErr = &HTTPError{Method: method, Status: resp.StatusCode, Body: string(errBody)}
 			continue // server error — retry
 		}
 		if resp.StatusCode >= 400 {
-			return fmt.Errorf("%s %s → %d", method, url, resp.StatusCode) // client error — fail fast
+			// client error — fail fast (never retried)
+			return &HTTPError{Method: method, Status: resp.StatusCode, Body: string(errBody)}
 		}
 		return nil // success
 	}

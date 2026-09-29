@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
-import { requireOrgMember, dbError } from '@/lib/api/auth'
+import { requirePermission, dbError } from '@/lib/api/auth'
+import { z } from 'zod'
 
 function db() { return createAdminClient() }
 
@@ -11,11 +12,14 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { name, slug, plan } = await req.json()
-  if (!name || !slug)
-    return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
-
-  const validPlan = ['free', 'team', 'pro', 'enterprise'].includes(plan) ? plan : 'free'
+  const body = await req.json().catch(() => null)
+  const schema = z.object({
+    name: z.string().trim().min(1).max(100),
+    slug: z.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/),
+  })  // unknown keys (e.g. legacy `plan`, `owner_id`) are stripped — billing plans are gone
+  const parsed = schema.safeParse(body)
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
+  const { name, slug } = parsed.data
 
   // If user already has a membership, just return their existing org
   const { data: existingMember } = await db()
@@ -46,7 +50,7 @@ export async function POST(req: NextRequest) {
   // Create org
   const { data: org, error: orgError } = await db()
     .from('organizations')
-    .insert({ name, slug, plan: validPlan, owner_id: user.id })
+    .insert({ name, slug, owner_id: user.id })   // plan column keeps its DB default
     .select()
     .single()
 
@@ -64,29 +68,41 @@ export async function POST(req: NextRequest) {
     console.error('[POST /api/v1/orgs] member insert failed:', memberError)
     // Roll back org (best-effort)
     await db().from('organizations').delete().eq('id', org.id)
-    return NextResponse.json(
-      { error: `Failed to create membership: ${memberError.message}` },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Failed to create membership' }, { status: 500 })
   }
 
   console.log('[POST /api/v1/orgs] org+member created successfully', org.id, user.id)
   return NextResponse.json(org, { status: 201 })
 }
 
-/* PATCH /api/v1/orgs — update org settings (e.g. plan)
-   Body: { org_id, plan } */
+/* PATCH /api/v1/orgs — update org settings. Owner only.
+   Body: { org_id, name?, slug? }  (`plan` is no longer accepted — billing removed) */
 export async function PATCH(req: NextRequest) {
-  const { org_id, plan } = await req.json()
-  if (!org_id || !plan)
-    return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
+  const body = await req.json().catch(() => null)
+  const schema = z.object({
+    org_id: z.string().uuid(),
+    name:   z.string().trim().min(1).max(100).optional(),
+    slug:   z.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/).optional(),
+  }).strict()
+  const parsed = schema.safeParse(body)
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireOrgMember(org_id)
+  const { org_id, ...fields } = parsed.data
+  if (Object.keys(fields).length === 0)
+    return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
+
+  const guard = await requirePermission(org_id, 'org:edit')
   if (guard instanceof NextResponse) return guard
+
+  if (fields.slug) {
+    const { data: clash } = await db()
+      .from('organizations').select('id').eq('slug', fields.slug).neq('id', org_id).maybeSingle()
+    if (clash) return NextResponse.json({ error: 'Slug already taken' }, { status: 409 })
+  }
 
   const { data, error } = await db()
     .from('organizations')
-    .update({ plan })
+    .update(fields)
     .eq('id', org_id)
     .select()
     .single()

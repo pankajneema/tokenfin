@@ -1,13 +1,13 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { User, CreditCard, Bell } from 'lucide-react'
+import { User, Database, Bell } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const TABS = [
   { href: '/dashboard/settings/profile',        icon: User,       label: 'Profile',       desc: 'Account & personal info'     },
-  { href: '/dashboard/settings/billing',        icon: CreditCard, label: 'Billing',       desc: 'Plan, usage & invoices'      },
   { href: '/dashboard/settings/notifications',  icon: Bell,       label: 'Notifications', desc: 'Alerts & communication prefs'},
+  { href: '/dashboard/settings/data',           icon: Database,   label: 'Data',          desc: 'Retention & data deletion'   },
 ]
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
@@ -19,7 +19,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
       {/* Page header */}
       <div>
         <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Settings</h1>
-        <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Manage your account, plan and notification preferences</p>
+        <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Manage your account, notifications and data</p>
       </div>
 
       <div className="flex gap-6 items-start">

@@ -10,8 +10,8 @@ import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { authOtlp } from '@/lib/otlp/auth'
 import { readOtlp } from '@/lib/otlp/decode'
-import { normalizeLogs } from '@/lib/otlp/normalize'
-import { persistRows } from '@/lib/otlp/persist'
+import { normalizeLogs, normalizePrompts } from '@/lib/otlp/normalize'
+import { persistRows, persistPrompts } from '@/lib/otlp/persist'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
     const admin = createAdminClient()
     const rows = normalizeLogs(body, ctx)
     const res = await persistRows(admin, ctx, rows)
+    await persistPrompts(admin, ctx, normalizePrompts(body))
     if (res.inserted || res.duplicate) {
       console.log(`[otlp/logs] org=${ctx.orgId} inserted=${res.inserted} duplicate=${res.duplicate}`)
     }

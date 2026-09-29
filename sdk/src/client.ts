@@ -1,7 +1,7 @@
 import { TokenFinConfig, TrackEvent, FlushResult, IngestPayload } from './types'
 import { uuidV4, sleep, backoffMs } from './utils'
 
-const DEFAULT_BASE_URL       = 'https://app.tokenfin.io'
+const DEFAULT_BASE_URL       = 'https://tokenfin.curiousdevs.com'
 const DEFAULT_TIMEOUT_MS     = 3_000
 const DEFAULT_FLUSH_INTERVAL = 1_000
 const DEFAULT_BATCH_SIZE     = 50
@@ -23,7 +23,7 @@ const CB_COOLDOWN  = 60_000 // 60s open before half-open probe
  * timer and on process/page exit.
  *
  * ```ts
- * const tf = new TokenFinClient({ apiKey: 'tf_live_...' })
+ * const tf = new TokenFinClient({ apiKey: 'tfk_prod_...' })
  *
  * // After your LLM call — synchronous, non-blocking
  * tf.track({ model: 'gpt-4o', inputTokens: 800, outputTokens: 120 })

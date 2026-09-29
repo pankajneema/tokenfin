@@ -114,7 +114,9 @@ export async function deriveMetricEvents(body: any, ctx: KeyCtx, state: MetricSt
     // not additive on top. Pricing them again here would double-count the cached
     // portion, so only input_tokens/output_tokens go into the cost calc; cache/
     // reasoning columns are still stored for an accurate breakdown display.
-    const cost = computeCost(g.model, t.input_tokens, t.output_tokens)
+    // Cached input is a subset of input_tokens: bill that part at the cached rate.
+    const cached = Math.min(t.cache_read_tokens, t.input_tokens)
+    const cost = computeCost(g.model, t.input_tokens - cached, t.output_tokens, cached)
     rows.push({
       event_id: sha(`${g.source}|${g.correlation ?? ''}|${g.model}|${g.timeNano}`),
       ts, source: g.source, provider_request_id: null, correlation_id: g.correlation, model: g.model,

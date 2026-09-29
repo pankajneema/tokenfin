@@ -1,14 +1,14 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { SavingsClient } from './_client'
+import { outputPrice as outPrice } from '@/lib/mcp/pricing'
+import { selectAll } from '@/lib/supabase/paginate'
 
 export const metadata = { title: 'Savings — TokenFin' }
 
-// Output price per 1M tokens — used to value measured output-token savings.
-const OUT_PRICE: Record<string, number> = {
-  'claude-opus-4-8': 75, 'claude-sonnet-4-6': 15, 'claude-haiku-4-5': 4,
-  'gpt-4o': 10, 'gpt-4o-mini': 0.6, 'gemini-1.5-pro': 5, 'gemini-1.5-flash': 0.3,
+type SavingsRow = {
+  model: string; cost_usd: number | null; baseline_cost_usd: number | null; input_tokens_saved: number | null
+  output_tokens: number | null; was_holdout: boolean | null; created_at: string
 }
-const outPrice = (m: string) => OUT_PRICE[m] ?? 8
 
 export interface DayPoint { day: string; saved: number }
 
@@ -24,13 +24,12 @@ export default async function SavingsPage() {
 
   const since = new Date(Date.now() - 30 * 864e5).toISOString()
   // Gateway-sourced events carry the savings columns.
-  const { data: events } = await admin
+  const { data: events } = await selectAll<SavingsRow>(() => admin
     .from('usage_events')
     .select('model, cost_usd, baseline_cost_usd, input_tokens_saved, output_tokens, was_holdout, created_at')
     .eq('org_id', orgId)
     .gte('created_at', since)
-    .or('was_holdout.eq.true,baseline_cost_usd.gt.0,input_tokens_saved.gt.0')
-    .limit(100_000)
+    .or('was_holdout.eq.true,baseline_cost_usd.gt.0,input_tokens_saved.gt.0'))
 
   const rows = events ?? []
   const optimized = rows.filter(r => !r.was_holdout)
@@ -66,7 +65,11 @@ export default async function SavingsPage() {
     days.push({ day: d, saved: +(byDay.get(d) ?? 0).toFixed(4) })
   }
 
-  const actualCost = optimized.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  // Rate is measured against everything the org actually spent in the window,
+  // not just the savings rows (compress rows carry $0 cost, which made it 100%).
+  const { data: spendRows } = await selectAll<{ cost_usd: number | null }>(() => admin
+    .from('usage_events').select('cost_usd').eq('org_id', orgId).gte('created_at', since))
+  const actualCost = spendRows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
   const totalCostSaved = inputCostSaved + outputCostSaved
   const savingsRate = actualCost + totalCostSaved > 0 ? totalCostSaved / (actualCost + totalCostSaved) : 0
 

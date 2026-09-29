@@ -65,7 +65,7 @@ prevMap.set(shifted, prev + cost)
 
 | Table | Key columns | Used by |
 |---|---|---|
-| `orgs` | `id, name, slug, plan` | billing settings, onboarding |
+| `organizations` | `id, name, slug, retention_days` | onboarding, Settings → Data (TokenFin is free and unlimited — `plan` is unused) |
 | `projects` | `id, org_id, name, slug` | projects page, analytics, dashboard |
 | `members` | `id, org_id, user_id, role` | teams page, analytics/projects |
 | `teams` | `id, org_id, name` | limits page (scope), teams page |
@@ -169,7 +169,7 @@ tool and would force us to hold customer provider keys. Savings columns (migrati
 ```
 /login, /signup               → supabase.auth
 /onboarding                   → orgs + projects + members
-/plans                        → orgs.plan
+/welcome                      → creates the workspace (no plans)
 
 /dashboard                    ← SERVER (page.tsx)
   usage_events (30d + prev30d) → KPI cards, real trend %, sparklines
@@ -226,7 +226,7 @@ tool and would force us to hold customer provider keys. Savings columns (migrati
 
 /dashboard/settings/profile       ← SERVER (supabase.auth.getUser)
 /dashboard/settings/notifications ← SERVER (user_preferences table)
-/dashboard/settings/billing       ← SERVER (orgs.plan)
+/dashboard/settings/data          ← SERVER + /api/v1/data (retention & deletion)
 ```
 
 ---
@@ -259,7 +259,7 @@ tokenfin/                         ← root (control plane only)
 │   │   │   │       └── settings/
 │   │   │   │           ├── profile/{page,_client}.tsx
 │   │   │   │           ├── notifications/{page,_client}.tsx
-│   │   │   │           └── billing/{page,_client}.tsx
+│   │   │   │           └── data/{page,_client}.tsx
 │   │   │   └── api/v1/           All REST API routes
 │   │   ├── components/
 │   │   │   ├── dashboard/        Overview widgets

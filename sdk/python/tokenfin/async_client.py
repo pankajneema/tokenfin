@@ -32,7 +32,7 @@ class AsyncTokenFinClient:
         import asyncio
         from tokenfin import AsyncTokenFinClient
 
-        tf = AsyncTokenFinClient(api_key="tf_live_...")
+        tf = AsyncTokenFinClient(api_key="tfk_prod_...")
 
         async def call_llm():
             response = await openai_client.chat.completions.create(...)
@@ -52,7 +52,7 @@ class AsyncTokenFinClient:
         Create an async TokenFin client.
 
         Args:
-            api_key: API key starting with ``tf_``. Required.
+            api_key: API key starting with ``tfk_``. Required.
             **kwargs: Any field from :class:`TokenFinConfig`.
         """
         if api_key is not None:

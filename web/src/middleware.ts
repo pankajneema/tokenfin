@@ -1,4 +1,4 @@
-import { createServerClient } from '@supabase/ssr'
+import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 /**
@@ -9,11 +9,17 @@ import { NextResponse, type NextRequest } from 'next/server'
  *  2. Unauthenticated user hitting a protected route  → /login?next=<intended-path>
  *  3. Authenticated user hitting an auth page         → /dashboard
  *
- * Deeper guards (org membership, onboarding, plan selection) live in the
+ * Deeper guards (org membership, onboarding) live in the
  * (dashboard) layout server component so we avoid a DB round-trip on every
  * middleware invocation.
  */
+// Machine-to-machine endpoints authenticate with API keys / CRON_SECRET.
+// They never carry a session cookie, so skip the Supabase round-trip entirely.
+const KEY_AUTH_API = ['/api/v1/ingest', '/api/otel/', '/api/mcp', '/api/v1/cron/']
+
 export async function middleware(request: NextRequest) {
+  if (KEY_AUTH_API.some(p => request.nextUrl.pathname.startsWith(p))) return NextResponse.next()
+
   // Start with a pass-through response; may be replaced inside setAll.
   let response = NextResponse.next({ request })
 
@@ -23,7 +29,7 @@ export async function middleware(request: NextRequest) {
     {
       cookies: {
         getAll: () => request.cookies.getAll(),
-        setAll: (toSet) => {
+        setAll: (toSet: { name: string; value: string; options: CookieOptions }[]) => {
           // Propagate refreshed cookies onto both the forwarded request
           // and the outgoing response so the next render picks them up.
           toSet.forEach(({ name, value }) => request.cookies.set(name, value))
@@ -53,10 +59,10 @@ export async function middleware(request: NextRequest) {
   // a session cookie).
   const isReveal    = pathname.startsWith('/keys/reveal')
                    || pathname.startsWith('/api/v1/keys/reveal')
-  const isPublicApi = pathname.startsWith('/api/orgs')
-                   || pathname.startsWith('/api/invites')
-                   || pathname.startsWith('/api/v1/invites')
-  const isPublic    = isAuthPage || isCallback || isReveal || isPublicApi
+  // API routes do their own auth and return 401 JSON; never redirect them.
+  const isApi       = pathname.startsWith('/api/')
+  const isLegal     = pathname.startsWith('/privacy') || pathname.startsWith('/terms')
+  const isPublic    = isAuthPage || isCallback || isReveal || isApi || isLegal
 
   // ── Rule 1: unauthenticated → login ───────────────────────────────────────
   if (!user && !isPublic) {
@@ -71,7 +77,8 @@ export async function middleware(request: NextRequest) {
   }
 
   // ── Rule 2: authenticated → bounce off auth pages ─────────────────────────
-  if (user && isAuthPage) {
+  // (reset-password is reached WITH a recovery session, so it must not bounce.)
+  if (user && isAuthPage && !pathname.startsWith('/reset-password')) {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
     url.search   = ''

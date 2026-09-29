@@ -6,23 +6,19 @@
  * so dev environments never break.
  *
  * Usage:
- *   const result = await rateLimit(apiKeyId, orgPlan)
+ *   const result = await rateLimit(apiKeyId)
  *   if (!result.allowed) return rateLimitResponse(result)
  */
 
 import { Ratelimit }  from '@upstash/ratelimit'
 import { Redis }      from '@upstash/redis'
 
-/* ── Optional infrastructure burst guard (requests per minute) ──────────────
- * Product plans do not use these values. The guard is opt-in via
- * TOKENFIN_ENFORCE_RATE_LIMITS=1 for deployments that need abuse protection.
+/* ── Optional abuse guard (requests per minute, per API key) ──────────────────
+ * TokenFin monitoring is free and unlimited, so there are no per-plan limits.
+ * Operators can opt into a burst guard with TOKENFIN_ENFORCE_RATE_LIMITS=1 and
+ * tune it with TOKENFIN_RATE_LIMIT_PER_MIN (default 600).
  */
-export const PLAN_LIMITS: Record<string, number> = {
-  free:       60,
-  pro:        300,
-  team:       600,
-  enterprise: 2_000,
-}
+const LIMIT_PER_MIN = Math.max(1, Number(process.env.TOKENFIN_RATE_LIMIT_PER_MIN) || 600)
 
 /* ── Result type ────────────────────────────────────────────────────────────── */
 export interface RateLimitResult {
@@ -35,7 +31,6 @@ export interface RateLimitResult {
 
 /* ── Redis + limiter singletons ─────────────────────────────────────────────── */
 let redis: Redis | null = null
-const limiters = new Map<string, Ratelimit>()
 
 function getRedis(): Redis | null {
   if (!process.env.UPSTASH_REDIS_REST_URL) return null
@@ -48,32 +43,23 @@ function getRedis(): Redis | null {
   return redis
 }
 
-function getLimiter(plan: string): Ratelimit | null {
+let limiter: Ratelimit | null = null
+function getLimiter(): Ratelimit | null {
   const r = getRedis()
   if (!r) return null
-
-  if (!limiters.has(plan)) {
-    limiters.set(plan, new Ratelimit({
-      redis:   r,
-      limiter: Ratelimit.slidingWindow(PLAN_LIMITS[plan] ?? PLAN_LIMITS.free, '1 m'),
-      prefix:  `tf:rl:${plan}`,
-    }))
+  if (!limiter) {
+    limiter = new Ratelimit({ redis: r, limiter: Ratelimit.slidingWindow(LIMIT_PER_MIN, '1 m'), prefix: 'tf:rl' })
   }
-  return limiters.get(plan)!
+  return limiter
 }
 
 /* ── Main function ──────────────────────────────────────────────────────────── */
-export async function rateLimit(
-  apiKeyId: string,
-  plan = 'free',
-): Promise<RateLimitResult> {
-  // Plans are unlimited during early access. Operators can opt into the
-  // infrastructure burst guard without changing product entitlements.
+export async function rateLimit(apiKeyId: string): Promise<RateLimitResult> {
   if (process.env.TOKENFIN_ENFORCE_RATE_LIMITS !== '1') {
     return { allowed: true, limit: Number.MAX_SAFE_INTEGER, remaining: Number.MAX_SAFE_INTEGER, resetAt: 0, retryAfter: 0 }
   }
-  const limiter = getLimiter(plan)
-  const maxReqs = PLAN_LIMITS[plan] ?? PLAN_LIMITS.free
+  const limiter = getLimiter()
+  const maxReqs = LIMIT_PER_MIN
 
   // No Redis configured → fail open (allow everything, log in dev)
   if (!limiter) {

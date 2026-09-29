@@ -794,7 +794,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
       <div className="flex items-start gap-2.5 px-4 py-3 bg-[var(--blue-bg)] border border-[var(--blue)]/20 rounded-xl">
         <Shield size={13} className="text-[var(--blue)] flex-shrink-0 mt-0.5" />
         <p className="text-[12px] text-[var(--fg-secondary)]">
-          Keys are scoped per project and environment. Use <span className="font-mono font-semibold text-[var(--fg)]">X-TokenFin-Key</span> header when calling the ingest API. Never expose keys in client-side code.
+          Keys are scoped per project and environment. Send it as <span className="font-mono font-semibold text-[var(--fg)]">Authorization: Bearer &lt;key&gt;</span> when calling the ingest API. Never expose keys in client-side code.
         </p>
       </div>
 

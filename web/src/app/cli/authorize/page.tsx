@@ -5,10 +5,11 @@ import { CliAuthorizeClient } from './_client'
 export const metadata = { title: 'Authorize CLI — TokenFin' }
 
 export default async function CliAuthorizePage({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { port?: string; state?: string; label?: string }
+  searchParams: Promise<{ port?: string; state?: string; label?: string }>
 }) {
+  const searchParams = await searchParamsPromise
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   // Middleware normally redirects with a preserved ?next=; this is a safety net.

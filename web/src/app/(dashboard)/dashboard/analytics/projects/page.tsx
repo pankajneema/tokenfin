@@ -3,6 +3,7 @@ import { createAdminClient }  from '@/lib/supabase/server'
 import { daysAgoIST, tsNDaysAgo } from '@/lib/dates'
 import { ProjectsClient }     from './_client'
 import type { ProjectRow }    from './_client'
+import { selectAll } from '@/lib/supabase/paginate'
 
 export const metadata = { title: 'By Project — TokenFin Analytics' }
 
@@ -43,18 +44,18 @@ export default async function ProjectsAnalyticsPage({
     { data: allMembers },
     { data: allKeys  },
   ] = await Promise.all([
-    admin.from('usage_agg')
+    selectAll<Record<string, any>>(() => admin.from('usage_agg')
       .select('project_id,model,total_tokens,cost_usd,request_count')
-      .eq('org_id', orgId).gte('bucket', since30date),
-    admin.from('usage_agg')
+      .eq('org_id', orgId).gte('bucket', since30date)),
+    selectAll<Record<string, any>>(() => admin.from('usage_agg')
       .select('project_id,cost_usd,request_count')
-      .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
-    admin.from('usage_events')
+      .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date)),
+    selectAll<Record<string, any>>(() => admin.from('usage_events')
       .select('project_id,model,cost_usd,total_tokens,user_id,cost_basis')
-      .eq('org_id', orgId).gte('created_at', since30ts),
-    admin.from('usage_events')
+      .eq('org_id', orgId).gte('created_at', since30ts)),
+    selectAll<Record<string, any>>(() => admin.from('usage_events')
       .select('project_id,cost_usd,cost_basis')
-      .eq('org_id', orgId).gte('created_at', since60ts).lt('created_at', since30ts),
+      .eq('org_id', orgId).gte('created_at', since60ts).lt('created_at', since30ts)),
     admin.from('projects').select('id,name,slug').eq('org_id', orgId),
     admin.from('limits').select('project_id,value').eq('org_id', orgId).eq('metric', 'cost'),
     admin.from('teams').select('id,name').eq('org_id', orgId),

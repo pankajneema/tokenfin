@@ -93,7 +93,7 @@ export async function requireDashboardAccess() {
     .limit(1)
 
   const membership = members?.[0] ?? null
-  if (!membership) redirect('/plans')
+  if (!membership) redirect('/welcome')
 
   const { data: projects } = await admin
     .from('projects')

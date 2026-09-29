@@ -1,5 +1,12 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { MyUsageClient } from './_client'
+import { selectAll } from '@/lib/supabase/paginate'
+
+type UsageEventRow = {
+  model: string; total_tokens: number | null; cost_usd: number | null; created_at: string
+  metadata: Record<string, unknown> | null; baseline_cost_usd: number | null
+  input_tokens_saved: number | null; output_tokens_saved: number | null; was_holdout: boolean | null
+}
 
 export const metadata = { title: 'My Usage — TokenFin' }
 
@@ -24,13 +31,12 @@ export default async function MyUsagePage() {
   const orgId = membership?.[0]?.org_id ?? ''
 
   const since = new Date(Date.now() - 30 * 864e5).toISOString()
-  const { data: events } = await admin
+  const { data: events } = await selectAll<UsageEventRow>(() => admin
     .from('usage_events')
     .select('model, total_tokens, cost_usd, created_at, metadata, baseline_cost_usd, input_tokens_saved, output_tokens_saved, was_holdout')
     .eq('org_id', orgId)
     .eq('user_id', user!.id)
-    .gte('created_at', since)
-    .limit(50_000)
+    .gte('created_at', since))
 
   const rows = events ?? []
   let totalCost = 0, totalTokens = 0

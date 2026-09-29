@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { requireOrgMember, requirePermission, dbError } from '@/lib/api/auth'
 import { sealKey } from '@/lib/crypto/key-reveal'
 import { z } from 'zod'
+import { ALLOWED_EVAL_MODELS } from '@/lib/eval/config'
 
 /* GET /api/v1/eval-settings?org_id= → { configured, judge_model } (never returns the key) */
 export async function GET(req: NextRequest) {
@@ -20,8 +21,8 @@ export async function PUT(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const schema = z.object({
     org_id: z.string().uuid(),
-    key: z.string().min(10).optional(),                 // provider API key (BYO)
-    judge_model: z.string().min(1).max(80).optional(),
+    key: z.string().min(10).max(512).optional(),        // provider API key (BYO)
+    judge_model: z.enum(ALLOWED_EVAL_MODELS).optional(),
   })
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
@@ -39,7 +40,7 @@ export async function PUT(req: NextRequest) {
   return NextResponse.json({ ok: true })
 }
 
-/* DELETE /api/v1/eval-settings?org_id= — remove the org's key (revert to env fallback) */
+/* DELETE /api/v1/eval-settings?org_id= — remove the org's key (server key used only if EVAL_ALLOW_SERVER_KEY=1) */
 export async function DELETE(req: NextRequest) {
   const orgId = req.nextUrl.searchParams.get('org_id')
   const guard = await requirePermission(orgId, 'billing:edit')

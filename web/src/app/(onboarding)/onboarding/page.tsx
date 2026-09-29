@@ -26,7 +26,7 @@ export default async function OnboardingPage() {
 
   if (!member) {
     console.log('[OnboardingPage] no member found for user', user.id, '— redirecting to /plans')
-    redirect('/plans')
+    redirect('/welcome')
   }
 
   return <OnboardingClient orgId={member.org_id} />

@@ -4,6 +4,7 @@ import { getOrgRole }          from '@/lib/api/auth'
 import { can }                 from '@/lib/rbac'
 import { redirect }            from 'next/navigation'
 import { KeysClient }          from './_client'
+import { selectAll } from '@/lib/supabase/paginate'
 
 export const metadata = { title: 'API Keys — TokenFin' }
 
@@ -85,11 +86,11 @@ export default async function KeysPage() {
       .eq('org_id', orgId)
       .order('name'),
     admin.auth.admin.listUsers({ perPage: 1000 }),
-    admin
+    selectAll<{ api_key_id: string | null; cost_usd: number }>(() => admin
       .from('usage_events')
       .select('api_key_id, cost_usd')
       .eq('org_id', orgId)
-      .gte('created_at', since30),
+      .gte('created_at', since30)),
     admin
       .from('members')
       .select('user_id, team_id')

@@ -1,0 +1,38 @@
+name: Scheduled jobs
+
+# Vercel Hobby only allows daily crons (see web/vercel.json), so this runs the
+# alert sweep every 15 minutes on any plan. Alerts are claimed atomically, so a
+# run that overlaps Vercel's daily cron never fires the same alert twice.
+#
+# Setup: Settings → Secrets and variables → Actions
+#   secret   CRON_SECRET     same value as CRON_SECRET in Vercel
+#   variable TOKENFIN_URL    e.g. https://tokenfin.your-domain.com
+on:
+  schedule:
+    - cron: "*/15 * * * *"     # alert sweep
+    - cron: "30 3 * * *"       # daily data-retention purge (backup to Vercel's)
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job to run"
+        type: choice
+        options: [alerts, retention]
+        default: alerts
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ vars.TOKENFIN_URL != '' }}
+    steps:
+      - name: Call cron endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          BASE_URL: ${{ vars.TOKENFIN_URL }}
+          JOB: ${{ github.event.inputs.job || (github.event.schedule == '30 3 * * *' && 'retention' || 'alerts') }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "::error::CRON_SECRET secret is not set"; exit 1; fi
+          status=$(curl -sS -o response.json -w '%{http_code}' --max-time 60 \
+            -H "Authorization: Bearer $CRON_SECRET" "$BASE_URL/api/v1/cron/$JOB")
+          cat response.json; echo
+          if [ "$status" != "200" ]; then echo "::error::/api/v1/cron/$JOB returned HTTP $status"; exit 1; fi

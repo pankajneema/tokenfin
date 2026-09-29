@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
-import { buildOrgCtx, evaluateRule, deliverAlert, inCooldown, type AlertRule } from '@/lib/alerts/engine'
+import { buildOrgCtx, evaluateRule, deliverAlert, inCooldown, claimFire, type AlertRule } from '@/lib/alerts/engine'
+import crypto from 'crypto'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -13,10 +14,14 @@ export const maxDuration = 60
  * `Authorization: Bearer $CRON_SECRET` on scheduled invocations.
  */
 export async function GET(req: NextRequest) {
+  // Fail closed: no CRON_SECRET configured → nobody may trigger the sweep.
   const secret = process.env.CRON_SECRET
-  if (secret) {
-    const auth = req.headers.get('authorization') || ''
-    if (auth !== `Bearer ${secret}`) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  if (!secret) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth     = req.headers.get('authorization') || ''
+  const expected = Buffer.from(`Bearer ${secret}`)
+  const given    = Buffer.from(auth)
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
   const admin = createAdminClient()
@@ -54,7 +59,11 @@ export async function GET(req: NextRequest) {
       let message: string | null = null
       try { message = evaluateRule(rule, ctx) } catch { message = null }
       if (!message) continue
-      try { await deliverAlert(admin, rule, ctx, message) ; fired++ } catch {}
+      // Atomically claim this firing window so overlapping cron runs can't double-deliver.
+      let claimed = false
+      try { claimed = await claimFire(admin, rule) } catch { claimed = false }
+      if (!claimed) continue
+      try { await deliverAlert(admin, rule, ctx, message, { claimed: true }) ; fired++ } catch {}
     }
   }
 

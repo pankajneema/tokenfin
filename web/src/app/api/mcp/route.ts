@@ -15,7 +15,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import crypto from 'crypto'
-import { authenticate, unauthorized } from '@/lib/mcp/auth'
+import { authenticate, unauthorized, authUnavailable, AuthUnavailableError } from '@/lib/mcp/auth'
 import { handleRpc } from '@/lib/mcp/server'
 
 // DNS-rebinding guard. Blanket-rejecting every Origin broke legitimate clients —
@@ -39,7 +39,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Origin not allowed' } }, { status: 403 })
   }
 
-  const ctx = await authenticate(req)
+  let ctx: Awaited<ReturnType<typeof authenticate>>
+  try { ctx = await authenticate(req) } catch (e) {
+    if (e instanceof AuthUnavailableError) return authUnavailable()
+    throw e
+  }
   if (!ctx) return unauthorized()
   if (ctx.scopes.length > 0 && !ctx.scopes.includes('read')) {
     return NextResponse.json({ jsonrpc: '2.0', id: null, error: { code: -32003, message: 'Forbidden: key lacks read scope' } }, { status: 403 })

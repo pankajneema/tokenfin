@@ -13,7 +13,7 @@ import type { TeamRow, MemberRow, ProjectRow, InviteRow } from './page'
 const ROLES = {
   owner:     { label: 'Owner',     icon: Crown,       color: 'text-[var(--amber)]'        },
   admin:     { label: 'Admin',     icon: ShieldCheck, color: 'text-[var(--blue)]'         },
-  developer: { label: 'Developer', icon: Code2,        color: 'text-[var(--fg-secondary)]' },
+  member:    { label: 'Member',    icon: Code2,        color: 'text-[var(--fg-secondary)]' },
   viewer:    { label: 'Viewer',    icon: Eye,          color: 'text-[var(--fg-tertiary)]'  },
 } as const
 type Role = keyof typeof ROLES

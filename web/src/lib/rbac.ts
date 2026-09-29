@@ -21,7 +21,17 @@ const ALL_ROLES    = ['owner', 'admin', 'member', 'viewer'] as const
 export const PERMISSIONS = {
   /* Projects */
   'projects:create':       OWNER_ADMIN,
+  'projects:edit':         OWNER_ADMIN,
   'projects:delete':       OWNER_ADMIN,
+
+  /* Teams */
+  'teams:manage':          OWNER_ADMIN,
+
+  /* Org settings (name/slug) — owner only */
+  'org:edit':              OWNER_ONLY,
+
+  /* Model catalogue (org_models) */
+  'models:manage':         OWNER_ADMIN,
 
   /* API Keys */
   'keys:view':             OWNER_ADMIN,

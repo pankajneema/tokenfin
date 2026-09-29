@@ -34,7 +34,7 @@ export function OnboardingChecklist({ hasProject, hasApiKey, hasEvent }: Props) 
     {
       id:      'org',
       label:   'Create your organisation',
-      href:    '/dashboard/settings/billing',
+      href:    '/dashboard/settings/profile',
       done:    true,
       current: false,
     },

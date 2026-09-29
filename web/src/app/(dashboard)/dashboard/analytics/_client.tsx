@@ -609,7 +609,7 @@ export function AnalyticsClient({ initialData }: Props) {
                 <div className="flex items-start gap-2.5 p-3 bg-[var(--bg-secondary)] rounded-xl">
                   <Activity size={13} style={{ color: '#4285F4' }} className="mt-0.5 flex-shrink-0" />
                   <p className="text-[11.5px] text-[var(--fg-secondary)] leading-relaxed">
-                    Blended rate: ${(totCost / totTok).toFixed(3)}/1K tokens across all models.
+                    Blended rate: ${(totCost / totTok).toFixed(3)}/1M tokens across all models.
                   </p>
                 </div>
               )}

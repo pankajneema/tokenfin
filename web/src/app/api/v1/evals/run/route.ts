@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/lib/api/auth'
 import { judgeFaithfulness, judgeCorrectness, generate } from '@/lib/eval/judge'
-import { resolveJudge } from '@/lib/eval/config'
+import { resolveJudge, ALLOWED_EVAL_MODELS } from '@/lib/eval/config'
 import { z } from 'zod'
 
 /**
@@ -11,17 +11,22 @@ import { z } from 'zod'
  *  faithfulness (default): samples recent prompt_captures and scores hallucination
  *  (reference-free, grounded on `context` if present, else the prompt).
  * Writes eval_run + eval_scores; returns the summary (incl. hallucination_rate).
- * Requires migrations 014 + 018 and EVAL_JUDGE_KEY / ANTHROPIC_API_KEY.
+ * Requires migrations 014 + 018 and an org eval key (server env key only with
+ * EVAL_ALLOW_SERVER_KEY=1).
  */
+const MAX_TEXT   = 20_000   // chars per prompt/answer/context sent to the provider
+const MAX_SAMPLE = 25       // provider calls per run are bounded (2 per offline example)
+const cap = (t: unknown) => (typeof t === 'string' ? t : '').slice(0, MAX_TEXT)
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const schema = z.object({
     org_id:     z.string().uuid(),
     evaluator:  z.enum(['faithfulness', 'correctness']).default('faithfulness'),
     days:       z.number().int().min(1).max(90).default(7),
-    sample:     z.number().int().min(1).max(50).default(10),
+    sample:     z.number().int().min(1).max(MAX_SAMPLE).default(10),
     dataset_id: z.string().uuid().optional(),      // present → offline eval over a dataset
-    model:      z.string().optional(),             // model to generate candidate answers (offline)
+    model:      z.enum(ALLOWED_EVAL_MODELS).optional(), // model to generate candidate answers (offline)
   })
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
@@ -32,7 +37,7 @@ export async function POST(req: NextRequest) {
 
   const cfg = await resolveJudge(org_id)
   if (!cfg.key) {
-    return NextResponse.json({ error: 'No eval key — set your provider key in Evals settings (or EVAL_JUDGE_KEY).' }, { status: 400 })
+    return NextResponse.json({ error: 'No eval key — set your provider key in Evals settings.' }, { status: 400 })
   }
 
   const admin = createAdminClient()
@@ -54,9 +59,9 @@ export async function POST(req: NextRequest) {
     const scores: number[] = []; let failures = 0, errors = 0
     for (const e of exs) {
       try {
-        const q = (e.input as { text?: string })?.text ?? ''
-        const answer = await generate(cfg, model, q)
-        const r = await judgeCorrectness(cfg, q, answer, e.reference_output ?? '')
+        const q = cap((e.input as { text?: string })?.text)
+        const answer = cap(await generate(cfg, model, q))
+        const r = await judgeCorrectness(cfg, q, answer, cap(e.reference_output))
         scores.push(r.score); if (!r.passed) failures++
         await admin.from('eval_scores').insert({
           org_id, eval_run_id: runId, target_type: 'example', target_id: e.id,
@@ -96,8 +101,8 @@ export async function POST(req: NextRequest) {
   for (const c of rows) {
     try {
       const r = evaluator === 'faithfulness'
-        ? await judgeFaithfulness(cfg, c.response_text ?? '', c.context || c.prompt_text || '')
-        : await judgeCorrectness(cfg, c.prompt_text ?? '', c.response_text ?? '', c.context ?? '')
+        ? await judgeFaithfulness(cfg, cap(c.response_text), cap(c.context || c.prompt_text))
+        : await judgeCorrectness(cfg, cap(c.prompt_text), cap(c.response_text), cap(c.context))
       scores.push(r.score)
       if (!r.passed) failures++
       await admin.from('eval_scores').insert({

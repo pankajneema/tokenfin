@@ -5,7 +5,7 @@ Usage (sync)::
 
     from tokenfin import TokenFinClient
 
-    tf = TokenFinClient(api_key="tf_live_...")
+    tf = TokenFinClient(api_key="tfk_prod_...")
     tf.track(model="gpt-4o", input_tokens=800, output_tokens=120)
     tf.flush()          # drain before process exit
 
@@ -13,7 +13,7 @@ Usage (async)::
 
     from tokenfin import AsyncTokenFinClient
 
-    tf = AsyncTokenFinClient(api_key="tf_live_...")
+    tf = AsyncTokenFinClient(api_key="tfk_prod_...")
     await tf.track(model="gpt-4o", input_tokens=800, output_tokens=120)
     await tf.flush()
 

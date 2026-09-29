@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ShieldCheck, Loader2, Play, KeyRound, Check } from 'lucide-react'
 import type { ScoreRow, RunRow } from './page'
+import { ALLOWED_EVAL_MODELS } from '@/lib/eval/models'
 
 export function EvalsClient({ orgId, meanFaithfulness, hallucinationRate, scoredCount, runs, scores, keyConfigured, judgeModel }: {
   orgId: string; meanFaithfulness: number | null; hallucinationRate: number | null; scoredCount: number; runs: RunRow[]; scores: ScoreRow[]; keyConfigured: boolean; judgeModel: string
@@ -117,7 +118,9 @@ function EvalKeyCard({ orgId, configured, model }: { orgId: string; configured: 
           <input type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="sk-ant-…"
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-[12px] text-[var(--fg)] outline-none" />
           <div className="flex items-center gap-2">
-            <input value={jm} onChange={e => setJm(e.target.value)} className="w-56 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-[12px] text-[var(--fg)]" />
+            <select id="judge-model" value={jm} onChange={e => setJm(e.target.value)} className="w-56 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-[12px] text-[var(--fg)]">
+              {ALLOWED_EVAL_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
             <button onClick={save} disabled={busy} className="btn-primary text-[12px] disabled:opacity-60">{busy ? <Loader2 size={13} className="animate-spin" /> : 'Save'}</button>
           </div>
         </div>

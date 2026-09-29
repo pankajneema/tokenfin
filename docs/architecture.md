@@ -34,7 +34,7 @@ flowchart TB
         MCPClient["MCP client<br/>(Claude Desktop, Cursor, chat)"]
     end
 
-    subgraph Web["web/ — Next.js 14 App Router (the only service most deploys need)"]
+    subgraph Web["web/ — Next.js 15 App Router (the only service most deploys need)"]
         OTLP["/api/otel/v1/{logs,metrics,traces}<br/>OTLP receiver"]
         Ingest["/api/v1/ingest<br/>SDK ingest + enforcement"]
         API["/api/v1/*<br/>REST (keys, limits, alerts, projects…)"]
@@ -70,7 +70,7 @@ flowchart TB
     Ingest -->|"cost_basis=metered"| Events
     Ingest -.->|"if INGEST_SERVICE_URL set"| GoIngest
     GoIngest --> Redis --> GoWorker --> Events
-    Ingest -->|"block 403 / throttle 429<br/>checked against usage_agg"| Ingest
+    Ingest -->|"block 403 / throttle 429<br/>checked against metered MTD spend"| Ingest
 
     Events -->|"metered rows only"| Agg
     API --> Limits
@@ -86,8 +86,8 @@ flowchart TB
 
 **The one thing to internalize**: `usage_events` holds everything; `usage_agg`
 holds a strict subset (metered rows only). Anything that must never show a
-number bigger than the real bill (Analytics totals, SDK-side limit
-enforcement) reads `usage_agg`. Anything that should see *all* captured
+number bigger than the real bill (Analytics totals) reads `usage_agg`; SDK-side
+limit enforcement sums only metered `usage_events` rows (`org_spend_since` RPC). Anything that should see *all* captured
 activity, including CLI-agent notional usage, reads `usage_events` directly
 (Limits page spend, the alert engine, My Usage, team-scoped limits). Getting
 this backwards is a real bug class — see the note in [`data-flow.md`](./data-flow.md#the-metered-vs-notional-split).
@@ -98,7 +98,7 @@ this backwards is a real bug class — see the note in [`data-flow.md`](./data-f
 
 ```
 tokenfin/
-├── web/                          Next.js 14 App Router — UI + all API routes
+├── web/                          Next.js 15 App Router — UI + all API routes
 │   ├── src/app/
 │   │   ├── (auth)/               login, signup, forgot/reset-password, accept-invitation
 │   │   ├── (onboarding)/         org + first-project wizard
@@ -144,7 +144,7 @@ tokenfin/
 
 | Layer | Choice |
 |---|---|
-| Frontend/API | Next.js 14 App Router, TypeScript strict, `src/` dir |
+| Frontend/API | Next.js 15 App Router, TypeScript strict, `src/` dir |
 | Database | Supabase (Postgres + Auth + RLS) |
 | Styling | Tailwind CSS + CSS custom properties |
 | Charts | Recharts |
@@ -165,10 +165,11 @@ would be a real bug (e.g. alert cooldown re-firing off cached `last_fired_at`).
 ## Auth flow (dashboard)
 
 1. Supabase Auth (email/password, GitHub, Google) → session cookie.
-2. `middleware.ts` reads the cookie on every request, redirects unauthenticated
+2. `web/src/middleware.ts` reads the cookie on every request, redirects unauthenticated
    hits on `/dashboard/*` to `/login`.
 3. `(dashboard)/layout.tsx` (a Server Component) checks the `members` table for
-   the signed-in user; no membership → `/plans`; membership but no project →
+   the signed-in user; no membership → `/welcome` (org creation — there are no
+   paid plans; TokenFin is free and unlimited); membership but no project →
    `/onboarding`.
 4. API routes call `requireOrgMember` / `requirePermission` / `requireApiKeyOrOrgMember`
    (`lib/api/auth.ts`) depending on whether they accept a session, an API key,
@@ -178,7 +179,7 @@ would be a real bug (e.g. alert cooldown re-firing off cached `last_fired_at`).
 org/membership/project, the client used `router.push()` into a route whose
 server layout gates on that same data. Next.js's client Router Cache had
 already cached an *earlier* render of that route (from before the mutation),
-so the stale cached response — which was itself a redirect back to `/plans` —
+so the stale cached response — which was itself a redirect back to the no-org entry page (then `/plans`, now `/welcome`) —
 got served instead of a fresh one. Every `router.push()` that follows a
 mutation of the exact data the destination route gates on now calls
 `router.refresh()` first. If you add a new onboarding-adjacent redirect, apply

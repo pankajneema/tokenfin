@@ -25,13 +25,19 @@ export async function POST(req: NextRequest) {
   const admin = createAdminClient()
 
   // 1. Resolve the caller's org via membership.
-  const { data: members } = await admin.from('members').select('org_id').eq('user_id', user.id).limit(1)
+  const { data: members } = await admin.from('members').select('org_id, role')
+    .eq('user_id', user.id).order('joined_at', { ascending: true }).limit(1)
   const orgId = members?.[0]?.org_id as string | undefined
+  const role  = (members?.[0]?.role as string | undefined) ?? 'viewer'
   if (!orgId) return NextResponse.json({ error: 'No organization membership. Finish onboarding first.' }, { status: 403 })
 
   // 2. Find (or create) a project to attach the key to.
   let { data: proj } = await admin.from('projects').select('id').eq('org_id', orgId).limit(1).maybeSingle()
   if (!proj) {
+    // Only roles that may create projects get an auto-created Default project.
+    if (role !== 'owner' && role !== 'admin') {
+      return NextResponse.json({ error: 'No project exists yet. Ask an org owner or admin to create one.' }, { status: 403 })
+    }
     const { data: created, error: projErr } = await admin.from('projects')
       .insert({ org_id: orgId, name: 'Default', slug: 'default' }).select('id').single()
     if (projErr || !created) return NextResponse.json({ error: 'Could not create a default project' }, { status: 500 })
@@ -61,19 +67,26 @@ export async function POST(req: NextRequest) {
   const { data: keyRow, error: keyErr } = await admin.from('api_keys').insert({
     org_id: orgId, project_id: proj.id, user_id: user.id, created_by: user.id,
     name: label, key_hash: hashKey(raw), key_prefix: maskKey(raw),
-    env, scopes: ['read', 'write'], is_active: true,
+    // Viewers are read-only: their CLI key cannot write/ingest.
+    env, scopes: role === 'viewer' ? ['read'] : ['read', 'write'], is_active: true,
   }).select('id').single()
-  if (keyErr || !keyRow) return NextResponse.json({ error: keyErr?.message ?? 'Key creation failed' }, { status: 500 })
+  if (keyErr || !keyRow) {
+    console.error('[cli/token] key insert failed:', keyErr)
+    return NextResponse.json({ error: 'Key creation failed' }, { status: 500 })
+  }
 
   // 5. Single-use reveal record (roll back the key if this fails).
   const token = revealToken()
   const { error: revErr } = await admin.from('key_reveals').insert({
     token, key_id: keyRow.id, org_id: orgId, email: user.email ?? null,
     ciphertext: sealed.ciphertext, iv: sealed.iv, auth_tag: sealed.authTag,
+    // CLI exchanges the token immediately over loopback — keep the window short.
+    expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
   })
   if (revErr) {
     await admin.from('api_keys').delete().eq('id', keyRow.id)
-    return NextResponse.json({ error: revErr.message }, { status: 500 })
+    console.error('[cli/token] reveal insert failed:', revErr)
+    return NextResponse.json({ error: 'Could not create reveal token' }, { status: 500 })
   }
 
   return NextResponse.json({ token })

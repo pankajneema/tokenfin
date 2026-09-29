@@ -8,7 +8,8 @@ const fmtUsd = (n: number) => n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`
 const fmtTok = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${n}`
 const ms = (a: string | null, b: string | null) => a && b ? Math.max(0, new Date(b).getTime() - new Date(a).getTime()) : 0
 
-export default async function TraceDetail({ params }: { params: { trace_id: string } }) {
+export default async function TraceDetail({ params }: { params: Promise<{ trace_id: string }> }) {
+  const { trace_id } = await params
   const supabase = createClient()
   const admin = createAdminClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -16,8 +17,8 @@ export default async function TraceDetail({ params }: { params: { trace_id: stri
     .from('members').select('org_id').eq('user_id', user!.id).order('joined_at', { ascending: true }).limit(1)
   const orgId = membership?.[0]?.org_id ?? ''
 
-  const { data: trace } = await admin.from('traces').select('*').eq('trace_id', params.trace_id).eq('org_id', orgId).maybeSingle()
-  const { data: spanData } = await admin.from('spans').select('*').eq('trace_id', params.trace_id).eq('org_id', orgId)
+  const { data: trace } = await admin.from('traces').select('*').eq('trace_id', trace_id).eq('org_id', orgId).maybeSingle()
+  const { data: spanData } = await admin.from('spans').select('*').eq('trace_id', trace_id).eq('org_id', orgId)
   const spans = (spanData ?? []).slice().sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
 
   if (!trace) {

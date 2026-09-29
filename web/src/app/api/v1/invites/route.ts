@@ -1,18 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
-import { requireOrgMember, dbError } from '@/lib/api/auth'
+import { requireOrgMemberWithRole, requirePermission, dbError } from '@/lib/api/auth'
+import { can } from '@/lib/rbac'
+import { z } from 'zod'
 
 function db() { return createAdminClient() }
 
 /* POST /api/v1/invites — invite one or more emails to an org
    Body: { org_id, emails: string[] } */
 export async function POST(req: NextRequest) {
-  const { org_id, emails } = await req.json()
+  const body = await req.json().catch(() => null)
+  const schema = z.object({
+    org_id: z.string().uuid(),
+    emails: z.array(z.string().trim().toLowerCase().email().max(254)).min(1).max(50),
+  })
+  const parsed = schema.safeParse(body)
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
+  const { org_id } = parsed.data
+  const emails = Array.from(new Set(parsed.data.emails))
 
-  if (!org_id || !Array.isArray(emails) || emails.length === 0)
-    return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
-
-  const guard = await requireOrgMember(org_id)
+  const guard = await requirePermission(org_id, 'members:invite')
   if (guard instanceof NextResponse) return guard
 
   const admin  = createAdminClient()
@@ -20,9 +27,7 @@ export async function POST(req: NextRequest) {
 
   const results: { email: string; status: 'sent' | 'failed'; error?: string }[] = []
 
-  for (const rawEmail of emails) {
-    const email = rawEmail.trim().toLowerCase()
-    if (!email) continue
+  for (const email of emails) {
 
     // 1. Send real invite email via Supabase Auth
     //    Invited user lands on /auth/callback → redirected to /dashboard
@@ -64,8 +69,10 @@ export async function POST(req: NextRequest) {
 /* GET /api/v1/invites?org_id=xxx — list pending invitations for an org */
 export async function GET(req: NextRequest) {
   const org_id = req.nextUrl.searchParams.get('org_id')
-  const guard  = await requireOrgMember(org_id)
+  const guard  = await requireOrgMemberWithRole(org_id)
   if (guard instanceof NextResponse) return guard
+  // Pending invitations expose email addresses — only owners/admins see them.
+  if (!can(guard.role, 'members:view')) return NextResponse.json([])
 
   const { data, error } = await db()
     .from('invitations')
@@ -84,7 +91,7 @@ export async function DELETE(req: NextRequest) {
   if (!id || !org_id)
     return NextResponse.json({ error: 'id and org_id required' }, { status: 400 })
 
-  const guard = await requireOrgMember(org_id)
+  const guard = await requirePermission(org_id, 'members:invite')
   if (guard instanceof NextResponse) return guard
 
   const { error } = await db()

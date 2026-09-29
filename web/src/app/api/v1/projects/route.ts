@@ -1,7 +1,7 @@
 import { NextResponse }                              from 'next/server'
 import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, requireApiKeyOrOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
+import { requirePermission, requireApiKeyOrOrgMember, requireResourcePermission, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
 
 function db() { return createAdminClient() }
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
 /* POST /api/v1/projects */
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     org_id:      z.string().uuid(),
     name:        z.string().min(1).max(64),
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireOrgMember(parsed.data.org_id)
+  const guard = await requirePermission(parsed.data.org_id, 'projects:create')
   if (guard instanceof NextResponse) return guard
 
   const { data: existing } = await db()
@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
 
 /* PATCH /api/v1/projects */
 export async function PATCH(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     id:          z.string().uuid(),
     name:        z.string().min(1).max(64).optional(),
@@ -61,11 +61,18 @@ export async function PATCH(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireResourceOwner('projects', parsed.data.id)
+  const guard = await requireResourcePermission('projects', parsed.data.id, 'projects:edit')
   if (guard instanceof NextResponse) return guard
 
   const { id, ...fields } = parsed.data
-  const { data, error } = await db().from('projects').update(fields).eq('id', id).select().single()
+  if (fields.slug) {
+    const { data: clash } = await db()
+      .from('projects').select('id')
+      .eq('org_id', guard.orgId).eq('slug', fields.slug).neq('id', id)
+      .maybeSingle()
+    if (clash) return NextResponse.json({ error: 'Slug already taken in this org' }, { status: 409 })
+  }
+  const { data, error } = await db().from('projects').update(fields).eq('id', id).eq('org_id', guard.orgId).select().single()
   if (error) return dbError(error, 'PATCH projects')
   return NextResponse.json(data)
 }
@@ -73,10 +80,10 @@ export async function PATCH(req: NextRequest) {
 /* DELETE /api/v1/projects?id=xxx */
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id')
-  const guard = await requireResourceOwner('projects', id)
+  const guard = await requireResourcePermission('projects', id, 'projects:delete')
   if (guard instanceof NextResponse) return guard
 
-  const { error } = await db().from('projects').delete().eq('id', id!)
+  const { error } = await db().from('projects').delete().eq('id', id!).eq('org_id', guard.orgId)
   if (error) return dbError(error, 'DELETE projects')
   return NextResponse.json({ ok: true })
 }

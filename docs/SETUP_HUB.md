@@ -33,7 +33,8 @@ Writes to `~/.claude/settings.json`:
   "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
   "OTEL_EXPORTER_OTLP_ENDPOINT": "<app>/api/otel",
   "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer <key>",
-  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"
+  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",
+  "OTEL_LOG_USER_PROMPTS": "1"
 }
 ```
 

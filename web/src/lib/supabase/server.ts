@@ -12,18 +12,21 @@ import { createClient as createSupabaseClient }   from '@supabase/supabase-js'
 import { cookies }                                from 'next/headers'
 
 export function createClient() {
+  // Next 15: cookies() is async. Call it now (so Next marks the route dynamic,
+  // as before) and await it inside the async cookie callbacks @supabase/ssr
+  // supports, which keeps createClient() synchronous for every caller.
   const cookieStore = cookies()
-
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll: () => cookieStore.getAll(),
-        setAll: (toSet: { name: string; value: string; options: CookieOptions }[]) => {
+        getAll: async () => (await cookieStore).getAll(),
+        setAll: async (toSet: { name: string; value: string; options: CookieOptions }[]) => {
           try {
+            const store = await cookieStore
             toSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
+              store.set(name, value, options)
             )
           } catch {
             // Server Component context — writes are silently ignored.

@@ -1,0 +1,5 @@
+[mcp_servers.tokenfin]
+url = "https://tokenfin.curiousdevs.com/api/mcp"
+
+[mcp_servers.tokenfin.http_headers]
+Authorization = "Bearer tfk_prod_6e93_6f6444a0b6927bda987a47fcd6fb5f8a"

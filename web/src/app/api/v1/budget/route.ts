@@ -1,7 +1,7 @@
 import { NextResponse }                              from 'next/server'
 import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, requireApiKeyOrOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
+import { requireOrgMember, requireApiKeyOrOrgMember, requireResourcePermission, assertOrgOwnsIds, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
 
 function db() { return createAdminClient() }
@@ -44,14 +44,16 @@ export async function GET(req: NextRequest) {
   })
 }
 
+/* POST /api/v1/budget — any member may REQUEST more budget.
+   requested_by is always the session user; any client value is ignored. */
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     org_id:       z.string().uuid(),
     project_id:   z.string().uuid().optional(),
-    requested_by: z.string().uuid(),
-    amount_usd:   z.number().positive(),
-    reason:       z.string().min(10),
+    requested_by: z.string().uuid().optional(),   // IGNORED — always the caller
+    amount_usd:   z.number().positive().max(1_000_000),
+    reason:       z.string().min(10).max(2000),
   })
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
@@ -59,28 +61,37 @@ export async function POST(req: NextRequest) {
   const guard = await requireOrgMember(parsed.data.org_id)
   if (guard instanceof NextResponse) return guard
 
-  const { data, error } = await db().from('budget_requests').insert(parsed.data).select().single()
+  const bad = await assertOrgOwnsIds(parsed.data.org_id, { project_id: parsed.data.project_id })
+  if (bad) return bad
+
+  const { org_id, project_id, amount_usd, reason } = parsed.data
+  const { data, error } = await db().from('budget_requests').insert({
+    org_id, project_id: project_id ?? null, amount_usd, reason,
+    requested_by: guard.userId,
+  }).select().single()
   if (error) return dbError(error, 'POST budget')
   return NextResponse.json(data, { status: 201 })
 }
 
+/* PATCH /api/v1/budget — approve/deny a request. Requires limits:write
+   (owner/admin). reviewed_by is always the session user. */
 export async function PATCH(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     id:          z.string().uuid(),
     status:      z.enum(['approved', 'denied']),
-    reviewed_by: z.string().uuid(),
+    reviewed_by: z.string().uuid().optional(),    // IGNORED — always the caller
   })
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireResourceOwner('budget_requests', parsed.data.id)
+  const guard = await requireResourcePermission('budget_requests', parsed.data.id, 'limits:write')
   if (guard instanceof NextResponse) return guard
 
-  const { id, status, reviewed_by } = parsed.data
+  const { id, status } = parsed.data
   const { error } = await db().from('budget_requests').update({
-    status, reviewed_by, reviewed_at: new Date().toISOString(),
-  }).eq('id', id)
+    status, reviewed_by: guard.userId, reviewed_at: new Date().toISOString(),
+  }).eq('id', id).eq('org_id', guard.orgId)
   if (error) return dbError(error, 'PATCH budget')
   return NextResponse.json({ ok: true })
 }

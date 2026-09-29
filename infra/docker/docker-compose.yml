@@ -87,6 +87,10 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_SUPABASE_URL:      ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_APP_URL:           ${NEXT_PUBLIC_APP_URL:-http://localhost:3001}
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-3001}:3001"
@@ -95,8 +99,11 @@ services:
       NEXT_PUBLIC_SUPABASE_URL:       ${NEXT_PUBLIC_SUPABASE_URL}
       NEXT_PUBLIC_SUPABASE_ANON_KEY:  ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY:      ${SUPABASE_SERVICE_ROLE_KEY}
-      # Point dashboard ingest calls at the Go service
-      NEXT_PUBLIC_INGEST_URL:         http://ingest:8001
+      NEXT_PUBLIC_APP_URL:            ${NEXT_PUBLIC_APP_URL:-http://localhost:3001}
+      KEY_ENCRYPTION_SECRET:          ${KEY_ENCRYPTION_SECRET}
+      CRON_SECRET:                    ${CRON_SECRET}
+      # SDK ingest (/api/v1/ingest) forwards to the Go service when this is set.
+      INGEST_SERVICE_URL:             http://ingest:8001
     networks:
       - tokenfin
     depends_on:

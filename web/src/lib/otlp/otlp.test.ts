@@ -1,3 +1,4 @@
+import { gzipSync } from 'zlib'
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
@@ -7,7 +8,8 @@ import { attrVal, attrsToMap, nanoToIso, num } from './attrs'
 import { tokenFieldFor, detectSource, costBasisFor, isRecognizedMetric, isDeltaTemporality } from './mapping'
 import { readOtlp } from './decode'
 import { decodeLogsProto } from './proto'
-import { normalizeLogs, scanMetrics, type UsageRow } from './normalize'
+import { normalizeLogs, normalizePrompts, scanMetrics, type UsageRow } from './normalize'
+import { computeCost, priceFor } from '@/lib/mcp/pricing'
 import { persistRows } from './persist'
 import type { KeyCtx } from './auth'
 
@@ -178,7 +180,14 @@ describe('decode (protobuf)', () => {
 
   it('readOtlp parses a JSON request body', async () => {
     const body = logsBody([record(FULL)])
-    const req: any = { headers: { get: () => 'application/json' }, json: async () => body }
+    const req: any = new Request('http://x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    expect(await readOtlp(req, 'logs')).toEqual(body)
+  })
+
+  it('readOtlp accepts a gzip-compressed body', async () => {
+    const body = logsBody([record(FULL)])
+    const gz = gzipSync(Buffer.from(JSON.stringify(body)))
+    const req: any = new Request('http://x', { method: 'POST', headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' }, body: gz })
     expect(await readOtlp(req, 'logs')).toEqual(body)
   })
 })
@@ -231,5 +240,56 @@ describe('persistRows', () => {
     const res = await persistRows(admin, CTX, [meteredRow])
     expect(res).toEqual({ inserted: 0, duplicate: 1 })
     expect(admin.__rpcCalls).toHaveLength(0)
+  })
+})
+
+
+// ── prompt capture + pricing ─────────────────────────────────────────────────
+describe('prompt capture', () => {
+  it('extracts user_prompt text keyed by prompt.id', () => {
+    const body = logsBody([
+      record({ prompt: 'refactor the auth module', prompt_length: 24, 'prompt.id': 'pid-1' }, 1752566400000000, 'claude_code.user_prompt'),
+      record(FULL),
+    ])
+    const prompts = normalizePrompts(body)
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toMatchObject({ prompt_id: 'pid-1', prompt_text: 'refactor the auth module', source: 'claude_code' })
+    // the api_request row carries the same prompt id, so cost/tokens join to it
+    expect(normalizeLogs(body, CTX)[0].prompt_hash).toBe('pid-1')
+  })
+
+  it('never stores the api_request event body as a prompt', () => {
+    const rec = { ...record(FULL), body: S('claude_code.api_request') }
+    expect(normalizeLogs(logsBody([rec]), CTX)[0].prompt_text).toBeNull()
+  })
+
+  it('skips redacted prompts', () => {
+    const body = logsBody([record({ prompt: '<REDACTED>', 'prompt.id': 'p' }, 1, 'claude_code.user_prompt')])
+    expect(normalizePrompts(body)).toHaveLength(0)
+  })
+
+  it('reads duration_ms as latency', () => {
+    expect(normalizeLogs(logsBody([record({ ...FULL, duration_ms: 4200 })]), CTX)[0].latency_ms).toBe(4200)
+  })
+})
+
+describe('pricing', () => {
+  it('uses the longest matching prefix for dated ids', () => {
+    expect(priceFor('gpt-4o-mini-2024-07-18').in).toBe(0.15)
+    expect(priceFor('claude-sonnet-4-6-20250514').in).toBe(3)
+  })
+
+  it('prices cache reads at 0.1x and cache writes at 1.25x input', () => {
+    // 5 in, 500 out, 100k cache read, 2k cache write on Sonnet 4.6 = $0.045015
+    expect(computeCost('claude-sonnet-4-6', 5, 500, 100_000, 2_000)).toBeCloseTo(0.045015, 6)
+  })
+
+  it('uses current Anthropic list prices', () => {
+    expect(computeCost('claude-opus-4-8', 1e6, 1e6)).toBe(30)
+    expect(computeCost('claude-haiku-4-5', 1e6, 1e6)).toBe(6)
+  })
+
+  it('flags unknown models', () => {
+    expect(priceFor('some-new-model').known).toBe(false)
   })
 })

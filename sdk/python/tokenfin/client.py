@@ -36,7 +36,7 @@ class TokenFinClient:
 
     Example::
 
-        tf = TokenFinClient(api_key="tf_live_...")
+        tf = TokenFinClient(api_key="tfk_prod_...")
 
         # After every LLM call:
         tf.track(model="gpt-4o", input_tokens=800, output_tokens=120,
@@ -52,7 +52,7 @@ class TokenFinClient:
         Create a TokenFin client.
 
         Args:
-            api_key: API key starting with ``tf_``. Required.
+            api_key: API key starting with ``tfk_``. Required.
             **kwargs: Any field from :class:`TokenFinConfig`
                       (``base_url``, ``timeout``, ``flush_interval``,
                       ``batch_size``, ``max_queue_size``, ``max_retries``,

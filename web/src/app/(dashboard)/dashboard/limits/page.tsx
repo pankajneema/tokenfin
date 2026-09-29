@@ -2,6 +2,7 @@ import { createClient }      from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { getOrgRole }         from '@/lib/api/auth'
 import { LimitsClient }       from './_client'
+import { selectAll } from '@/lib/supabase/paginate'
 
 export const metadata = { title: 'Budget Limits — TokenFin' }
 
@@ -75,7 +76,7 @@ export default async function LimitsPage() {
     // forever. Spend and budget are never MIXED across cost_basis into a
     // single "bill" elsewhere in the app — this is limits-only, for warning
     // purposes; the "How limits work" copy below reflects the difference.
-    admin.from('usage_events').select('user_id, project_id, cost_usd, created_at').eq('org_id', orgId).gte('created_at', sinceTs),
+    selectAll<{ user_id: string | null; project_id: string | null; cost_usd: number; created_at: string }>(() => admin.from('usage_events').select('user_id, project_id, cost_usd, created_at').eq('org_id', orgId).gte('created_at', sinceTs)),
     // Limit-linked alert rules — there's no limit_id FK, so "linked" is inferred
     // by (org, trigger_type, scope name), matching how the create-limit and
     // add-alert flows name these rules.

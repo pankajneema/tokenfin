@@ -3,6 +3,7 @@ import { createAdminClient }  from '@/lib/supabase/server'
 import { PromptsClient }       from './_client'
 import type { PromptPattern }  from '@/app/api/v1/analytics/prompts/route'
 import { inputPrice, outputPrice } from '@/lib/mcp/pricing'
+import { selectAll } from '@/lib/supabase/paginate'
 
 // Cheapest capable tier used as the "could you route down?" reference.
 const CHEAP_IN = 0.8, CHEAP_OUT = 4 // ~Haiku / gpt-4o-mini class, per 1M
@@ -65,17 +66,22 @@ export default async function PromptsAnalyticsPage() {
 
   const since30 = new Date(Date.now() - 30 * 86_400_000).toISOString()
 
-  // Fetch usage events with prompt metadata for last 30 days
-  const { data: rows } = await admin
+  // Every event in the window (no row cap), grouped by the prompt_hash column.
+  type EventRow = {
+    model: string | null; cost_usd: number | null; input_tokens: number | null; output_tokens: number | null
+    cache_read_tokens: number | null; cache_write_tokens: number | null; latency_ms: number | null
+    prompt_hash: string | null; prompt_preview: string | null; prompt_chars: number | null
+  }
+  const EVENT_COLS = 'model, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, prompt_hash, prompt_preview, prompt_chars'
+  const { data: rows } = await selectAll<EventRow>(() => admin
     .from('usage_events')
-    .select('model, cost_usd, metadata, created_at')
+    .select(EVENT_COLS)
     .eq('org_id', orgId)
-    .gte('created_at', since30)
-    .not('metadata', 'is', null)
-    .order('created_at', { ascending: false })
-    .limit(5_000)
+    .gte('created_at', since30))
 
-  // ── Aggregate server-side (same logic as API route) ──────────────────────
+  // Context tokens = fresh input + cache reads/writes (what the model actually read).
+  const ctxTokens = (r: EventRow) => Number(r.input_tokens ?? 0) + Number(r.cache_read_tokens ?? 0) + Number(r.cache_write_tokens ?? 0)
+
   type Agg = {
     hash: string; count: number; totalCost: number
     totalInput: number; totalOutput: number
@@ -84,32 +90,63 @@ export default async function PromptsAnalyticsPage() {
   }
 
   const byHash = new Map<string, Agg>()
-  let totalRequests = 0
+  const totalRequests = rows.length
 
-  for (const row of rows ?? []) {
-    totalRequests++
-    const meta = row.metadata as Record<string, unknown> | null
-    const hash = meta?.prompt_hash as string | undefined
+  for (const row of rows) {
+    const hash = row.prompt_hash
     if (!hash) continue
-
     const ex = byHash.get(hash) ?? {
       hash, count: 0, totalCost: 0, totalInput: 0, totalOutput: 0,
-      latencies: [], models: {}, promptChars: Number(meta?.prompt_chars ?? 0),
-      promptPreview: (meta?.prompt_preview as string | undefined) ?? null,
+      latencies: [], models: {}, promptChars: Number(row.prompt_chars ?? 0),
+      promptPreview: row.prompt_preview ?? null,
     }
     ex.count++
     ex.totalCost   += Number(row.cost_usd ?? 0)
-    ex.totalInput  += Number(meta?.input_tokens  ?? 0)
-    ex.totalOutput += Number(meta?.output_tokens ?? 0)
-    if (!ex.promptPreview && meta?.prompt_preview) {
-      ex.promptPreview = meta.prompt_preview as string
-    }
-    const lat = Number(meta?.latency_ms ?? 0)
+    ex.totalInput  += ctxTokens(row)
+    ex.totalOutput += Number(row.output_tokens ?? 0)
+    if (!ex.promptPreview && row.prompt_preview) ex.promptPreview = row.prompt_preview
+    const lat = Number(row.latency_ms ?? 0)
     if (lat > 0) ex.latencies.push(lat)
     const m = row.model ?? 'unknown'
     ex.models[m] = (ex.models[m] ?? 0) + 1
     byHash.set(hash, ex)
   }
+
+  // Captured prompt text (SDK prompt_text, or CLI-agent user_prompt events).
+  const { data: capturedRaw } = await admin
+    .from('prompt_captures')
+    .select('id, model, prompt_hash, prompt_text, response_text, input_tokens, output_tokens, cost_usd, created_at')
+    .eq('org_id', orgId)
+    .order('created_at', { ascending: false })
+    .limit(50)
+
+  // Use captured text as the preview for patterns that have none.
+  const textByHash = new Map<string, string>()
+  for (const c of capturedRaw ?? []) if (c.prompt_hash && c.prompt_text) textByHash.set(c.prompt_hash, c.prompt_text)
+  for (const a of Array.from(byHash.values())) {
+    if (!a.promptPreview && textByHash.has(a.hash)) {
+      const t = textByHash.get(a.hash)!
+      a.promptPreview = t.slice(0, 120)
+      a.promptChars = a.promptChars || t.length
+    }
+  }
+
+  // A CLI-agent prompt row carries no tokens/cost itself — they arrive on the
+  // api_request events that share its prompt id. Join them here.
+  const captured = (capturedRaw ?? []).map(c => {
+    const agg = c.prompt_hash ? byHash.get(c.prompt_hash) : undefined
+    const hasOwn = Number(c.cost_usd ?? 0) > 0 || Number(c.input_tokens ?? 0) + Number(c.output_tokens ?? 0) > 0
+    if (hasOwn || !agg) return { ...c, model: c.model ?? '—', calls: hasOwn ? 1 : 0 }
+    const topModel = Object.entries(agg.models).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—'
+    return {
+      ...c,
+      model: topModel,
+      input_tokens: agg.totalInput,
+      output_tokens: agg.totalOutput,
+      cost_usd: +agg.totalCost.toFixed(6),
+      calls: agg.count,
+    }
+  })
 
   const patterns: PromptPattern[] = Array.from(byHash.values())
     .sort((a, b) => b.totalCost - a.totalCost)
@@ -122,7 +159,7 @@ export default async function PromptsAnalyticsPage() {
       const base: PromptPattern = {
         hash:              p.hash,
         count:             p.count,
-        total_cost_usd:    +p.totalCost.toFixed(4),
+        total_cost_usd:    +p.totalCost.toFixed(6),
         avg_cost_usd:      +(p.totalCost / p.count).toFixed(6),
         avg_input_tokens:  Math.round(p.totalInput  / p.count),
         avg_output_tokens: Math.round(p.totalOutput / p.count),
@@ -136,21 +173,14 @@ export default async function PromptsAnalyticsPage() {
       return { ...base, ...rate(base) }
     })
 
-  // Summary stats
-  const hashedRequests = Array.from(byHash.values()).reduce((s, p) => s + p.count, 0)
-  const totalCost = patterns.reduce((s, p) => s + p.total_cost_usd, 0)
-  const avgLatAll = patterns.flatMap(p => p.avg_latency_ms ?? [])
-  const globalAvgLatency = avgLatAll.length
-    ? Math.round(avgLatAll.reduce((s, v) => s + v, 0) / avgLatAll.length)
+  // Summary stats over ALL fingerprinted requests, not just the top 100 patterns.
+  const allAggs = Array.from(byHash.values())
+  const hashedRequests = allAggs.reduce((s, p) => s + p.count, 0)
+  const totalCost = allAggs.reduce((s, p) => s + p.totalCost, 0)
+  const allLat = allAggs.flatMap(p => p.latencies)
+  const globalAvgLatency = allLat.length
+    ? Math.round(allLat.reduce((s, v) => s + v, 0) / allLat.length)
     : null
-
-  // Captured full prompts (opt-in via gateway CAPTURE_PROMPTS=1; migration 014).
-  const { data: captured } = await admin
-    .from('prompt_captures')
-    .select('id, model, prompt_text, response_text, input_tokens, output_tokens, cost_usd, created_at')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: false })
-    .limit(50)
 
   return (
     <>
@@ -170,12 +200,12 @@ export default async function PromptsAnalyticsPage() {
 const clipText = (s: string | null, n: number) => !s ? '' : s.length > n ? s.slice(0, n) + '…' : s
 const usd = (n: number) => n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`
 
-function CapturedPrompts({ rows }: { rows: Array<{ id: string; model: string; prompt_text: string; response_text: string | null; input_tokens: number; output_tokens: number; cost_usd: number; created_at: string }> }) {
+function CapturedPrompts({ rows }: { rows: Array<{ id: string; model: string; prompt_text: string; response_text: string | null; input_tokens: number; output_tokens: number; cost_usd: number; created_at: string; calls: number }> }) {
   return (
     <div className="mt-8">
       <div className="mb-1 text-[15px] font-bold text-[var(--fg)]">Captured prompts</div>
       <p className="mb-3 text-[12.5px] text-[var(--fg-secondary)]">
-        Full prompt/response text, when captured.{rows.length === 0 ? ' Not currently wired up in this deployment — no capture path writes to this table yet.' : ''}
+        Full prompt text with the tokens and cost it generated. Captured from SDK <code>prompt_text</code> and from Claude Code / Codex / Gemini prompt events (enabled by <code>tokenfin setup</code>).
       </p>
       {rows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-[var(--border)] p-8 text-center text-[12.5px] text-[var(--fg-tertiary)]">
@@ -187,7 +217,7 @@ function CapturedPrompts({ rows }: { rows: Array<{ id: string; model: string; pr
             <details key={r.id} className="rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
               <summary className="flex cursor-pointer items-center justify-between text-[12.5px]">
                 <span className="font-medium text-[var(--fg)]">{r.model}</span>
-                <span className="text-[var(--fg-tertiary)]">{r.input_tokens + r.output_tokens} tok · {usd(Number(r.cost_usd))} · {new Date(r.created_at).toLocaleString()}</span>
+                <span className="text-[var(--fg-tertiary)]">{(Number(r.input_tokens) + Number(r.output_tokens)).toLocaleString()} tok · {usd(Number(r.cost_usd))}{r.calls > 1 ? ` · ${r.calls} calls` : ''} · {new Date(r.created_at).toLocaleString()}</span>
               </summary>
               <div className="mt-3 space-y-2">
                 <div>

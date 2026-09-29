@@ -35,11 +35,13 @@ purposes. This was a real bug until 2026-08-10: it originally read
 `usage_agg`, which is metered-only, so a limit on a CLI-agent-only project
 showed 0% forever. See [`data-flow.md`](./data-flow.md#the-metered-vs-notional-split).
 
-**Real enforcement** (the `403`/`429` in `/api/v1/ingest`) reads `usage_agg`
-— correctly, in this one specific case, because enforcement is *only* possible
-for the metered SDK path anyway, and `usage_agg` is exactly the metered
-subset. Don't "fix" this one to read `usage_events` — that would let notional
-CLI-agent spend it can't even see block real API traffic it can.
+**Real enforcement** (the `403`/`429` in `/api/v1/ingest`) counts **metered
+spend only** — month-to-date via the `org_spend_since(p_org, p_since,
+p_metered_only => true)` RPC (migration 006), which sums `usage_events` rows
+whose `cost_basis` is not `notional`. That is correct in this one specific
+case, because enforcement is *only* possible for the metered SDK path anyway.
+Don't "fix" this to include notional rows — that would let CLI-agent spend it
+can't even see block real API traffic it can.
 
 ---
 

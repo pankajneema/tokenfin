@@ -19,6 +19,7 @@ const MANAGED_KEYS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_HEADERS',
   'OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE',
+  'OTEL_LOG_USER_PROMPTS',
 ]
 
 // The env block that points Claude Code's native telemetry at our OTLP receiver.
@@ -33,6 +34,9 @@ function otelEnv(otelEndpoint, key) {
     OTEL_EXPORTER_OTLP_ENDPOINT: otelEndpoint,
     OTEL_EXPORTER_OTLP_HEADERS: 'Authorization=Bearer ' + key,
     OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'cumulative',
+    // Sends each prompt's text so Prompt Analytics can show it next to the
+    // tokens and cost it generated (joined by prompt.id).
+    OTEL_LOG_USER_PROMPTS: '1',
   }
 }
 
@@ -124,7 +128,7 @@ function geminiTelemetry(otelEndpoint, key) {
     useCollector: true,
     otlpProtocol: 'http',
     otlpEndpoint: `${otelEndpoint}?key=${key}`,
-    logPrompts: false,
+    logPrompts: true,
   }
 }
 

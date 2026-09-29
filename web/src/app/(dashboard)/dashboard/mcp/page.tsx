@@ -3,6 +3,7 @@ import { createAdminClient }  from '@/lib/supabase/server'
 import { McpClient }          from './_client'
 import { inferConnection }    from '../setup/_catalog'
 import type { PlatformRow, PlatformModel } from './_types'
+import { selectAll } from '@/lib/supabase/paginate'
 
 export { type PlatformRow, type PlatformModel } from './_types'
 
@@ -38,12 +39,11 @@ export default async function McpPage() {
       .from('projects')
       .select('id, name')
       .eq('org_id', orgId),
-    admin
+    selectAll<{ api_key_id: string | null; model: string; total_tokens: number; cost_usd: number; source: string | null }>(() => admin
       .from('usage_events')
       .select('api_key_id, model, total_tokens, cost_usd, source')
       .eq('org_id', orgId)
-      .gte('created_at', since)
-      .limit(100_000),
+      .gte('created_at', since)),
   ])
 
   // Build project name lookup

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useParams } from 'next/navigation'
 import { Shield, Copy, Check, AlertCircle } from 'lucide-react'
 
 /**
@@ -8,7 +9,8 @@ import { Shield, Copy, Check, AlertCircle } from 'lucide-react'
  * their secure link and clicks to reveal their API key exactly once. Click —
  * not auto-reveal — so email link scanners/previewers don't burn the single use.
  */
-export default function RevealPage({ params }: { params: { token: string } }) {
+export default function RevealPage() {
+  const { token } = useParams<{ token: string }>()
   const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [rawKey, setRawKey] = useState('')
   const [error, setError] = useState('')
@@ -20,7 +22,7 @@ export default function RevealPage({ params }: { params: { token: string } }) {
       const res = await fetch('/api/v1/keys/reveal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: params.token }),
+        body: JSON.stringify({ token }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Unable to reveal key'); setState('error'); return }

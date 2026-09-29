@@ -7,6 +7,7 @@
  * daily aggregates never double-count on replay either.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { PromptEvent } from './normalize'
 import type { KeyCtx } from './auth'
 import type { UsageRow } from './normalize'
 
@@ -30,12 +31,16 @@ export async function persistRows(admin: SupabaseClient, ctx: KeyCtx, rows: Usag
   const projectId = await resolveProjectId(admin, ctx.orgId, ctx.projectId)
 
   for (const r of rows) {
+    // Anthropic (Claude Code) reports cache tokens separately from input_tokens,
+    // so a turn's real size includes them. Codex/OpenAI cached input is already
+    // inside input_tokens, so it is not added twice.
     const total = r.input_tokens + r.output_tokens
+      + (r.source === 'claude_code' ? r.cache_read_tokens + r.cache_write_tokens : 0)
     const record: Record<string, unknown> = {
       org_id: ctx.orgId, project_id: projectId, api_key_id: ctx.keyId, user_id: ctx.userId,
       model: r.model,
       input_tokens: r.input_tokens, output_tokens: r.output_tokens, total_tokens: total,
-      cost_usd: r.cost_usd, created_at: r.ts,
+      cost_usd: r.cost_usd, created_at: r.ts, latency_ms: r.latency_ms ?? null,
       event_id: r.event_id, source: r.source, mode: 'push',
       provider_request_id: r.provider_request_id, correlation_id: r.correlation_id,
       cache_read_tokens: r.cache_read_tokens, cache_write_tokens: r.cache_write_tokens,
@@ -126,4 +131,35 @@ export async function persistRows(admin: SupabaseClient, ctx: KeyCtx, rows: Usag
     }
   }
   return res
+}
+
+/**
+ * Store CLI-agent user prompts (one row per prompt id). Tokens and cost are
+ * not on the prompt event; readers join them from usage_events by prompt_hash.
+ */
+export async function persistPrompts(admin: SupabaseClient, ctx: KeyCtx, prompts: PromptEvent[]): Promise<number> {
+  if (process.env.CAPTURE_PROMPTS === '0' || prompts.length === 0) return 0
+  const projectId = await resolveProjectId(admin, ctx.orgId, ctx.projectId)
+  const ids = Array.from(new Set(prompts.map(p => p.prompt_id)))
+  const { data: existing } = await admin.from('prompt_captures')
+    .select('prompt_hash').eq('org_id', ctx.orgId).in('prompt_hash', ids)
+  const seen = new Set((existing ?? []).map((r: { prompt_hash: string }) => r.prompt_hash))
+  const fresh = prompts.filter(p => {
+    if (seen.has(p.prompt_id)) return false
+    seen.add(p.prompt_id)
+    return true
+  })
+  if (fresh.length === 0) return 0
+  const { error } = await admin.from('prompt_captures').insert(fresh.map(p => ({
+    org_id: ctx.orgId,
+    project_id: projectId,
+    user_id: ctx.userId,
+    model: '',   // filled from the joined api_request events when displayed
+    prompt_hash: p.prompt_id,
+    prompt_text: p.prompt_text,
+    context: p.source,
+    created_at: p.ts,
+  })))
+  if (error) { console.error('[otlp] prompt capture failed:', error.message); return 0 }
+  return fresh.length
 }

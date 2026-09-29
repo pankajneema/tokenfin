@@ -21,26 +21,9 @@ import type { NextRequest }                   from 'next/server'
 import { createAdminClient }                  from '@/lib/supabase/server'
 import { rateLimit, rateLimitResponse }       from '@/lib/ratelimit'
 import crypto                                 from 'crypto'
-import { fetchAllRows }                      from '@/lib/supabase/paginate'
+import { computeCost }                        from '@/lib/mcp/pricing'
 
-/* ── Pricing (per 1M tokens) ── */
-const PRICE: Record<string, { in: number; out: number }> = {
-  'claude-opus-4-8':              { in: 15.00, out: 75.00 },
-  'claude-sonnet-4-6':            { in:  3.00, out: 15.00 },
-  'claude-haiku-4-5-20251001':    { in:  0.80, out:  4.00 },
-  'claude-haiku-4-5':             { in:  0.80, out:  4.00 },
-  'gpt-4o':                       { in:  2.50, out: 10.00 },
-  'gpt-4o-mini':                  { in:  0.15, out:  0.60 },
-  'gpt-4-turbo':                  { in: 10.00, out: 30.00 },
-  'gpt-3.5-turbo':                { in:  0.50, out:  1.50 },
-  'gemini-1.5-pro':               { in:  1.25, out:  5.00 },
-  'gemini-1.5-flash':             { in:  0.075, out: 0.30 },
-}
-
-function computeCost(model: string, inputTok: number, outputTok: number): number {
-  const p = PRICE[model] ?? { in: 2.00, out: 8.00 }
-  return (inputTok * p.in + outputTok * p.out) / 1_000_000
-}
+/* Pricing lives in one place — see lib/mcp/pricing.ts. */
 
 function hashKey(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex')
@@ -70,15 +53,9 @@ async function checkLimitsAndNotify(
   // Read raw events so alerts include old history and never hit Supabase's
   // default 1,000-row response cap. This also covers subscription/notional
   // usage, which is still important for account usage alerts.
-  const monthStart = new Date()
-  monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
-  const spendRows = await fetchAllRows((from, to) => admin.from('usage_events')
-    .select('cost_usd')
-    .eq('org_id', orgId)
-    .gte('created_at', monthStart.toISOString())
-    .range(from, to))
-
-  const totalSpend = spendRows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  // One SQL sum (migration 006) instead of paging the month's events through
+  // Node on every request. Warnings count all usage, including subscription.
+  const totalSpend = await monthSpend(admin, orgId, false)
   const today = new Date().toISOString().slice(0, 10)
 
   for (const limit of limits) {
@@ -131,6 +108,15 @@ async function checkLimitsAndNotify(
   }
 }
 
+/** Month-to-date spend (UTC month) via the org_spend_since RPC. */
+async function monthSpend(admin: ReturnType<typeof createAdminClient>, orgId: string, meteredOnly: boolean): Promise<number> {
+  const now = new Date()
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
+  const { data, error } = await admin.rpc('org_spend_since', { p_org: orgId, p_since: monthStart, p_metered_only: meteredOnly })
+  if (error) throw new Error(`org_spend_since failed: ${error.message}`)
+  return Number(data ?? 0)
+}
+
 /**
  * Evaluate active monthly org-scoped spend limits and decide whether this
  * request should be allowed, throttled, or blocked.
@@ -152,15 +138,9 @@ async function evaluateSpendLimit(
 
   if (!limits?.length) return { action: 'allow', pct: 0, budget: 0 }
 
-  const monthStart = new Date()
-  monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
-  const spendRows = await fetchAllRows((from, to) => admin.from('usage_events')
-    .select('cost_usd')
-    .eq('org_id', orgId)
-    .gte('created_at', monthStart.toISOString())
-    .range(from, to))
-
-  const totalSpend = spendRows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  // Blocking only ever counts METERED spend: subscription (notional) usage from
+  // Claude Code / Codex / Gemini must not block real SDK traffic.
+  const totalSpend = await monthSpend(admin, orgId, true)
 
   let action: 'allow' | 'throttle' | 'block' = 'allow'
   let worstPct = 0
@@ -212,14 +192,8 @@ async function directIngest(apiKey: string, body: Record<string, unknown>, idemp
     )
   }
 
-  // 2. Rate limit — per API key, plan-aware
-  const { data: org } = await admin
-    .from('orgs')
-    .select('plan')
-    .eq('id', keyRow.org_id)
-    .single()
-
-  const rl = await rateLimit(keyRow.id, org?.plan ?? 'free')
+  // 2. Abuse protection only — monitoring is free and unlimited, there are no plans.
+  const rl = await rateLimit(keyRow.id)
   if (!rl.allowed) return rateLimitResponse(rl)
 
   // 3. Validate body
@@ -234,10 +208,12 @@ async function directIngest(apiKey: string, body: Record<string, unknown>, idemp
   // Derive split from total when only total was provided (70/30 estimate)
   const effectiveInput  = inputTok  > 0 ? inputTok  : Math.round(totalTok * 0.7)
   const effectiveOutput = outputTok > 0 ? outputTok : totalTok - Math.round(totalTok * 0.7)
+  const cacheReadTok  = Math.max(0, Number(body.cache_read_tokens ?? body.cache_read_input_tokens ?? 0) || 0)
+  const cacheWriteTok = Math.max(0, Number(body.cache_write_tokens ?? body.cache_creation_input_tokens ?? 0) || 0)
   const suppliedCost = typeof body.cost_usd === 'number' ? body.cost_usd : null
   const costUsd     = suppliedCost !== null && Number.isFinite(suppliedCost) && suppliedCost >= 0
     ? suppliedCost
-    : computeCost(model, effectiveInput, effectiveOutput)
+    : computeCost(model, effectiveInput, effectiveOutput, cacheReadTok, cacheWriteTok)
   const projectId   = String(body.project_id ?? keyRow.project_id ?? '')
   const incomingTags = (body.tags as Record<string,string>) ?? {}
   const incomingMetadata = (body.metadata as Record<string,unknown>) ?? {}
@@ -320,6 +296,8 @@ async function directIngest(apiKey: string, body: Record<string, unknown>, idemp
     input_tokens:  effectiveInput,
     output_tokens: effectiveOutput,
     total_tokens:  totalTok,
+    cache_read_tokens:  cacheReadTok,
+    cache_write_tokens: cacheWriteTok,
     cost_usd:      costUsd,
     event_id:      eventId,
     request_idempotency_key: idempotencyKey,
@@ -337,7 +315,10 @@ async function directIngest(apiKey: string, body: Record<string, unknown>, idemp
     metadata,
   }
   const { data: insertedEvent, error: evtErr } = await admin.from('usage_events')
-    .upsert(eventRecord, { onConflict: idempotencyKey ? 'org_id,request_idempotency_key' : 'event_id', ignoreDuplicates: true })
+    // event_id = direct:{org}:{idempotency key} and has a plain UNIQUE index.
+    // Conflicting on (org_id, request_idempotency_key) fails (42P10) because that
+    // index is partial, which rejected every SDK event (the SDKs always send a key).
+    .upsert(eventRecord, { onConflict: 'event_id', ignoreDuplicates: true })
     .select('id')
   if (evtErr) {
     console.error('[ingest direct] usage_events insert error:', evtErr)
@@ -463,14 +444,16 @@ export async function POST(req: NextRequest) {
       })
       clearTimeout(timer)
 
+      // Any non-5xx answer is final: the Go service has accepted (or rejected)
+      // the event. Falling back after a 2xx wrote every event a second time.
       const text = await upstream.text()
-      if (text && text.trim().startsWith('{')) {
-        return new NextResponse(text, {
+      if (upstream.status < 500) {
+        return new NextResponse(text && text.trim().startsWith('{') ? text : JSON.stringify({ ok: upstream.ok }), {
           status:  upstream.status,
           headers: { 'Content-Type': 'application/json' },
         })
       }
-      console.info('[ingest] Go service returned invalid body, falling back to Supabase')
+      console.info(`[ingest] Go service returned ${upstream.status}, falling back to Supabase`)
     } catch {
       console.info('[ingest] Go service unavailable, falling back to Supabase')
     }

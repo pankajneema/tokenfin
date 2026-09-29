@@ -188,13 +188,23 @@ export async function getOrgRole(userId: string, orgId: string): Promise<Role> {
 
 // ─── API Key auth ─────────────────────────────────────────────────────────────
 
+export interface ApiKeyContext {
+  orgId:     string
+  /** The project the key was minted for — callers should scope reads to it when relevant. */
+  projectId: string | null
+  keyId:     string
+  scopes:    string[]
+}
+
 /**
- * Resolves org_id from a Bearer API key in the Authorization header.
- * Returns null if no key present, key is invalid, inactive, or expired.
+ * Resolves the org (and project) from a Bearer API key in the Authorization header.
+ * Returns null if no key present, or the key is invalid, inactive, expired, or
+ * lacks the 'read' scope. Legacy keys with an empty scopes array are treated as
+ * read-capable for backward compatibility.
  */
 export async function resolveOrgFromApiKey(
   req: NextRequest,
-): Promise<string | null> {
+): Promise<ApiKeyContext | null> {
   const auth = req.headers.get('authorization') ?? ''
   const raw  = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
   if (!raw) return null
@@ -202,32 +212,89 @@ export async function resolveOrgFromApiKey(
   const keyHash        = crypto.createHash('sha256').update(raw).digest('hex')
   const { data: keyRow } = await createAdminClient()
     .from('api_keys')
-    .select('org_id, is_active, expires_at')
+    .select('id, org_id, project_id, is_active, expires_at, scopes')
     .eq('key_hash', keyHash)
     .maybeSingle()
 
   if (!keyRow || !keyRow.is_active) return null
   if (keyRow.expires_at && new Date(keyRow.expires_at) < new Date()) return null
-  return keyRow.org_id as string
+
+  const scopes = Array.isArray(keyRow.scopes) ? (keyRow.scopes as string[]) : []
+  if (scopes.length > 0 && !scopes.includes('read') && !scopes.includes('admin')) return null
+
+  return {
+    orgId:     keyRow.org_id as string,
+    projectId: (keyRow.project_id as string | null) ?? null,
+    keyId:     keyRow.id as string,
+    scopes,
+  }
 }
 
 /**
  * requireApiKeyOrOrgMember — accepts EITHER:
- *  • Bearer API key  →  resolves org_id from api_keys table (no session needed)
+ *  • Bearer API key (with 'read' scope) → resolves org_id (+ project_id) from api_keys
  *  • Supabase session + org_id query param  →  delegates to requireOrgMember
  *
- * Use this on any route the MCP server calls.
+ * Use this on any READ route the MCP server calls. `projectId` is set only for
+ * API-key callers and is the project the key belongs to.
  */
 export async function requireApiKeyOrOrgMember(
   req: NextRequest,
   orgIdParam?: string | null,
-): Promise<{ orgId: string } | NextResponse> {
-  const apiKeyOrgId = await resolveOrgFromApiKey(req)
-  if (apiKeyOrgId) return { orgId: apiKeyOrgId }
+): Promise<{ orgId: string; projectId?: string | null } | NextResponse> {
+  const apiKey = await resolveOrgFromApiKey(req)
+  if (apiKey) return { orgId: apiKey.orgId, projectId: apiKey.projectId }
 
   const guard = await requireOrgMember(orgIdParam)
   if (guard instanceof NextResponse) return guard
   return { orgId: orgIdParam! }
+}
+
+/**
+ * assertOrgOwnsIds — verifies that every provided id (project/team/user) belongs
+ * to `orgId`. Returns null when all are valid, or a 422 NextResponse naming the
+ * first offending field. Undefined/null ids are skipped.
+ */
+export async function assertOrgOwnsIds(
+  orgId: string,
+  ids: { project_id?: string | null; team_id?: string | null; user_id?: string | null },
+): Promise<null | NextResponse> {
+  const admin = createAdminClient()
+  if (ids.project_id) {
+    const { data } = await admin.from('projects').select('id').eq('id', ids.project_id).eq('org_id', orgId).maybeSingle()
+    if (!data) return NextResponse.json({ error: 'project_id does not belong to this org' }, { status: 422 })
+  }
+  if (ids.team_id) {
+    const { data } = await admin.from('teams').select('id').eq('id', ids.team_id).eq('org_id', orgId).maybeSingle()
+    if (!data) return NextResponse.json({ error: 'team_id does not belong to this org' }, { status: 422 })
+  }
+  if (ids.user_id) {
+    const { data } = await admin.from('members').select('id').eq('user_id', ids.user_id).eq('org_id', orgId).maybeSingle()
+    if (!data) return NextResponse.json({ error: 'user_id is not a member of this org' }, { status: 422 })
+  }
+  return null
+}
+
+/**
+ * requireResourcePermission — for PATCH/DELETE that only receive a resource `id`.
+ * Looks up the resource's org_id, then enforces the RBAC permission on it.
+ * Returns { userId, role, orgId } or a 400/401/403/404 NextResponse.
+ */
+export async function requireResourcePermission(
+  table: string,
+  id: string | null | undefined,
+  permission: Permission,
+): Promise<{ userId: string; role: Role; orgId: string } | NextResponse> {
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+  const { data, error } = await createAdminClient()
+    .from(table)
+    .select('org_id')
+    .eq('id', id)
+    .maybeSingle()
+  if (error || !data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const guard = await requirePermission(data.org_id as string, permission)
+  if (guard instanceof NextResponse) return guard
+  return { ...guard, orgId: data.org_id as string }
 }
 
 // ─── Error helper ─────────────────────────────────────────────────────────────

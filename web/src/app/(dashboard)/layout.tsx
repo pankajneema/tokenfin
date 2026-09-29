@@ -40,7 +40,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (!user) redirect('/login')
 
   // Use admin client for membership + project checks — bypasses RLS so
-  // we never get a false-negative that boots the user back to /plans.
+  // we never get a false-negative that boots the user back to /welcome.
   const { data: members } = await admin
     .from('members')
     .select('id, org_id')
@@ -50,7 +50,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const membership = members?.[0] ?? null
   if (!membership) {
     console.log('[DashboardLayout] no membership for user', user.id)
-    redirect('/plans')
+    redirect('/welcome')
   }
 
   const [{ data: projects }, { data: orgRow }] = await Promise.all([
@@ -94,7 +94,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <div className="flex h-screen bg-[var(--bg-secondary)] overflow-hidden">
       <Sidebar user={user} />
       <div className="flex-1 flex flex-col min-w-0">
-        <Topbar user={user} notifications={notifications} orgPlan={orgRow?.plan ?? 'free'} />
+        <Topbar user={user} notifications={notifications} />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
     </div>

@@ -49,7 +49,7 @@ export default function PrivacyPage() {
           },
           {
             title: '6. Data Retention',
-            body: 'We retain usage event data for 13 months by default. Account data is retained while your account is active and for 30 days after deletion, then permanently erased. You can request early deletion at any time.',
+            body: 'Usage data is kept until you delete it. Workspace owners can delete monitoring data older than 7, 30 or 90 days, or all of it, at any time in Settings → Data, and can set automatic retention so older data is deleted daily. Captured prompt text expires after 90 days. Account data is retained while your account is active and for 30 days after deletion, then permanently erased.',
           },
           {
             title: '7. Your Rights',

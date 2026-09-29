@@ -29,7 +29,8 @@ const MODEL_PROVIDER: Record<string, string> = {
 }
 
 function shortName(m: string) {
-  return MODEL_SHORT[m] ?? m.split('-').slice(0, 2).join(' ')
+  // Unknown ids are shown in full — truncating made e.g. gpt-4o-mini look like gpt-4o.
+  return MODEL_SHORT[m] ?? m
 }
 function provider(m: string) {
   return MODEL_PROVIDER[m] ?? (m.startsWith('claude') ? 'Anthropic' : m.startsWith('gpt') ? 'OpenAI' : m.startsWith('gemini') ? 'Google' : 'Other')

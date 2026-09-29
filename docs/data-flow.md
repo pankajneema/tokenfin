@@ -37,9 +37,10 @@ by making org/project-scoped limits and the alert engine do the same
 `web/src/lib/alerts/engine.ts`.
 
 **When you add a new feature that computes "spend," ask first: does this need
-to be a real bill (use `usage_agg`), or does it need to see everything the
-user is actually doing (use `usage_events`)?** Analytics totals and SDK-side
-enforcement are the former. Limits display, alerts, and My Usage are the
+to be a real bill (use `usage_agg`, or metered-only `usage_events` rows), or
+does it need to see everything the user is actually doing (use `usage_events`)?**
+Analytics totals and SDK-side enforcement are the former (enforcement uses the
+`org_spend_since` RPC with `p_metered_only = true`). Limits display, alerts, and My Usage are the
 latter.
 
 ---
@@ -146,7 +147,7 @@ sequenceDiagram
 
     Caller->>Route: POST {model, input_tokens, output_tokens, ...}<br/>Bearer tfk_… key
     Route->>Route: validate key, scope check (needs "write")
-    Route->>Route: evaluateSpendLimit(org) — reads usage_agg<br/>for org-scoped monthly limits
+    Route->>Route: evaluateSpendLimit(org) — metered month-to-date spend<br/>(org_spend_since RPC) vs org-scoped monthly limits
     alt over block_at %
         Route-->>Caller: 403 { error, pct }
     else over throttle_at %
@@ -186,8 +187,8 @@ CLI-agent capture — don't reach for it when debugging OTLP issues.
 
 | Table | What's in it | Who writes it | Who reads it |
 |---|---|---|---|
-| `usage_events` | Every captured event, any `cost_basis` | OTLP receiver, `/api/v1/ingest`, Go worker, MCP `compress` tool | Limits, alerts, My Usage, Analytics (some views), Platforms accuracy badges |
-| `usage_agg` | Daily rollup, **metered only** | `persistRows()` (from `usage_events`, filtered), Go worker | Most Analytics charts, `/api/v1/ingest`'s own limit check, MCP `get_spend`/`get_usage_by_model`/`get_daily_costs` |
+| `usage_events` | Every captured event, any `cost_basis` | OTLP receiver, `/api/v1/ingest`, Go worker, MCP `compress` tool | Limits, alerts, My Usage, Analytics (some views), Platforms accuracy badges, `/api/v1/ingest` limit check (metered rows only, `org_spend_since`) |
+| `usage_agg` | Daily rollup, **metered only** | `persistRows()` (from `usage_events`, filtered), Go worker | Most Analytics charts, MCP `get_spend`/`get_usage_by_model`/`get_daily_costs` |
 | `otlp_metric_state` | Last-seen cumulative value per metric series | `deriveMetricEvents()` | itself (state only) |
 | `limits` | Configured budgets/thresholds | Dashboard UI | Limits page, alert engine, `/api/v1/ingest` enforcement |
 | `alert_rules` / `notifications` | User rules / fired history | Dashboard UI / alert engine | Alerts page, topbar bell |

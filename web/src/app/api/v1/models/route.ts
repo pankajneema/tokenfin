@@ -1,7 +1,7 @@
 import { NextResponse }                              from 'next/server'
 import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, requireApiKeyOrOrgMember, dbError } from '@/lib/api/auth'
+import { requirePermission, requireApiKeyOrOrgMember, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
 
 function db() { return createAdminClient() }
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
 
 /* POST /api/v1/models */
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     org_id: z.string().uuid(),
     model:  z.string().min(1).max(128),
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireOrgMember(parsed.data.org_id)
+  const guard = await requirePermission(parsed.data.org_id, 'models:manage')
   if (guard instanceof NextResponse) return guard
 
   const { data, error } = await db().from('org_models').insert(parsed.data).select().single()
@@ -65,7 +65,7 @@ export async function DELETE(req: NextRequest) {
   const model = req.nextUrl.searchParams.get('model')
   if (!model) return NextResponse.json({ error: 'model required' }, { status: 400 })
 
-  const guard = await requireOrgMember(orgId)
+  const guard = await requirePermission(orgId, 'models:manage')
   if (guard instanceof NextResponse) return guard
 
   const { error } = await db().from('org_models').delete().eq('org_id', orgId!).eq('model', model)

@@ -1,7 +1,7 @@
 import { NextResponse }                              from 'next/server'
 import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
-import { requireOrgMember, requireResourceOwner, dbError } from '@/lib/api/auth'
+import { requireOrgMember, requirePermission, requireResourcePermission, assertOrgOwnsIds, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
 
 function db() { return createAdminClient() }
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
 /* POST /api/v1/teams */
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     org_id:     z.string().uuid(),
     name:       z.string().min(1).max(64),
@@ -32,8 +32,11 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireOrgMember(parsed.data.org_id)
+  const guard = await requirePermission(parsed.data.org_id, 'teams:manage')
   if (guard instanceof NextResponse) return guard
+
+  const bad = await assertOrgOwnsIds(parsed.data.org_id, { project_id: parsed.data.project_id })
+  if (bad) return bad
 
   const { data, error } = await db().from('teams').insert(parsed.data).select().single()
   if (error) return dbError(error, 'POST teams')
@@ -42,7 +45,7 @@ export async function POST(req: NextRequest) {
 
 /* PATCH /api/v1/teams */
 export async function PATCH(req: NextRequest) {
-  const body = await req.json()
+  const body = await req.json().catch(() => null)
   const schema = z.object({
     id:         z.string().uuid(),
     name:       z.string().min(1).max(64).optional(),
@@ -51,11 +54,14 @@ export async function PATCH(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const guard = await requireResourceOwner('teams', parsed.data.id)
+  const guard = await requireResourcePermission('teams', parsed.data.id, 'teams:manage')
   if (guard instanceof NextResponse) return guard
 
+  const bad = await assertOrgOwnsIds(guard.orgId, { project_id: parsed.data.project_id })
+  if (bad) return bad
+
   const { id, ...fields } = parsed.data
-  const { data, error } = await db().from('teams').update(fields).eq('id', id).select().single()
+  const { data, error } = await db().from('teams').update(fields).eq('id', id).eq('org_id', guard.orgId).select().single()
   if (error) return dbError(error, 'PATCH teams')
   return NextResponse.json(data)
 }
@@ -63,13 +69,13 @@ export async function PATCH(req: NextRequest) {
 /* DELETE /api/v1/teams?id=xxx */
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id')
-  const guard = await requireResourceOwner('teams', id)
+  const guard = await requireResourcePermission('teams', id, 'teams:manage')
   if (guard instanceof NextResponse) return guard
 
   // Unassign members before deleting the team
-  await db().from('members').update({ team_id: null }).eq('team_id', id!)
+  await db().from('members').update({ team_id: null }).eq('team_id', id!).eq('org_id', guard.orgId)
 
-  const { error } = await db().from('teams').delete().eq('id', id!)
+  const { error } = await db().from('teams').delete().eq('id', id!).eq('org_id', guard.orgId)
   if (error) return dbError(error, 'DELETE teams')
   return NextResponse.json({ ok: true })
 }

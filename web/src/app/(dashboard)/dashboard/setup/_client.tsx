@@ -82,10 +82,10 @@ const CATEGORIES: Category[] = [
 function pushConfig(otelEndpoint: string, key: string): Record<string, { file: string; captures: string; note: string | null; config: string }> {
   return {
     claude_code: {
-      file: '~/.claude/settings.json', captures: 'Per-turn model, input / output / cache tokens and cost (from api_request logs).', note: null,
+      file: '~/.claude/settings.json', captures: 'Per-turn model, input / output / cache tokens and cost (from api_request logs), plus each prompt\'s text.', note: null,
       config: ['"env": {', '  "CLAUDE_CODE_ENABLE_TELEMETRY": "1",', '  "OTEL_METRICS_EXPORTER": "otlp",', '  "OTEL_LOGS_EXPORTER": "otlp",',
         '  "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",', `  "OTEL_EXPORTER_OTLP_ENDPOINT": "${otelEndpoint}",`,
-        `  "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer ${key}",`, '  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"', '}'].join('\n'),
+        `  "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer ${key}",`, '  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",', '  "OTEL_LOG_USER_PROMPTS": "1"', '}'].join('\n'),
     },
     codex_cli: {
       file: '~/.codex/config.toml  (user-level only)', captures: 'Per-turn tokens from the codex.turn.token_usage metric.',
@@ -97,7 +97,7 @@ function pushConfig(otelEndpoint: string, key: string): Record<string, { file: s
     gemini_cli: {
       file: '~/.gemini/settings.json', captures: 'Per-turn tokens from the gen_ai.client.token.usage metric.',
       note: 'Gemini can’t set OTLP headers, so the key rides on the endpoint as ?key=.',
-      config: JSON.stringify({ telemetry: { enabled: true, target: 'local', useCollector: true, otlpProtocol: 'http', otlpEndpoint: `${otelEndpoint}?key=${key}`, logPrompts: false } }, null, 2),
+      config: JSON.stringify({ telemetry: { enabled: true, target: 'local', useCollector: true, otlpProtocol: 'http', otlpEndpoint: `${otelEndpoint}?key=${key}`, logPrompts: true } }, null, 2),
     },
     opencode: {
       file: '~/.config/opencode/opencode.json', captures: 'Per-turn tokens + cost from the opencode-otel-plugin (traces + metrics).',

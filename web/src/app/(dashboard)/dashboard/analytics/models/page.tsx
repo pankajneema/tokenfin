@@ -1,8 +1,9 @@
 import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
-import { daysAgoIST, tsNDaysAgo } from '@/lib/dates'
+import { tsNDaysAgo } from '@/lib/dates'
 import { ModelsClient }       from './_client'
 import type { ModelRow }      from './_client'
+import { selectAll } from '@/lib/supabase/paginate'
 
 export const metadata = { title: 'By Model — TokenFin Analytics' }
 
@@ -47,81 +48,44 @@ export default async function ModelsAnalyticsPage({
     .from('members').select('org_id').eq('user_id', user.id).limit(1)
   const orgId = _mb?.[0]?.org_id ?? ''
 
-  const sinceDateCurr = daysAgoIST(days)        // IST date for usage_agg.bucket
-  const sinceDatePrev = daysAgoIST(days * 2)
   const sinceTsCurr   = tsNDaysAgo(days)         // UTC ts for usage_events.created_at
   const sinceTsPrev   = tsNDaysAgo(days * 2)
 
-  const [{ data: curr }, { data: prev }, { data: evts }, { data: evtsPrev }] = await Promise.all([
-    admin.from('usage_agg')
-      .select('model,total_tokens,cost_usd,request_count')
-      .eq('org_id', orgId).gte('bucket', sinceDateCurr),
-    admin.from('usage_agg')
-      .select('model,total_tokens,cost_usd,request_count')
-      .eq('org_id', orgId).gte('bucket', sinceDatePrev).lt('bucket', sinceDateCurr),
-    // usage_events is always used for call counts (source of truth, 1 row = 1 call)
-    admin.from('usage_events')
-      .select('model,input_tokens,output_tokens,total_tokens,cost_usd,cost_basis')
-      .eq('org_id', orgId).gte('created_at', sinceTsCurr),
-    admin.from('usage_events')
-      .select('model,input_tokens,output_tokens,total_tokens,cost_usd,cost_basis')
-      .eq('org_id', orgId).gte('created_at', sinceTsPrev).lt('created_at', sinceTsCurr),
+  const [{ data: evts }, { data: evtsPrev }] = await Promise.all([
+    selectAll<Record<string, any>>(() => admin.from('usage_events')
+      .select('model,input_tokens,output_tokens,total_tokens,cost_usd,cost_basis,latency_ms')
+      .eq('org_id', orgId).gte('created_at', sinceTsCurr)),
+    selectAll<Record<string, any>>(() => admin.from('usage_events')
+      .select('model,input_tokens,output_tokens,total_tokens,cost_usd,cost_basis,latency_ms')
+      .eq('org_id', orgId).gte('created_at', sinceTsPrev).lt('created_at', sinceTsCurr)),
   ])
 
-  // Cost/tokens: prefer usage_agg (pre-aggregated), fall back to usage_events.
-  // A single nonzero row isn't enough to trust usage_agg wholesale — the async
-  // aggregation worker can partially lag, so compare summed totals instead.
-  // usage_agg only ever holds METERED rows, so exclude notional from the
-  // raw-events side or subscription-usage orgs would always look "incomplete".
-  const aggCostTotal  = (curr ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const evtsCostTotal = (evts ?? []).filter(r => (r as Record<string,unknown>).cost_basis !== 'notional').reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const aggHasCost    = aggCostTotal > 0 && aggCostTotal >= evtsCostTotal * 0.95
-
-  // usage_agg NEVER contains notional rows (by design) — top it up with
-  // notional rows read straight from raw events, or trusting agg silently
-  // drops subscription spend/tokens from every total below.
-  const notionalEvts     = (evts     ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
-  const notionalEvtsPrev = (evtsPrev ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
-  const costSource     = aggHasCost ? [...(curr ?? []), ...notionalEvts]     : (evts     ?? [])
-  const costSourcePrev = aggHasCost ? [...(prev ?? []), ...notionalEvtsPrev] : (evtsPrev ?? [])
-
-  /* ── Aggregate current period: cost+tokens from agg, calls from events ── */
-  const currMap = new Map<string, { inputTok: number; outputTok: number; totalTok: number; cost: number; calls: number }>()
-
-  // Cost + tokens from agg (or events fallback)
-  for (const r of costSource) {
+  /* ── Aggregate from raw events (complete, paginated): cost, tokens, calls and
+   * real latency all come from the same rows, so they always agree. ── */
+  const currMap = new Map<string, { inputTok: number; outputTok: number; totalTok: number; cost: number; calls: number; latSum: number; latN: number }>()
+  for (const r of evts ?? []) {
     const m   = r.model ?? 'unknown'
-    const e   = currMap.get(m) ?? { inputTok: 0, outputTok: 0, totalTok: 0, cost: 0, calls: 0 }
-    const row = r as Record<string,unknown>
-    const inTok  = Number(row.input_tokens  ?? 0)
-    const outTok = Number(row.output_tokens ?? 0)
-    const tot    = Number(row.total_tokens  ?? 0)
-    e.inputTok  += inTok
+    const e   = currMap.get(m) ?? { inputTok: 0, outputTok: 0, totalTok: 0, cost: 0, calls: 0, latSum: 0, latN: 0 }
+    const inTok  = Number(r.input_tokens  ?? 0)
+    const outTok = Number(r.output_tokens ?? 0)
+    const tot    = Number(r.total_tokens  ?? 0)
+    // Cache tokens (Claude Code) are context the model read: count them as input
+    // so input + output always equals the stored total.
+    e.inputTok  += inTok + Math.max(0, tot - inTok - outTok)
     e.outputTok += outTok
     e.totalTok  += tot > 0 ? tot : inTok + outTok
     e.cost      += Number(r.cost_usd ?? 0)
-    currMap.set(m, e)
-  }
-
-  // Call counts ALWAYS from usage_events (1 row = 1 API call — usage_agg.request_count unreliable)
-  for (const r of evts ?? []) {
-    const m = r.model ?? 'unknown'
-    const e = currMap.get(m) ?? { inputTok: 0, outputTok: 0, totalTok: 0, cost: 0, calls: 0 }
     e.calls++
+    const lat = Number(r.latency_ms ?? 0)
+    if (lat > 0) { e.latSum += lat; e.latN++ }
     currMap.set(m, e)
   }
 
-  /* ── Aggregate prev period ── */
   const prevMap = new Map<string, { cost: number; calls: number }>()
-  for (const r of costSourcePrev) {
-    const m = r.model ?? 'unknown'
-    const e = prevMap.get(m) ?? { cost: 0, calls: 0 }
-    e.cost += Number(r.cost_usd ?? 0)
-    prevMap.set(m, e)
-  }
   for (const r of evtsPrev ?? []) {
     const m = r.model ?? 'unknown'
     const e = prevMap.get(m) ?? { cost: 0, calls: 0 }
+    e.cost += Number(r.cost_usd ?? 0)
     e.calls++
     prevMap.set(m, e)
   }
@@ -149,8 +113,9 @@ export default async function ModelsAnalyticsPage({
         tier:         meta?.tier         ?? 'standard',
         color:        meta?.color        ?? COLORS[i % COLORS.length],
         bg:           meta?.color        ?? COLORS[i % COLORS.length],
-        costPer1M:    meta?.costPer1M    ?? 0,
-        avgLatencyMs: meta?.avgLatencyMs ?? 0,
+        // Effective rate actually paid and measured latency — not list-price placeholders.
+        costPer1M:    v.totalTok > 0 ? +(v.cost / v.totalTok * 1e6).toFixed(4) : 0,
+        avgLatencyMs: v.latN > 0 ? Math.round(v.latSum / v.latN) : 0,
         cost30d:      v.cost,
         costPrev:     p.cost,
         inputTok,

@@ -1,5 +1,6 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { ProjectsClient } from './_client'
+import { selectAll } from '@/lib/supabase/paginate'
 
 export const metadata = { title: 'Projects — TokenFin' }
 
@@ -46,11 +47,11 @@ export default async function ProjectsPage() {
       .select('id,name,slug,description,created_at')
       .eq('org_id', orgId)
       .order('created_at', { ascending: false }),
-    admin
+    selectAll<{ project_id: string; cost_usd: number; total_tokens: number }>(() => admin
       .from('usage_events')
       .select('project_id,cost_usd,total_tokens')
       .eq('org_id', orgId)
-      .gte('created_at', since30),
+      .gte('created_at', since30)),
     admin
       .from('api_keys')
       .select('project_id,is_active')

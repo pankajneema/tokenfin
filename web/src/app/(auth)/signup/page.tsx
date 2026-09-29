@@ -149,7 +149,7 @@ export default function SignupPage() {
     // If email confirmation is disabled, Supabase returns a session immediately.
     // Skip the "check inbox" screen and go straight to plan selection.
     if (data.session) {
-      router.push('/plans')
+      router.push('/welcome')
       return
     }
     setDone(true)
@@ -222,10 +222,10 @@ export default function SignupPage() {
       <div className="mb-8">
         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-teal/10 border border-teal/25 text-[11px] font-semibold text-teal tracking-wide mb-3">
           <span className="w-1 h-1 rounded-full bg-teal" />
-          14 days free · no credit card
+          Free · unlimited monitoring
         </div>
         <h1 className="text-[26px] font-bold text-[var(--fg)] tracking-tight mb-1.5 leading-[1.2]">
-          Start your free trial
+          Create your free account
         </h1>
         <p className="text-[13.5px] text-[var(--fg-secondary)]">
           Join teams already saving on AI costs

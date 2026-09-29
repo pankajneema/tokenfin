@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff, ArrowRight, AlertCircle, ShieldCheck } from 'lucide-react'
@@ -127,12 +127,35 @@ export default function LoginPage() {
     : 'default'
 
   // Post-login destination — honors ?next= (must be a same-site relative path
-  // to avoid open redirects), falling back to the dashboard.
+  // to avoid open redirects; "//host" is protocol-relative), falling back to the dashboard.
   function nextDest() {
     if (typeof window === 'undefined') return '/dashboard'
     const n = new URLSearchParams(window.location.search).get('next')
-    return n && n.startsWith('/') ? n : '/dashboard'
+    return n && n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/\\') ? n : '/dashboard'
   }
+
+  // Invite and admin-generated links come back with the session in the URL hash
+  // (#access_token=…&type=invite), which /auth/callback (server-side, ?code= only)
+  // cannot see — it redirects here with the hash intact. Finish the sign-in so an
+  // invited user (who has no password yet) can accept the invitation.
+  useEffect(() => {
+    const hash = new URLSearchParams(window.location.hash.slice(1))
+    const access_token  = hash.get('access_token')
+    const refresh_token = hash.get('refresh_token')
+    if (!access_token || !refresh_token) {
+      if (new URLSearchParams(window.location.search).get('error') === 'auth_callback_failed')
+        setError('That sign-in link is invalid or has expired. Sign in below, or ask for a new invite.')
+      return
+    }
+    const type = hash.get('type')
+    supabase.auth.setSession({ access_token, refresh_token }).then(({ error }) => {
+      if (error) { setError('That sign-in link is invalid or has expired. Ask for a new invite.'); return }
+      window.history.replaceState(null, '', window.location.pathname)
+      router.replace(type === 'invite' ? '/accept-invitation' : type === 'recovery' ? '/reset-password' : nextDest())
+      router.refresh()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -325,7 +348,7 @@ export default function LoginPage() {
       <p className="mt-7 text-center text-[12.5px] text-[var(--fg-secondary)]">
         New to TokenFin?{' '}
         <Link href="/signup" className="text-coral font-semibold hover:underline underline-offset-2">
-          Start free trial →
+          Create a free account →
         </Link>
       </p>
 

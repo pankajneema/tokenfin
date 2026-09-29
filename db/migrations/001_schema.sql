@@ -282,7 +282,7 @@ RETURNS TABLE (
   FROM usage_events
   WHERE project_id = p_project_id AND created_at >= p_since
   GROUP BY model
-  ORDER BY cost_usd DESC;
+  ORDER BY SUM(cost_usd) DESC;
 $$;
 
 -- ── Check if project is over limit ───────────────────────────
@@ -686,6 +686,11 @@ $$;
 -- This migration rebuilds usage_agg from usage_events using IST (UTC+5:30) dates.
 -- Run AFTER migration 009 (which fixes the RPC function).
 -- =============================================================================
+
+-- The ON CONFLICT below needs this unique index, which section 013 creates
+-- later; create it here too so a fresh install doesn't abort (idempotent).
+CREATE UNIQUE INDEX IF NOT EXISTS usage_agg_org_proj_model_bucket
+  ON usage_agg (org_id, project_id, model, bucket);
 
 -- Rebuild usage_agg from usage_events using IST date buckets
 INSERT INTO usage_agg (org_id, project_id, model, bucket, total_tokens, cost_usd, request_count)

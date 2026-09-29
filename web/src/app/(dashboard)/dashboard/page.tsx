@@ -1,5 +1,6 @@
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { toISTDate, daysAgoIST, tsNDaysAgo } from '@/lib/dates'
+import { selectAll } from '@/lib/supabase/paginate'
 import { StatsCards }     from '@/components/dashboard/stats-cards'
 import { CostChart }      from '@/components/dashboard/cost-chart'
 import { ModelBreakdown } from '@/components/dashboard/model-breakdown'
@@ -15,6 +16,12 @@ export const metadata = { title: 'Overview — TokenFin' }
 // Always render fresh — usage data changes on every ingested event.
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+
+type UsageRow = {
+  id: string; total_tokens: number | null; input_tokens?: number | null; output_tokens?: number | null
+  cost_usd: number | null; cost_basis?: string | null; model?: string | null
+  project_id?: string | null; user_id?: string | null; created_at: string; tags?: unknown
+}
 
 /* ── Sparkline builder ────────────────────────────────── */
 type SparkRow = { cost_usd?: number | null; total_tokens?: number | null; created_at: string }
@@ -49,8 +56,6 @@ export default async function DashboardPage() {
   const since30  = tsNDaysAgo(30)   // UTC timestamp for usage_events.created_at queries
   const since60  = tsNDaysAgo(60)
   const since7   = tsNDaysAgo(7)
-  const since5d  = daysAgoIST(5)   // IST date for usage_agg.bucket queries
-  const since10d = daysAgoIST(10)
 
   /* ── Identify org ── */
   const { data: { user } } = await supabase.auth.getUser()
@@ -65,44 +70,32 @@ export default async function DashboardPage() {
     { data: events30   },
     { data: eventsPrev },
     { data: events7    },
-    { data: chartRaw   },
     { data: recent     },
     { data: members    },
     { data: projects   },
-    { data: projAgg    },
-    { data: apiKeys    },
     { data: teams      },
-    { data: prev5dAgg  },
+    { data: apiKeys    },
   ] = await Promise.all([
-    admin.from('usage_events')
-      .select('total_tokens,input_tokens,output_tokens,cost_usd,cost_basis,model,project_id,created_at,tags')
-      .eq('org_id', orgId).gte('created_at', since30),
-    admin.from('usage_events')
-      .select('total_tokens,cost_usd,cost_basis,created_at')
-      .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30),
-    admin.from('usage_events')
-      .select('total_tokens,cost_usd,created_at')
-      .eq('org_id', orgId).gte('created_at', since7),
-    admin.from('usage_agg')
-      .select('bucket,cost_usd,total_tokens,request_count')
-      .eq('org_id', orgId).gte('bucket', since5d).order('bucket', { ascending: true }),
+    selectAll<UsageRow>(() => admin.from('usage_events')
+      .select('id,total_tokens,input_tokens,output_tokens,cost_usd,cost_basis,model,project_id,user_id,created_at,tags')
+      .eq('org_id', orgId).gte('created_at', since30)),
+    selectAll<UsageRow>(() => admin.from('usage_events')
+      .select('id,total_tokens,cost_usd,cost_basis,created_at')
+      .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30)),
+    selectAll<UsageRow>(() => admin.from('usage_events')
+      .select('id,total_tokens,cost_usd,created_at')
+      .eq('org_id', orgId).gte('created_at', since7)),
     admin.from('usage_events')
       .select('id,model,total_tokens,cost_usd,created_at,tags,metadata')
       .eq('org_id', orgId).order('created_at', { ascending: false }).limit(10),
     admin.from('members')
       .select('id,user_id,team_id,role').eq('org_id', orgId).limit(100),
     admin.from('projects')
-      .select('id,name,slug').eq('org_id', orgId).limit(10),
-    admin.from('usage_agg')
-      .select('project_id,cost_usd,request_count,total_tokens')
-      .eq('org_id', orgId).gte('bucket', since5d),
-    admin.from('api_keys')
-      .select('created_by,project_id').eq('org_id', orgId).eq('is_active', true),
+      .select('id,name,slug').eq('org_id', orgId),
     admin.from('teams')
       .select('id,name').eq('org_id', orgId),
-    admin.from('usage_agg')
-      .select('cost_usd,total_tokens,request_count')
-      .eq('org_id', orgId).gte('bucket', since10d).lt('bucket', since5d),
+    admin.from('api_keys')
+      .select('id').eq('org_id', orgId).eq('is_active', true).limit(1),
   ])
 
   /* ── Current period aggregations ── */
@@ -184,45 +177,14 @@ export default async function DashboardPage() {
       request_count: v.reqs,
     }))
 
-  /* ── Project breakdown: prefer projAgg, fall back to events ──
-   * A single nonzero row used to be enough to trust projAgg wholesale, which
-   * silently under-counted whenever the aggregation worker only partially
-   * caught up on the 5-day window. Compare against the raw 5-day METERED
-   * total instead — usage_agg only ever holds metered rows (persist.ts
-   * deliberately excludes notional), so comparing it against a combined
-   * total would make it look permanently incomplete for subscription usage.
-   * Only trust projAgg when it accounts for at least 95% of the metered
-   * events in the same window. */
-  const notionalEvts5d = (events30 ?? []).filter(e => isNotional(e) && dayMap.has(toISTDate(e.created_at)))
-  const evts5dMeteredTotal = Array.from(dayMap.values()).reduce((s, v) => s + v.cost, 0)
-    - notionalEvts5d.reduce((s, e) => s + Number(e.cost_usd ?? 0), 0)
-  const projAggCostTotal = (projAgg ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const projAggHasCost = projAggCostTotal > 0 && projAggCostTotal >= evts5dMeteredTotal * 0.95
+  /* ── Project breakdown: combined (metered + notional) over the full 30 days,
+   * matching the headline Total Cost card. ── */
   const projMap: Record<string, { cost: number; calls: number }> = {}
-
-  if (projAggHasCost) {
-    for (const r of projAgg ?? []) {
-      const pid = r.project_id ?? '__none__'
-      if (!projMap[pid]) projMap[pid] = { cost: 0, calls: 0 }
-      projMap[pid].cost  += Number(r.cost_usd      ?? 0)
-      projMap[pid].calls += Number(r.request_count ?? 0)
-    }
-    // usage_agg never contains notional rows — top it up from raw events so
-    // Top Projects still matches the combined headline Total Cost.
-    for (const e of notionalEvts5d) {
-      const pid = e.project_id ?? '__none__'
-      if (!projMap[pid]) projMap[pid] = { cost: 0, calls: 0 }
-      projMap[pid].cost  += Number(e.cost_usd ?? 0)
-      projMap[pid].calls += 1
-    }
-  } else {
-    // Combined (metered + notional), matching the headline Total Cost card.
-    for (const e of events30 ?? []) {
-      const pid = e.project_id ?? '__none__'
-      if (!projMap[pid]) projMap[pid] = { cost: 0, calls: 0 }
-      projMap[pid].cost  += Number(e.cost_usd ?? 0)
-      projMap[pid].calls += 1
-    }
+  for (const e of events30 ?? []) {
+    const pid = e.project_id ?? '__none__'
+    if (!projMap[pid]) projMap[pid] = { cost: 0, calls: 0 }
+    projMap[pid].cost  += Number(e.cost_usd ?? 0)
+    projMap[pid].calls += 1
   }
 
   const projNames = new Map((projects ?? []).map(p => [p.id, p.name]))
@@ -238,14 +200,11 @@ export default async function DashboardPage() {
     .sort((a, b) => b.cost30d - a.cost30d)
     .slice(0, 5)
 
-  /* ── Member cost attribution via api_keys.created_by → project cost ── */
+  /* ── Member cost attribution: each event belongs to the member whose key sent it ── */
   const userCostMap = new Map<string, number>()
-  for (const key of apiKeys ?? []) {
-    const creator = (key as Record<string,unknown>).created_by as string | null
-    const pid     = (key as Record<string,unknown>).project_id as string | null
-    if (!creator || !pid) continue
-    const projCost = projMap[pid]?.cost ?? 0
-    userCostMap.set(creator, (userCostMap.get(creator) ?? 0) + projCost)
+  for (const e of events30 ?? []) {
+    if (!e.user_id) continue
+    userCostMap.set(e.user_id, (userCostMap.get(e.user_id) ?? 0) + Number(e.cost_usd ?? 0))
   }
 
   /* ── Member display names from auth ── */
@@ -277,10 +236,13 @@ export default async function DashboardPage() {
 
   const sparks = buildSparklines(events7 ?? [])
 
+  // Previous 5 IST days (days 5–9 ago), same combined basis as the chart.
+  const prev5dDays = new Set(Array.from({ length: 5 }, (_, i) => daysAgoIST(i + 5)))
+  const prev5d = (events30 ?? []).filter(e => prev5dDays.has(toISTDate(e.created_at)))
   const prevTotals = {
-    tokens: (prev5dAgg ?? []).reduce((s, r) => s + Number(r.total_tokens  ?? 0), 0),
-    cost:   (prev5dAgg ?? []).reduce((s, r) => s + Number(r.cost_usd      ?? 0), 0),
-    reqs:   (prev5dAgg ?? []).reduce((s, r) => s + Number(r.request_count ?? 0), 0),
+    tokens: prev5d.reduce((s, r) => s + Number(r.total_tokens ?? 0), 0),
+    cost:   prev5d.reduce((s, r) => s + Number(r.cost_usd     ?? 0), 0),
+    reqs:   prev5d.length,
   }
 
   return (

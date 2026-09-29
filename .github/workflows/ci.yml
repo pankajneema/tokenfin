@@ -9,7 +9,7 @@ on:
 jobs:
   # ── Next.js web ─────────────────────────────────────────────────────────────
   web:
-    name: "Web — typecheck + lint"
+    name: "Web — typecheck + lint + test"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,10 +26,11 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm test
 
   # ── Go backend ──────────────────────────────────────────────────────────────
   go:
-    name: "Go — vet + build"
+    name: "Go — vet + build + test"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -50,6 +51,24 @@ jobs:
 
       - name: build worker
         run: go build -o /dev/null ./cmd/worker
+
+      - name: go test
+        run: go test ./...
+
+  # ── Python SDK ──────────────────────────────────────────────────────────────
+  sdk-python:
+    name: "Python SDK — test"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - run: python -m pytest tests/ -q
 
   # ── Docker build smoke test ─────────────────────────────────────────────────
   docker:

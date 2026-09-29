@@ -75,15 +75,16 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
         const actorName = String(identity['user.name'] ?? identity['user.username'] ?? identity['username'] ?? '') || null
         const toolName = String(identity['tool.name'] ?? identity['client.name'] ?? resAttrs['service.name'] ?? '') || null
         const provider = String(identity['gen_ai.system'] ?? identity['provider'] ?? '') || null
-        const promptHash = String(identity['prompt_hash'] ?? identity['prompt.id'] ?? identity['conversation.id'] ?? identity['session.id'] ?? '') || null
+        const promptHash = String(identity['prompt_hash'] ?? identity['prompt.id'] ?? identity['prompt_id'] ?? identity['conversation.id'] ?? identity['session.id'] ?? '') || null
         const promptPreview = String(identity['prompt_preview'] ?? identity['prompt.preview'] ?? '') || null
         const bodyValue = attrVal(rec?.body)
         const promptTextValue = identity['prompt_text'] ?? identity['prompt.text'] ?? identity['user_prompt'] ?? identity['user.prompt']
-        const promptText = String(promptTextValue ?? (typeof bodyValue === 'string' && /prompt|request/i.test(eventName) ? bodyValue : '')) || null
+        // Only a real user prompt counts; an api_request body is just the event name.
+        const promptText = String(promptTextValue ?? (typeof bodyValue === 'string' && /user_prompt/i.test(eventName) ? bodyValue : '')) || null
         const promptChars = num(identity['prompt_chars'] ?? identity['prompt.length']) || null
-        const latencyMs = num(identity['latency_ms'] ?? identity['gen_ai.server.request.duration_ms']) || null
+        const latencyMs = num(identity['latency_ms'] ?? identity['duration_ms'] ?? identity['gen_ai.server.request.duration_ms']) || null
         const providerReqId = (identity['request_id'] ?? identity['gen_ai.response.id'] ?? null) as string | null
-        const correlationId = (identity['prompt.id'] ?? identity['conversation.id'] ?? identity['session.id'] ?? null) as string | null
+        const correlationId = (identity['prompt.id'] ?? identity['prompt_id'] ?? identity['conversation.id'] ?? identity['session.id'] ?? null) as string | null
         const timeNano = rec?.timeUnixNano ?? rec?.observedTimeUnixNano
         const ts = nanoToIso(timeNano) ?? new Date().toISOString()
 
@@ -96,7 +97,7 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
         // Cost is ALWAYS computed server-side, never taken from the event
         // (spec: cost_usd is server-computed, never client-supplied). computeCost
         // has sane defaults for models it doesn't know, so this is never 0.
-        const cost = computeCost(model, input + cacheR + cacheW, output)
+        const cost = computeCost(model, input, output, cacheR, cacheW)
 
         rows.push({
           event_id: eventId,
@@ -149,6 +150,50 @@ export function scanMetrics(body: any): MetricsHealth {
           out.unrecognized.push(name)
           warnUnrecognizedMetric(name)
         }
+      }
+    }
+  }
+  return out
+}
+
+export interface PromptEvent {
+  prompt_id: string
+  prompt_text: string
+  prompt_chars: number
+  ts: string
+  source: string
+  user_email: string | null
+}
+
+/**
+ * Extract user prompts from an OTLP logs payload. CLI agents emit the prompt
+ * text on a separate `user_prompt` event (Claude Code: OTEL_LOG_USER_PROMPTS=1,
+ * Gemini: logPrompts, Codex: log_user_prompt) that carries no tokens. Its
+ * prompt id matches the prompt_hash on the api_request rows, which is how a
+ * captured prompt is joined to its cost and tokens.
+ */
+export function normalizePrompts(body: any): PromptEvent[] {
+  const out: PromptEvent[] = []
+  for (const rl of body?.resourceLogs ?? []) {
+    const resAttrs = attrsToMap(rl?.resource?.attributes ?? [])
+    for (const sl of rl?.scopeLogs ?? []) {
+      for (const rec of sl?.logRecords ?? []) {
+        const a = attrsToMap(rec?.attributes ?? [])
+        const identity = { ...resAttrs, ...a }
+        const eventName = String(rec?.eventName ?? a['event.name'] ?? '')
+        if (!/user_prompt/i.test(eventName)) continue
+        const text = a['prompt'] ?? a['prompt_text'] ?? a['prompt.text'] ?? a['user_prompt']
+        if (typeof text !== 'string' || !text.trim() || text === '<REDACTED>') continue
+        const promptId = (identity['prompt.id'] ?? identity['prompt_id'] ?? identity['conversation.id'] ?? identity['session.id'] ?? null) as string | null
+        if (!promptId) continue
+        out.push({
+          prompt_id: String(promptId),
+          prompt_text: text,
+          prompt_chars: num(a['prompt_length']) || text.length,
+          ts: nanoToIso(rec?.timeUnixNano ?? rec?.observedTimeUnixNano) ?? new Date().toISOString(),
+          source: detectSource(resAttrs, eventName),
+          user_email: String(identity['user.email'] ?? identity['user_email'] ?? '') || null,
+        })
       }
     }
   }
