@@ -122,3 +122,30 @@ export async function sendInvite(admin: SupabaseClient, p: {
   const otp = await admin.auth.signInWithOtp({ email: p.email, options: { shouldCreateUser: false, emailRedirectTo: redirectTo } })
   return otp.error ? { status: 'failed', error: otp.error.message } : { status: 'sent', via: 'supabase' }
 }
+
+/**
+ * After someone joins a team by invitation, delete the EMPTY workspaces they
+ * own on their own — the ones auto-created at signup before the invite was
+ * accepted (sole member, no projects, no usage, no keys). Otherwise another
+ * device (no tf_org cookie) would open that empty workspace and show
+ * "Create project" again. Anything with real content is kept.
+ */
+export async function removeEmptyOwnWorkspaces(admin: SupabaseClient, userId: string, keepOrgId: string): Promise<string[]> {
+  const { data: mine } = await admin.from('members').select('org_id, role').eq('user_id', userId)
+  const removed: string[] = []
+  for (const m of mine ?? []) {
+    const orgId = m.org_id as string
+    if (orgId === keepOrgId || m.role !== 'owner') continue
+    const [members, projects, events, keys] = await Promise.all([
+      admin.from('members').select('id', { count: 'exact', head: true }).eq('org_id', orgId),
+      admin.from('projects').select('id', { count: 'exact', head: true }).eq('org_id', orgId),
+      admin.from('usage_events').select('id', { count: 'exact', head: true }).eq('org_id', orgId),
+      admin.from('api_keys').select('id', { count: 'exact', head: true }).eq('org_id', orgId),
+    ])
+    if ([members, projects, events, keys].some(r => r.error)) continue      // unsure → keep it
+    if ((members.count ?? 0) !== 1 || (projects.count ?? 0) > 0 || (events.count ?? 0) > 0 || (keys.count ?? 0) > 0) continue
+    const { error } = await admin.from('organizations').delete().eq('id', orgId)
+    if (!error) removed.push(orgId)
+  }
+  return removed
+}

@@ -18,6 +18,7 @@ import { dbError }             from '@/lib/api/auth'
 import type { Role }           from '@/lib/rbac'
 import { ORG_COOKIE }         from '@/lib/org-context'
 import { audit }              from '@/lib/audit'
+import { removeEmptyOwnWorkspaces } from '@/lib/invites'
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -89,8 +90,12 @@ export async function POST(req: NextRequest) {
     })
   }
 
+  // Drop the empty workspace auto-created at signup (if any) so every device
+  // opens the team they just joined.
+  const removedEmpty = await removeEmptyOwnWorkspaces(admin, user.id, invite.org_id).catch(() => [] as string[])
+
   if (!existing) {
-    await audit({ orgId: invite.org_id, actorUserId: user.id, action: 'member.join', targetType: 'member', targetId: user.id, details: { via: 'invitation', role: invite.role ?? 'member' } })
+    await audit({ orgId: invite.org_id, actorUserId: user.id, action: 'member.join', targetType: 'member', targetId: user.id, details: { via: 'invitation', role: invite.role ?? 'member', removed_empty_workspaces: removedEmpty.length } })
   }
 
   // Open the joined workspace next (people who already had their own

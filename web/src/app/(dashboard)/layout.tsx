@@ -47,8 +47,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   ])
   const invite = pendingInvite && !(myOrgs ?? []).some(m => m.org_id === pendingInvite.org_id) ? pendingInvite : null
   if (!projects?.[0]) {
-    console.log('[DashboardLayout] no project for org', orgId)
-    redirect('/onboarding')
+    // An empty workspace + an invitation to a real team → the invitation first
+    // (typically: signed up before the invite, which auto-created this workspace).
+    redirect(invite ? ACCEPT_PATH : '/onboarding')
   }
 
   /* ── Fetch real notifications ── */
