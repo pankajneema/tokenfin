@@ -115,7 +115,7 @@ export default function LoginPage() {
   const [showPw,   setShowPw]   = useState(false)
   const [remember, setRemember] = useState(false)
   const [loading,  setLoading]  = useState(false)
-  const [socialLoading, setSocialLoading] = useState<'github' | 'google' | null>(null)
+  const [socialLoading, setSocialLoading] = useState<'github' | 'google' | 'sso' | null>(null)
   const [error,    setError]    = useState<string | null>(null)
   const [emailTouched, setEmailTouched] = useState(false)
   // const [captchaToken, setCaptchaToken] = useState<string | null>(null)
@@ -179,6 +179,24 @@ export default function LoginPage() {
     if (error) { setError(error.message); setSocialLoading(null) }
   }
 
+  // SAML SSO: the identity provider is looked up from the email's domain.
+  async function handleSSO() {
+    const domain = email.split('@')[1]?.trim().toLowerCase()
+    if (!emailValid || !domain) { setEmailTouched(true); setError('Enter your work email above, then choose Sign in with SSO.'); return }
+    setSocialLoading('sso')
+    setError(null)
+    const { data, error } = await supabase.auth.signInWithSSO({
+      domain,
+      options: { redirectTo: `${location.origin}/auth/callback?next=${encodeURIComponent(nextDest())}` },
+    })
+    if (error || !data?.url) {
+      setError(`SSO isn't set up for ${domain}. Sign in with your password, or ask your workspace owner to enable SSO.`)
+      setSocialLoading(null)
+      return
+    }
+    window.location.href = data.url
+  }
+
   return (
     <div className="w-full animate-fade-in">
 
@@ -216,6 +234,18 @@ export default function LoginPage() {
             ? <span className="w-4 h-4 rounded-full border-2 border-[var(--border-strong)] border-t-[var(--fg)] animate-spin" />
             : <GoogleIcon className="w-[15px] h-[15px]" />}
           Google
+        </button>
+
+        <button
+          type="button"
+          onClick={handleSSO}
+          disabled={!!socialLoading || loading}
+          className="col-span-2 flex items-center justify-center gap-2 px-3 py-[9px] rounded-xl border border-[var(--border)] bg-[var(--bg)] hover:bg-[var(--bg-secondary)] hover:border-[var(--border-strong)] text-[var(--fg)] text-[12.5px] font-medium transition-all duration-150 shadow-soft disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {socialLoading === 'sso'
+            ? <span className="w-4 h-4 rounded-full border-2 border-[var(--border-strong)] border-t-[var(--fg)] animate-spin" />
+            : <ShieldCheck className="w-[15px] h-[15px]" />}
+          Sign in with SSO
         </button>
       </div>
 

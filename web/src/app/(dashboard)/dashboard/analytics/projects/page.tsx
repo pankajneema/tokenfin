@@ -1,208 +1,96 @@
-import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
-import { daysAgoIST, tsNDaysAgo } from '@/lib/dates'
+import { requireOrgContext }  from '@/lib/org-context'
+import { dashSummary, dashBreakdown, NO_PROJECT_ID } from '@/lib/rollups'
+import { resolveWindow } from '@/lib/rollup-scope'
 import { ProjectsClient }     from './_client'
 import type { ProjectRow }    from './_client'
-import { selectAll } from '@/lib/supabase/paginate'
 
 export const metadata = { title: 'By Project — TokenFin Analytics' }
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 const PROJ_COLORS = ['#D97757','#4285F4','#8B5CF6','#20B2AA','#F59E0B','#6B7280']
 const TEAM_COLORS = ['#8B5CF6','#20B2AA','#F59E0B','#D97757','#4285F4','#6B7280']
 
-export default async function ProjectsAnalyticsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ days?: string }>
-}) {
-  const supabase = createClient()
-  const admin    = createAdminClient()
+export default async function ProjectsAnalyticsPage({ searchParams }: { searchParams: Promise<{ days?: string }> }) {
+  const ctx   = await requireOrgContext()
+  const admin = createAdminClient()
+  const orgId = ctx.orgId
+  const win   = resolveWindow(await searchParams, ctx.timezone, { defaultDays: 30, allowed: [7, 30, 90] })
 
-  const { days: daysParam } = await searchParams
-  const days = Math.min(90, Math.max(7, parseInt(daysParam ?? '30') || 30))
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: _mb } = await admin
-    .from('members').select('org_id').eq('user_id', user.id).limit(1)
-  const orgId = _mb?.[0]?.org_id ?? ''
-
-  const since30date = daysAgoIST(days)
-  const since60date = daysAgoIST(days * 2)
-  const since30ts   = tsNDaysAgo(days)
-  const since60ts   = tsNDaysAgo(days * 2)
-
-  const [
-    { data: curr     },
-    { data: prev     },
-    { data: evts     },
-    { data: evtsPrev },
-    { data: projects },
-    { data: limits   },
-    { data: teams    },
-    { data: allMembers },
-    { data: allKeys  },
-  ] = await Promise.all([
-    selectAll<Record<string, any>>(() => admin.from('usage_agg')
-      .select('project_id,model,total_tokens,cost_usd,request_count')
-      .eq('org_id', orgId).gte('bucket', since30date)),
-    selectAll<Record<string, any>>(() => admin.from('usage_agg')
-      .select('project_id,cost_usd,request_count')
-      .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date)),
-    selectAll<Record<string, any>>(() => admin.from('usage_events')
-      .select('project_id,model,cost_usd,total_tokens,user_id,cost_basis')
-      .eq('org_id', orgId).gte('created_at', since30ts)),
-    selectAll<Record<string, any>>(() => admin.from('usage_events')
-      .select('project_id,cost_usd,cost_basis')
-      .eq('org_id', orgId).gte('created_at', since60ts).lt('created_at', since30ts)),
+  const [cur, prev, { data: projects }, { data: limits }, { data: teams }, { data: allMembers }, { data: allKeys }, { data: authData }] = await Promise.all([
+    dashBreakdown(admin, orgId, win.from, win.to, 'project', undefined, 50),   // top 50 by cost
+    dashBreakdown(admin, orgId, win.prevFrom, win.prevTo, 'project', undefined, 200),
     admin.from('projects').select('id,name,slug').eq('org_id', orgId),
     admin.from('limits').select('project_id,value').eq('org_id', orgId).eq('metric', 'cost'),
     admin.from('teams').select('id,name').eq('org_id', orgId),
-    // members with team_id — links users to teams (existing schema, no migration needed)
     admin.from('members').select('user_id,team_id').eq('org_id', orgId),
-    // api_keys with created_by + project_id — lets us attribute project → team
-    admin.from('api_keys')
-      .select('project_id,created_by')
-      .eq('org_id', orgId)
-      .eq('is_active', true),
+    admin.from('api_keys').select('project_id,created_by').eq('org_id', orgId).eq('is_active', true),
+    admin.auth.admin.listUsers({ perPage: 1000 }),
   ])
 
-  // Cost/tokens: prefer usage_agg; calls: always from usage_events (1 row = 1 call).
-  // A single nonzero row isn't enough to trust usage_agg wholesale — the async
-  // aggregation worker can partially lag, so compare summed totals instead.
-  // usage_agg only ever holds METERED rows, so exclude notional from the
-  // raw-events side or subscription-usage orgs would always look "incomplete".
-  const aggCostTotal  = (curr ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const evtsCostTotal = (evts ?? []).filter(r => (r as Record<string,unknown>).cost_basis !== 'notional').reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const aggHasCost    = aggCostTotal > 0 && aggCostTotal >= evtsCostTotal * 0.95
+  // Per project: prompts, models and the people who used it (all from the rollups).
+  const perProject = await Promise.all(cur.rows.map(r => Promise.all([
+    dashSummary(admin, orgId, win.from, win.to, { project_id: r.key }),
+    dashBreakdown(admin, orgId, win.from, win.to, 'model', { project_id: r.key }, 20),
+    dashBreakdown(admin, orgId, win.from, win.to, 'member', { project_id: r.key }, 200),
+  ])))
 
-  // usage_agg NEVER contains notional rows (by design) — top it up with
-  // notional rows read straight from raw events, or trusting agg silently
-  // drops subscription spend from every total below.
-  const notionalEvts     = (evts     ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
-  const notionalEvtsPrev = (evtsPrev ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
-  const currSource = aggHasCost ? [...(curr ?? []), ...notionalEvts]     : (evts     ?? [])
-  const prevSource = aggHasCost ? [...(prev ?? []), ...notionalEvtsPrev] : (evtsPrev ?? [])
+  const projNames = new Map((projects ?? []).map(p => [p.id as string, p.name as string]))
+  const budgetMap = new Map((limits ?? []).map(l => [l.project_id as string, l.value]))
+  const prevMap   = new Map(prev.rows.map(r => [r.key, r]))
 
-  const projNames = new Map((projects ?? []).map(p => [p.id, p.name]))
-  const budgetMap = new Map((limits   ?? []).map(l => [l.project_id, l.value]))
+  /* ── Team attribution: people → team (members.team_id) ── */
+  const teamMeta = new Map((teams ?? []).map((t, i) => [t.id as string, { name: t.name as string, color: TEAM_COLORS[i % TEAM_COLORS.length] }]))
+  const userTeam = new Map<string, string>()
+  for (const m of allMembers ?? []) if (m.user_id && m.team_id) userTeam.set(m.user_id as string, m.team_id as string)
+  // rollup user_key = lower(email) or user id → user id
+  const emailToUid = new Map<string, string>()
+  for (const u of authData?.users ?? []) if (u.email && userTeam.has(u.id)) emailToUid.set(u.email.toLowerCase(), u.id)
+  const teamOfKey = (k: string) => userTeam.get(k) ?? userTeam.get(emailToUid.get(k) ?? '')
 
-  /* ── Team lookup maps ── */
-  // team id → { name, color }
-  const teamMeta = new Map((teams ?? []).map((t, i) => [
-    t.id,
-    { name: t.name, color: TEAM_COLORS[i % TEAM_COLORS.length] },
-  ]))
-
-  // user_id → team_id  (from members table — existing schema)
-  const userTeamMap = new Map<string, string>()
-  for (const m of allMembers ?? []) {
-    const uid = (m as Record<string,unknown>).user_id as string | null
-    const tid = (m as Record<string,unknown>).team_id as string | null
-    if (uid && tid) userTeamMap.set(uid, tid)
-  }
-
-  /* ── Infer project → team via api_keys.created_by → members.team_id ── */
-  // Count how many active keys each team has per project → pick the dominant team
   const projTeamCount = new Map<string, Map<string, number>>()
-  for (const k of allKeys ?? []) {
-    const pid     = (k as Record<string,unknown>).project_id  as string | null
-    const creator = (k as Record<string,unknown>).created_by  as string | null
-    if (!pid || !creator) continue
-    const tid = userTeamMap.get(creator)
-    if (!tid) continue
-    if (!projTeamCount.has(pid)) projTeamCount.set(pid, new Map())
-    const inner = projTeamCount.get(pid)!
-    inner.set(tid, (inner.get(tid) ?? 0) + 1)
+  const bump = (pid: string, tid: string | undefined, n: number) => {
+    if (!tid) return
+    const inner = projTeamCount.get(pid) ?? new Map<string, number>()
+    inner.set(tid, (inner.get(tid) ?? 0) + n)
+    projTeamCount.set(pid, inner)
+  }
+  for (const k of allKeys ?? []) if (k.project_id && k.created_by) bump(k.project_id as string, userTeam.get(k.created_by as string), 1)
+  cur.rows.forEach((r, i) => { for (const m of perProject[i][2].rows) bump(r.key, teamOfKey(m.key), m.requests) })
+
+  const projTeam = new Map<string, { name: string; color: string }>()
+  for (const [pid, counts] of Array.from(projTeamCount.entries())) {
+    const top = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]
+    if (top && teamMeta.has(top[0])) projTeam.set(pid, teamMeta.get(top[0])!)
   }
 
-  // Also attribute via usage_events.user_id (covers ingest from users without
-  // keys) — usage_agg has no user_id column at all, so event-level
-  // attribution always has to run over whichever raw-event rows are in play:
-  // all of evts when falling back, or just the notional top-up when agg is
-  // the primary source (agg rows themselves can never carry a user_id).
-  for (const e of (aggHasCost ? notionalEvts : (evts ?? []))) {
-    const pid = e.project_id
-    const uid = (e as Record<string,unknown>).user_id as string | null
-    if (!pid || !uid) continue
-    const tid = userTeamMap.get(uid)
-    if (!tid) continue
-    if (!projTeamCount.has(pid)) projTeamCount.set(pid, new Map())
-    const inner = projTeamCount.get(pid)!
-    inner.set(tid, (inner.get(tid) ?? 0) + 1)
-  }
+  const totalCost = cur.rows.reduce((s, r) => s + r.cost_usd, 0)
 
-  // For each project, pick the team with the most keys
-  const projTeamMap = new Map<string, { name: string; color: string }>()
-  for (const [pid, teamCounts] of Array.from(projTeamCount.entries())) {
-    let topTeamId = '', topCount = 0
-    for (const [tid, count] of Array.from(teamCounts.entries())) {
-      if (count > topCount) { topTeamId = tid; topCount = count }
+  const projectRows: ProjectRow[] = cur.rows.map((r, i) => {
+    const p      = prevMap.get(r.key)
+    const budget = budgetMap.get(r.key)
+    const team   = projTeam.get(r.key)
+    const [summary, models] = perProject[i]
+    return {
+      id:         r.key,
+      name:       r.key === NO_PROJECT_ID ? 'Uncategorized' : projNames.get(r.key) ?? r.key.slice(0, 8),
+      team:       team?.name  ?? '—',
+      teamColor:  team?.color ?? '#6B7280',
+      color:      PROJ_COLORS[i % PROJ_COLORS.length],
+      cost30d:    r.cost_usd,
+      metered:    r.metered_cost_usd,
+      notional:   r.notional_cost_usd,
+      costPrev:   p?.cost_usd ?? 0,
+      tokens30d:  r.total_tokens / 1_000_000,
+      calls30d:   r.requests,
+      prompts30d: summary.prompts,
+      callsPrev:  p?.requests ?? 0,
+      models:     models.rows.map(m => m.key).filter(Boolean),
+      budget:     budget ? Number(budget) : undefined,
+      pctOfTotal: totalCost > 0 ? +(r.cost_usd / totalCost * 100).toFixed(1) : 0,
     }
-    if (topTeamId && teamMeta.has(topTeamId)) {
-      projTeamMap.set(pid, teamMeta.get(topTeamId)!)
-    }
-  }
+  })
 
-  /* ── Aggregate current period — cost+tokens from agg, calls from events ── */
-  const currMap = new Map<string, { cost: number; tokens: number; calls: number; models: Set<string> }>()
-  for (const r of currSource) {
-    const pid = r.project_id ?? '__none__'
-    const e   = currMap.get(pid) ?? { cost: 0, tokens: 0, calls: 0, models: new Set() }
-    e.cost   += Number(r.cost_usd     ?? 0)
-    e.tokens += Number(r.total_tokens ?? 0)
-    const model = (r as Record<string,unknown>).model as string | undefined
-    if (model) e.models.add(model)
-    currMap.set(pid, e)
-  }
-  // Calls always from usage_events
-  for (const r of evts ?? []) {
-    const pid = r.project_id ?? '__none__'
-    const e   = currMap.get(pid) ?? { cost: 0, tokens: 0, calls: 0, models: new Set() }
-    e.calls++
-    currMap.set(pid, e)
-  }
-
-  /* ── Aggregate prev period ── */
-  const prevMap = new Map<string, { cost: number; calls: number }>()
-  for (const r of prevSource) {
-    const pid = r.project_id ?? '__none__'
-    const e   = prevMap.get(pid) ?? { cost: 0, calls: 0 }
-    e.cost += Number(r.cost_usd ?? 0)
-    prevMap.set(pid, e)
-  }
-  for (const r of evtsPrev ?? []) {
-    const pid = r.project_id ?? '__none__'
-    const e   = prevMap.get(pid) ?? { cost: 0, calls: 0 }
-    e.calls++
-    prevMap.set(pid, e)
-  }
-
-  const totalCost = Array.from(currMap.values()).reduce((s, v) => s + v.cost, 0)
-
-  const projectRows: ProjectRow[] = Array.from(currMap.entries())
-    .sort(([, a], [, b]) => b.cost - a.cost)
-    .map(([pid, v], i) => {
-      const p      = prevMap.get(pid) ?? { cost: 0, calls: 0 }
-      const budget = budgetMap.get(pid)
-      const team   = projTeamMap.get(pid)
-      return {
-        id:         pid,
-        name:       projNames.get(pid) ?? (pid === '__none__' ? 'Uncategorized' : pid.slice(0, 8)),
-        team:       team?.name  ?? '—',
-        teamColor:  team?.color ?? '#6B7280',
-        color:      PROJ_COLORS[i % PROJ_COLORS.length],
-        cost30d:    v.cost,
-        costPrev:   p.cost,
-        tokens30d:  v.tokens / 1_000_000,
-        calls30d:   v.calls,
-        callsPrev:  p.calls,
-        models:     Array.from(v.models),
-        budget:     budget ? Number(budget) : undefined,
-        pctOfTotal: totalCost > 0 ? +(v.cost / totalCost * 100).toFixed(1) : 0,
-      }
-    })
-
-  return <ProjectsClient projects={projectRows} days={days} />
+  return <ProjectsClient projects={projectRows} days={win.days} windowLabel={win.label} />
 }

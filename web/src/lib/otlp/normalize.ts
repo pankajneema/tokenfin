@@ -8,9 +8,10 @@
  * so /v1/metrics is health-only (temporality + unrecognized-name checks).
  */
 import crypto from 'crypto'
-import { attrVal, attrsToMap, nanoToIso, num } from './attrs'
+import { attrVal, attrsToMap, nanoToIso, num, repoFrom, allocationTagsFrom, userKeyFrom, istDay } from './attrs'
 import { detectSource, costBasisFor, isRecognizedMetric, isDeltaTemporality, warnUnrecognizedMetric } from './mapping'
-import { computeCost } from '@/lib/mcp/pricing'
+import { computeCost, priceFor } from '@/lib/mcp/pricing'
+import type { BillableTokens } from '@/lib/pricing-overrides'
 import type { KeyCtx } from './auth'
 
 export interface UsageRow {
@@ -38,6 +39,20 @@ export interface UsageRow {
   prompt_chars?: number | null
   prompt_text?: string | null
   latency_ms?: number | null
+  // ── migration 007 enrichment ──
+  /** cost the vendor reported on the event (api_request.cost_usd) — informational, never the billed cost_usd */
+  vendor_cost_usd?: number | null
+  repo?: string | null
+  query_source?: string | null
+  agent_name?: string | null
+  skill_name?: string | null
+  mcp_server?: string | null
+  /** cost-allocation resource attributes (team.*, cost_center, department, project…) → usage_events.tags */
+  extra_tags?: Record<string, string>
+  /** tokens as billed; persist re-prices these when the org has a custom price override */
+  billable?: BillableTokens
+  /** false when the model fell through to the $2/$8 default price */
+  price_known?: boolean
 }
 
 const sha = (s: string) => crypto.createHash('sha256').update(s).digest('hex')
@@ -69,7 +84,7 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
         if (!model || (input + output + cacheR + cacheW) <= 0) continue
         if (/error|refusal/.test(eventName)) continue
 
-        const source = detectSource(resAttrs, eventName || model)
+        const source = detectSource(resAttrs, eventName)
         const userEmail = String(identity['user.email'] ?? identity['user_email'] ?? identity['email'] ?? '') || null
         const actorId = String(identity['user.id'] ?? identity['user_id'] ?? identity['account.id'] ?? identity['account_id'] ?? '') || null
         const actorName = String(identity['user.name'] ?? identity['user.username'] ?? identity['username'] ?? '') || null
@@ -98,6 +113,10 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
         // (spec: cost_usd is server-computed, never client-supplied). computeCost
         // has sane defaults for models it doesn't know, so this is never 0.
         const cost = computeCost(model, input, output, cacheR, cacheW)
+        // Vendor-reported cost is kept alongside (never instead of) our price.
+        const vendorRaw = a['cost_usd'] ?? (a['cost_usd_micros'] != null ? num(a['cost_usd_micros']) / 1e6 : undefined)
+        const vendorCost = vendorRaw == null || vendorRaw === '' || !Number.isFinite(Number(vendorRaw)) ? null : +Number(vendorRaw).toFixed(8)
+        const opt = (v: unknown) => (v == null || String(v).trim() === '' ? null : String(v))
 
         rows.push({
           event_id: eventId,
@@ -124,12 +143,50 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
           prompt_text: promptText,
           prompt_chars: promptChars,
           latency_ms: latencyMs,
+          vendor_cost_usd: vendorCost,
+          repo: repoFrom(identity) || null,
+          query_source: opt(a['query_source'] ?? identity['query_source']),
+          agent_name: opt(a['agent.name'] ?? identity['agent.name']),
+          skill_name: opt(a['skill.name'] ?? identity['skill.name']),
+          mcp_server: opt(a['mcp_server.name'] ?? identity['mcp_server.name']),
+          extra_tags: allocationTagsFrom(identity),
+          billable: { input, output, cacheRead: cacheR, cacheWrite: cacheW },
+          price_known: priceFor(model).known,
         })
         idx++
       }
     }
   }
   return rows
+}
+
+export interface ApiErrorEvent { user_key: string; model: string; day: string; errors: number }
+
+/**
+ * Count `*.api_error` log events per (user, model, IST day). These carry no
+ * tokens and never become usage rows — they feed api_errors_daily only.
+ */
+export function normalizeApiErrors(body: any, tz?: string): ApiErrorEvent[] {
+  const acc = new Map<string, ApiErrorEvent>()
+  for (const rl of body?.resourceLogs ?? []) {
+    const resAttrs = attrsToMap(rl?.resource?.attributes ?? [])
+    for (const sl of rl?.scopeLogs ?? []) {
+      for (const rec of sl?.logRecords ?? []) {
+        const a = attrsToMap(rec?.attributes ?? [])
+        const eventName = String(rec?.eventName ?? a['event.name'] ?? '')
+        if (!/(^|[._])api_error$/.test(eventName)) continue
+        const identity = { ...resAttrs, ...a }
+        const user_key = userKeyFrom(identity)
+        const model = String(a['model'] ?? a['gen_ai.request.model'] ?? '') || 'unknown'
+        const day = istDay(rec?.timeUnixNano ?? rec?.observedTimeUnixNano, tz)
+        const k = `${user_key}|${model}|${day}`
+        const cur = acc.get(k)
+        if (cur) cur.errors++
+        else acc.set(k, { user_key, model, day, errors: 1 })
+      }
+    }
+  }
+  return Array.from(acc.values())
 }
 
 export interface MetricsHealth { recognized: number; unrecognized: string[]; sawDelta: boolean }

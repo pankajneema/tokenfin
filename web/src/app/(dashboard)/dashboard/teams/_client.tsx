@@ -4,10 +4,10 @@ import {
   Users, Plus, Search, MoreHorizontal, X,
   UserCog, Trash2, ChevronDown, ChevronRight,
   DollarSign, Pencil, UserPlus, ShieldCheck,
-  Code2, Eye, Crown, AlertTriangle, Mail, Clock, Send,
+  Code2, Eye, Crown, AlertTriangle, Mail, Clock, Send, GitPullRequest,
 } from 'lucide-react'
 import { cn, formatCost } from '@/lib/utils'
-import type { TeamRow, MemberRow, ProjectRow, InviteRow } from './page'
+import type { TeamRow, MemberRow, ProjectRow, InviteRow, MemberImpact } from './page'
 
 /* ── Role config ────────────────────────────────────────────── */
 const ROLES = {
@@ -602,6 +602,65 @@ function UnassignedSection({
   )
 }
 
+/* ── Per-member engineering impact (last 30 days) ─────────────────────── */
+function MemberImpactSection({ members, teams, impact }: {
+  members: MemberRow[]; teams: TeamRow[]; impact: Record<string, MemberImpact>
+}) {
+  const hasProductivity = Object.values(impact).some(i => i.linesAdded + i.commits + i.prs > 0)
+  if (!hasProductivity || members.length === 0) return null
+  const teamName = new Map(teams.map(t => [t.id, t.name]))
+  const rows = [...members].sort((a, b) => (impact[b.userId]?.linesAdded ?? 0) - (impact[a.userId]?.linesAdded ?? 0))
+  const usd = (v: number) => v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`
+  return (
+    <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
+      <div className="px-5 py-3.5 border-b border-[var(--border)] flex items-center gap-2">
+        <GitPullRequest size={15} className="text-[var(--fg-tertiary)]" />
+        <h3 className="text-[13px] font-semibold text-[var(--fg)]">Engineering impact · Last 30 days</h3>
+        <a href="/dashboard/productivity" className="ml-auto text-[11.5px] font-semibold text-coral hover:underline">Details →</a>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="text-[10.5px] uppercase tracking-wide text-[var(--fg-tertiary)] border-b border-[var(--border)]">
+              <th className="py-2 px-5 text-left font-semibold">Member</th>
+              <th className="py-2 px-3 text-left font-semibold">Team</th>
+              <th className="py-2 px-3 text-right font-semibold">Lines added</th>
+              <th className="py-2 px-3 text-right font-semibold">Commits</th>
+              <th className="py-2 px-3 text-right font-semibold">PRs</th>
+              <th className="py-2 px-3 text-right font-semibold">AI spend</th>
+              <th className="py-2 px-5 text-right font-semibold">Cost / PR</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--border)]">
+            {rows.map(m => {
+              const i = impact[m.userId]
+              return (
+                <tr key={m.id} className="hover:bg-[var(--bg-hover)]">
+                  <td className="py-2.5 px-5">
+                    <div className="flex items-center gap-2.5">
+                      <Avatar name={m.name} size="sm" />
+                      <div className="min-w-0">
+                        <p className="font-semibold text-[var(--fg)] truncate">{m.name}</p>
+                        <p className="text-[10.5px] text-[var(--fg-tertiary)] truncate">{m.email}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-2.5 px-3 text-[var(--fg-secondary)]">{m.teamId ? teamName.get(m.teamId) ?? '—' : '—'}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums text-[var(--green)]">{i ? `+${i.linesAdded.toLocaleString()}` : '—'}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{i ? i.commits.toLocaleString() : '—'}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{i ? i.prs.toLocaleString() : '—'}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{i ? usd(i.cost) : '—'}</td>
+                  <td className="py-2.5 px-5 text-right tabular-nums font-semibold">{i && i.prs > 0 ? usd(i.cost / i.prs) : '—'}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 /* ── Invite modal ───────────────────────────────────────────── */
 function InviteModal({ orgId, onClose, onInvited }: {
   orgId:     string
@@ -784,9 +843,10 @@ interface Props {
   projects: ProjectRow[]
   invites:  InviteRow[]
   orgId:    string
+  impact:   Record<string, MemberImpact>
 }
 
-export function TeamsClient({ teams: initTeams, members: initMembers, projects, invites: initInvites, orgId }: Props) {
+export function TeamsClient({ teams: initTeams, members: initMembers, projects, invites: initInvites, orgId, impact }: Props) {
   const [teams,       setTeams]       = useState<TeamRow[]>(initTeams)
   const [members,     setMembers]     = useState<MemberRow[]>(initMembers)
   const [invites,     setInvites]     = useState<InviteRow[]>(initInvites)
@@ -842,12 +902,9 @@ export function TeamsClient({ teams: initTeams, members: initMembers, projects, 
 
       {/* Page header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Teams</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">
-            {teams.length} team{teams.length !== 1 ? 's' : ''} · {members.length} member{members.length !== 1 ? 's' : ''}
-          </p>
-        </div>
+        <p className="text-[13px] text-[var(--fg-secondary)]">
+          {teams.length} team{teams.length !== 1 ? 's' : ''} · {members.length} member{members.length !== 1 ? 's' : ''}
+        </p>
         <div className="flex items-center gap-2">
           <button onClick={() => setShowInvite(true)} className="btn-secondary text-[13px]">
             <UserPlus size={14} /> Invite
@@ -927,6 +984,9 @@ export function TeamsClient({ teams: initTeams, members: initMembers, projects, 
 
       {/* Unassigned members */}
       <UnassignedSection members={unassigned} onRoleChange={handleRoleChange} />
+
+      {/* Per-member engineering impact */}
+      <MemberImpactSection members={members} teams={teams} impact={impact} />
 
       {/* Pending invitations */}
       <PendingInvites

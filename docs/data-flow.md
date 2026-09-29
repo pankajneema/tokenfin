@@ -142,7 +142,6 @@ wrong before (see the Codex findings above).
 sequenceDiagram
     participant Caller as Your backend (SDK or raw HTTP)
     participant Route as /api/v1/ingest
-    participant Go as Go ingest service (optional)
     participant DB as usage_events / usage_agg
 
     Caller->>Route: POST {model, input_tokens, output_tokens, ...}<br/>Bearer tfk_… key
@@ -153,12 +152,7 @@ sequenceDiagram
     else over throttle_at %
         Route-->>Caller: 429 { error, pct } + Retry-After
     else
-        alt INGEST_SERVICE_URL set
-            Route->>Go: proxy (high-throughput path)
-            Go->>DB: buffer in Redis, worker writes usage_events + usage_agg
-        else
-            Route->>DB: direct write, cost_basis = 'metered'
-        end
+        Route->>DB: direct write, cost_basis = 'metered'
         Route-->>Caller: 200 { ok, cost_usd, ... }
     end
 ```
@@ -174,12 +168,8 @@ Enforcement is **org-scoped, monthly only** — `evaluateSpendLimit()`
 all. A project-scoped limit will show correct spend (via the Limits page,
 which reads `usage_events`) but won't block anything at the ingest layer.
 
-The Go backend (`backend/`) is an optional scaling layer for this path only —
-Redis-buffered counters so `evaluateSpendLimit`-equivalent checks are O(1)
-instead of a DB round-trip per request, plus a worker that reconciles counter
-drift every 5 minutes. It's entirely inert unless `INGEST_SERVICE_URL` is set;
-the Next.js route works standalone otherwise. It has nothing to do with
-CLI-agent capture — don't reach for it when debugging OTLP issues.
+The Next.js route is the whole ingest path — the former optional Go
+ingest service / Redis worker was removed (deploys are Vercel + Supabase).
 
 ---
 
@@ -187,8 +177,8 @@ CLI-agent capture — don't reach for it when debugging OTLP issues.
 
 | Table | What's in it | Who writes it | Who reads it |
 |---|---|---|---|
-| `usage_events` | Every captured event, any `cost_basis` | OTLP receiver, `/api/v1/ingest`, Go worker, MCP `compress` tool | Limits, alerts, My Usage, Analytics (some views), Platforms accuracy badges, `/api/v1/ingest` limit check (metered rows only, `org_spend_since`) |
-| `usage_agg` | Daily rollup, **metered only** | `persistRows()` (from `usage_events`, filtered), Go worker | Most Analytics charts, MCP `get_spend`/`get_usage_by_model`/`get_daily_costs` |
+| `usage_events` | Every captured event, any `cost_basis` | OTLP receiver, `/api/v1/ingest`, MCP `compress` tool | Limits, alerts, My Usage, Analytics (some views), Platforms accuracy badges, `/api/v1/ingest` limit check (metered rows only, `org_spend_since`) |
+| `usage_agg` | Daily rollup, **metered only** | `persistRows()` (from `usage_events`, filtered), `/api/v1/ingest` | Most Analytics charts, MCP `get_spend`/`get_usage_by_model`/`get_daily_costs` |
 | `otlp_metric_state` | Last-seen cumulative value per metric series | `deriveMetricEvents()` | itself (state only) |
 | `limits` | Configured budgets/thresholds | Dashboard UI | Limits page, alert engine, `/api/v1/ingest` enforcement |
 | `alert_rules` / `notifications` | User rules / fired history | Dashboard UI / alert engine | Alerts page, topbar bell |

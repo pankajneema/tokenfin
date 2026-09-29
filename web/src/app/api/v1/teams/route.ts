@@ -3,6 +3,7 @@ import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
 import { requireOrgMember, requirePermission, requireResourcePermission, assertOrgOwnsIds, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
+import { audit } from '@/lib/audit'
 
 function db() { return createAdminClient() }
 
@@ -39,6 +40,7 @@ export async function POST(req: NextRequest) {
   if (bad) return bad
 
   const { data, error } = await db().from('teams').insert(parsed.data).select().single()
+  if (!error && data) await audit({ orgId: parsed.data.org_id, actorUserId: guard.userId, action: 'team.create', targetType: 'team', targetId: data.id, details: { name: data.name } })
   if (error) return dbError(error, 'POST teams')
   return NextResponse.json(data, { status: 201 })
 }
@@ -62,6 +64,7 @@ export async function PATCH(req: NextRequest) {
 
   const { id, ...fields } = parsed.data
   const { data, error } = await db().from('teams').update(fields).eq('id', id).eq('org_id', guard.orgId).select().single()
+  if (!error) await audit({ orgId: guard.orgId, actorUserId: guard.userId, action: 'team.update', targetType: 'team', targetId: id, details: fields })
   if (error) return dbError(error, 'PATCH teams')
   return NextResponse.json(data)
 }
@@ -76,6 +79,7 @@ export async function DELETE(req: NextRequest) {
   await db().from('members').update({ team_id: null }).eq('team_id', id!).eq('org_id', guard.orgId)
 
   const { error } = await db().from('teams').delete().eq('id', id!).eq('org_id', guard.orgId)
+  if (!error) await audit({ orgId: guard.orgId, actorUserId: guard.userId, action: 'team.delete', targetType: 'team', targetId: id })
   if (error) return dbError(error, 'DELETE teams')
   return NextResponse.json({ ok: true })
 }

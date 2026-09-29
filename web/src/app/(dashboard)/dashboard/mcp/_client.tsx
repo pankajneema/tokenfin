@@ -11,10 +11,10 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import {
-  Plus, ChevronDown, Activity, Clock, Cable, KeyRound, Boxes, Search,
+  Plus, ChevronDown, Activity, Clock, Cable, KeyRound, Boxes, Search, Copy, Check, MessagesSquare, ShieldCheck,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { PlatformRow } from './_types'
+import type { PlatformRow, ReadKeyRow } from './_types'
 import { TierBadge, AccuracyBadge } from '../setup/_client'
 import { TimeAgo } from '@/components/ui/time-ago'
 
@@ -31,7 +31,15 @@ function relTime(iso: string | null): string {
   return `${Math.floor(d / 86_400_000)}d ago`
 }
 
-export function McpClient({ initialPlatforms }: { initialPlatforms: PlatformRow[]; orgId: string }) {
+interface McpClientProps {
+  initialPlatforms: PlatformRow[]
+  orgId: string
+  readKeys: ReadKeyRow[]
+  appUrl: string
+  orgWide: boolean
+}
+
+export function McpClient({ initialPlatforms, readKeys, appUrl, orgWide }: McpClientProps) {
   const [q, setQ] = useState('')
   const query = q.trim().toLowerCase()
   const platforms = query
@@ -39,8 +47,8 @@ export function McpClient({ initialPlatforms }: { initialPlatforms: PlatformRow[
     : initialPlatforms
 
   const totals = initialPlatforms.reduce(
-    (a, p) => ({ tokens: a.tokens + p.tokens30d, cost: a.cost + p.cost30d, calls: a.calls + p.calls30d }),
-    { tokens: 0, cost: 0, calls: 0 },
+    (a, p) => ({ tokens: a.tokens + p.tokens30d, cost: a.cost + p.cost30d, calls: a.calls + p.calls30d, prompts: a.prompts + p.prompts30d }),
+    { tokens: 0, cost: 0, calls: 0, prompts: 0 },
   )
   const activeCount = initialPlatforms.filter(p => p.calls30d > 0).length
 
@@ -49,7 +57,7 @@ export function McpClient({ initialPlatforms }: { initialPlatforms: PlatformRow[
       {/* header */}
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="page-title">Connected Platforms</h1>
+          <h2 className="page-title">Connected Platforms</h2>
           <p className="mt-1 text-[12.5px] text-[var(--fg-secondary)]">
             Every tool sending usage to TokenFin, with how it records and how accurate that is.
           </p>
@@ -57,15 +65,18 @@ export function McpClient({ initialPlatforms }: { initialPlatforms: PlatformRow[
         <Link href="/dashboard/setup" className="btn-primary"><Plus size={15} /> Connect a tool</Link>
       </div>
 
+      <ConnectPanel readKeys={readKeys} appUrl={appUrl} orgWide={orgWide} />
+
       {initialPlatforms.length === 0 ? (
         <EmptyState />
       ) : (
         <>
           {/* summary */}
-          <div className="mb-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          <div className="mb-5 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
             <Summary label="Tools" value={String(initialPlatforms.length)} sub={`${activeCount} active`} />
             <Summary label="30-day tokens" value={fmtInt(totals.tokens)} />
             <Summary label="30-day cost" value={fmtCost(totals.cost)} />
+            <Summary label="30-day prompts" value={fmtInt(totals.prompts)} />
             <Summary label="30-day calls" value={fmtInt(totals.calls)} />
           </div>
 
@@ -146,9 +157,10 @@ function PlatformCard({ p }: { p: PlatformRow }) {
       {/* stats */}
       {recording ? (
         <>
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
             <Metric label="Tokens" value={fmtInt(p.tokens30d)} />
             <Metric label="Cost" value={fmtCost(p.cost30d)} />
+            <Metric label="Prompts" value={fmtInt(p.prompts30d)} />
             <Metric label="Calls" value={fmtInt(p.calls30d)} />
           </div>
 
@@ -204,6 +216,132 @@ function EmptyState() {
         installs the recorder, and lights up when your first real event lands.
       </p>
       <Link href="/dashboard/setup" className="btn-primary mt-4"><Plus size={15} /> Connect a tool</Link>
+    </div>
+  )
+}
+
+// ── Query from chat (MCP) ─────────────────────────────────────────────────────
+
+type ClientTab = 'claude-code' | 'plugin' | 'desktop' | 'cursor'
+const TABS: { id: ClientTab; label: string }[] = [
+  { id: 'claude-code', label: 'Claude Code' },
+  { id: 'plugin',      label: 'Claude Code plugin' },
+  { id: 'desktop',     label: 'Claude Desktop' },
+  { id: 'cursor',      label: 'Cursor / VS Code' },
+]
+
+function snippets(url: string): Record<ClientTab, { hint: string; code: string }[]> {
+  const mcp = `${url}/api/mcp`
+  return {
+    'claude-code': [
+      { hint: 'Automatic: registers the server with this device’s read key', code: 'npx tokenfin@latest setup' },
+      { hint: 'Or by hand (user scope)', code: `claude mcp add-json -s user tokenfin '{"type":"http","url":"${mcp}","headers":{"Authorization":"Bearer <READ_KEY>"}}'` },
+    ],
+    plugin: [
+      { hint: '1. Export your read key (and your TokenFin URL if self-hosted) in the shell that starts Claude Code', code: `export TOKENFIN_READ_KEY="<READ_KEY>"\nexport TOKENFIN_URL="${url}"` },
+      { hint: '2. In Claude Code, from a checkout of the TokenFin repo', code: '/plugin marketplace add ./plugins/claude-code\n/plugin install tokenfin@tokenfin' },
+      { hint: '3. Restart Claude Code, then try', code: '/tokenfin:spend 7 by model\n/tokenfin:budget\n/tokenfin:top-models' },
+    ],
+    desktop: [
+      { hint: 'claude_desktop_config.json: bridges stdio to the remote server with mcp-remote', code: JSON.stringify({ mcpServers: { tokenfin: { command: 'npx', args: ['-y', 'mcp-remote', mcp, '--header', 'Authorization: Bearer <READ_KEY>'] } } }, null, 2) },
+    ],
+    cursor: [
+      { hint: '~/.cursor/mcp.json (Cursor) or .vscode/mcp.json (VS Code / Cline)', code: JSON.stringify({ mcpServers: { tokenfin: { type: 'http', url: mcp, headers: { Authorization: 'Bearer <READ_KEY>' } } } }, null, 2) },
+    ],
+  }
+}
+
+function ConnectPanel({ readKeys, appUrl, orgWide }: { readKeys: ReadKeyRow[]; appUrl: string; orgWide: boolean }) {
+  const [tab, setTab] = useState<ClientTab>('claude-code')
+  const sn = snippets(appUrl)[tab]
+  return (
+    <section className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-[var(--bg-tertiary)]">
+          <MessagesSquare size={16} className="text-[var(--fg-secondary)]" />
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-[14px] font-semibold text-[var(--fg)]">Ask your dashboard from chat (MCP)</h2>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--fg-secondary)]">
+            A read-only MCP server at <code className="font-mono">{appUrl}/api/mcp</code>. Ask “what did we spend on Opus last week?”
+            and the assistant calls <code className="font-mono">get_breakdown</code>, <code className="font-mono">get_mtd_and_forecast</code>,
+            {' '}<code className="font-mono">get_sessions</code> and more. It authenticates with a <b>read key</b>. Ingest keys are refused.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-start gap-2 rounded-lg bg-[var(--bg)] px-3 py-2 text-[11.5px] text-[var(--fg-secondary)]">
+        <ShieldCheck size={13} className="mt-0.5 flex-shrink-0 text-teal" />
+        <span>
+          Results follow the key owner’s role. {orgWide
+            ? 'As an owner/admin, your keys see the whole org.'
+            : 'Your keys see org totals, but only your own prompts, sessions and member spend.'}
+        </span>
+      </div>
+
+      {/* read keys */}
+      <div className="mt-3">
+        <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--fg-tertiary)]">
+          Read keys {orgWide ? 'in this org' : 'you own'}
+        </div>
+        {readKeys.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-[11.5px] text-[var(--fg-secondary)]">
+            No read key yet. Run <code className="font-mono">npx tokenfin@latest login</code>. It stores this device’s read key as
+            {' '}<code className="font-mono">read_key</code> in <code className="font-mono">~/.tokenfin/config.json</code>, and setup uses that key for MCP.
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {readKeys.slice(0, 5).map(k => (
+              <div key={k.id} className="flex items-center gap-2 rounded-lg bg-[var(--bg)] px-2.5 py-1.5 text-[11.5px]">
+                <KeyRound size={12} className="flex-shrink-0 text-[var(--fg-tertiary)]" />
+                <span className="truncate text-[var(--fg)]">{k.name}</span>
+                <span className="truncate font-mono text-[var(--fg-tertiary)]">{k.keyPrefix}</span>
+                {k.mine && <span className="badge-gray">yours</span>}
+                {!k.readOnly && <span className="badge-gray">legacy read+write</span>}
+                <span className="ml-auto flex-shrink-0 text-[var(--fg-tertiary)]"><TimeAgo value={k.lastUsedAt} format={relTime} /></span>
+              </div>
+            ))}
+            {readKeys.length > 5 && <p className="px-1 text-[11px] text-[var(--fg-tertiary)]">+{readKeys.length - 5} more under API Keys</p>}
+            <p className="px-1 pt-1 text-[11px] text-[var(--fg-tertiary)]">
+              Keys are stored hashed, so the full value is never shown again. Your device’s copy is <code className="font-mono">read_key</code> in
+              {' '}<code className="font-mono">~/.tokenfin/config.json</code>. Replace <code className="font-mono">&lt;READ_KEY&gt;</code> below with it.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* client tabs */}
+      <div className="mt-4 flex flex-wrap gap-1" role="tablist" aria-label="MCP client">
+        {TABS.map(t => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
+            className={cn('rounded-lg px-2.5 py-1 text-[11.5px] font-medium',
+              tab === t.id ? 'bg-[var(--bg-tertiary)] text-[var(--fg)]' : 'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="mt-2 space-y-2">
+        {sn.map((x, i) => <Snippet key={`${tab}-${i}`} hint={x.hint} code={x.code} />)}
+      </div>
+    </section>
+  )
+}
+
+function Snippet({ hint, code }: { hint: string; code: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* clipboard blocked */ }
+  }
+  return (
+    <div>
+      <div className="mb-1 text-[11px] text-[var(--fg-tertiary)]">{hint}</div>
+      <div className="relative">
+        <pre className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 pr-10 font-mono text-[11.5px] leading-relaxed text-[var(--fg)]">{code}</pre>
+        <button onClick={copy} aria-label="Copy snippet"
+          className="absolute right-1.5 top-1.5 rounded-md p-1.5 text-[var(--fg-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--fg)]">
+          {copied ? <Check size={13} className="text-teal" /> : <Copy size={13} />}
+        </button>
+      </div>
     </div>
   )
 }

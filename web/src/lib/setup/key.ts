@@ -2,8 +2,9 @@
  * Setup Hub key provisioning (server-only).
  *
  * The Setup Hub injects a real, working key into every install link so the user
- * never copies one by hand. This module get-or-creates a single, reusable,
- * read+write key named "setup-hub" per org and returns its RAW value.
+ * never copies one by hand. This module get-or-creates two reusable org-level
+ * keys and returns their RAW values: an INGEST-only "setup-hub" key (OTLP/SDK)
+ * and a READ-only "setup-hub-read" key (MCP).
  *
  * Idempotency: when KEY_ENCRYPTION_SECRET is configured (migration 022 columns),
  * the raw key is sealed at rest, so a returning admin gets the SAME key back
@@ -14,15 +15,30 @@
 import crypto from 'crypto'
 import { createAdminClient } from '@/lib/supabase/server'
 import { sealKey, openKey } from '@/lib/crypto/key-reveal'
+import { scopesForKind } from '@/lib/rbac'
+import { audit } from '@/lib/audit'
 
-export const SETUP_KEY_NAME = 'setup-hub'
+export const SETUP_KEY_NAME      = 'setup-hub'       // ingest-only: OTLP / SDK install links
+export const SETUP_READ_KEY_NAME = 'setup-hub-read'  // read-only: MCP
 
-export interface SetupKey {
+/** Secondary reveal token suffix for the read key of a split CLI pair (cli/token → keys/reveal). */
+export const READ_TOKEN_SUFFIX = '.read'
+
+export interface SetupKeyPart {
   id: string
   raw: string
   masked: string
   projectId: string
   created: boolean
+}
+
+/**
+ * The INGEST key is the top-level id/raw/masked (what install snippets embed for
+ * OTLP). The separate READ key for MCP is under `.read`. Pre-split "setup-hub"
+ * read+write keys (kind='legacy') are left active so existing installs keep working.
+ */
+export interface SetupKey extends SetupKeyPart {
+  read: SetupKeyPart
 }
 
 function generateApiKey(projectId: string): string {
@@ -48,14 +64,16 @@ async function resolveProjectId(orgId: string): Promise<string | null> {
   return (created?.id as string | undefined) ?? null
 }
 
-export async function getOrCreateSetupKey(orgId: string, userId: string): Promise<SetupKey> {
+async function getOrCreateKind(
+  orgId: string, userId: string, name: string, kind: 'ingest' | 'read',
+): Promise<SetupKeyPart> {
   const admin = createAdminClient()
 
-  // 1. Reuse an existing, decryptable setup-hub key.
+  // 1. Reuse an existing, decryptable key of this kind.
   const { data: existing } = await admin
     .from('api_keys')
     .select('id, project_id, key_prefix, key_enc_cipher, key_enc_iv, key_enc_tag')
-    .eq('org_id', orgId).eq('name', SETUP_KEY_NAME).eq('is_active', true)
+    .eq('org_id', orgId).eq('name', name).eq('kind', kind).eq('is_active', true)
     .order('created_at', { ascending: false })
 
   const rows = (existing ?? []) as Array<{
@@ -82,14 +100,13 @@ export async function getOrCreateSetupKey(orgId: string, userId: string): Promis
   try { sealed = sealKey(raw) } catch { sealed = null }
 
   const payload: Record<string, unknown> = {
-    org_id: orgId, project_id: projectId, name: SETUP_KEY_NAME,
-    // setup-hub is an ORG-LEVEL shared key (selected by org+name, reused across
-    // users) — keep user_id NULL so it is exempt from the per-member unique index
-    // api_keys_member_project_unique and never collides with a member's own
-    // (e.g. CLI login) key on the same project. created_by still records who made it.
+    org_id: orgId, project_id: projectId, name,
+    // Setup-hub keys are ORG-LEVEL shared keys (selected by org+name+kind, reused
+    // across admins) — user_id stays NULL so they are exempt from the per-member
+    // unique index. created_by still records who made it.
     created_by: userId, user_id: null,
     key_hash: keyHash, key_prefix: maskKey(raw),
-    env: 'production', scopes: ['read', 'write'], is_active: true,
+    env: 'production', scopes: scopesForKind(kind), kind, is_active: true,
   }
   if (sealed) {
     payload.key_enc_cipher = sealed.ciphertext
@@ -97,21 +114,25 @@ export async function getOrCreateSetupKey(orgId: string, userId: string): Promis
     payload.key_enc_tag    = sealed.authTag
   }
 
-  let { data, error } = await admin.from('api_keys').insert(payload).select('id').single()
-
-  // Graceful fallback for DBs missing migrations 005/006/022 columns.
-  if (error && /key_enc|user_id|is_service_account/.test(error.message)) {
-    const base = { ...payload }
-    delete base.key_enc_cipher; delete base.key_enc_iv; delete base.key_enc_tag; delete base.user_id
-    ;({ data, error } = await admin.from('api_keys').insert(base).select('id').single())
-  }
+  const { data, error } = await admin.from('api_keys').insert(payload).select('id').single()
   if (error || !data) throw new Error(error?.message ?? 'setup key insert failed')
 
-  // Deactivate stale, non-decryptable setup-hub keys so they don't pile up.
+  // Deactivate stale, non-decryptable keys of this kind so they don't pile up.
   if (rows.length) {
-    await admin.from('api_keys').update({ is_active: false })
-      .in('id', rows.map(r => r.id))
+    await admin.from('api_keys').update({ is_active: false }).in('id', rows.map(r => r.id))
   }
 
+  await audit({
+    orgId, actorUserId: userId, action: 'key.create', targetType: 'api_key', targetId: data.id as string,
+    details: { via: 'setup_hub', name, kind, project_id: projectId },
+  })
+
   return { id: data.id as string, raw, masked: maskKey(raw), projectId, created: true }
+}
+
+/** Get-or-create the org's setup-hub INGEST key (top level) + READ key (`.read`). */
+export async function getOrCreateSetupKey(orgId: string, userId: string): Promise<SetupKey> {
+  const ingest = await getOrCreateKind(orgId, userId, SETUP_KEY_NAME, 'ingest')
+  const read   = await getOrCreateKind(orgId, userId, SETUP_READ_KEY_NAME, 'read')
+  return { ...ingest, read }
 }

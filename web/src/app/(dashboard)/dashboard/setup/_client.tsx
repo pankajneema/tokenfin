@@ -11,8 +11,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Check, Terminal, ShieldCheck, ChevronDown, Puzzle, MonitorSmartphone, SquareTerminal } from 'lucide-react'
+import { Copy, Check, Terminal, ShieldCheck, ChevronDown, Puzzle, MonitorSmartphone, SquareTerminal, Download, Users, Loader2, Eye } from 'lucide-react'
+import Link from 'next/link'
 import { TIER_META, ACCURACY_META, type Tier, type Accuracy } from './_catalog'
+import { claudeEnv, codexToml, geminiTelemetry, managedSettings, MANAGED_PATHS } from './_snippets'
+import type { RolloutRow } from './_rollout'
 
 // ── shared badges (also consumed by /dashboard/mcp Platforms) ────────────────
 export function TierBadge({ tier }: { tier: Tier }) {
@@ -78,39 +81,36 @@ const CATEGORIES: Category[] = [
   },
 ]
 
-// config for the three push agents (keyed by sourceId)
-function pushConfig(otelEndpoint: string, key: string): Record<string, { file: string; captures: string; note: string | null; config: string }> {
+// config for the push agents (keyed by sourceId) — built from _snippets.ts,
+// which a parity test keeps byte-identical to what the CLI writes.
+function pushConfig(otelEndpoint: string, key: string, prompts: boolean): Record<string, { file: string; captures: string; note: string | null; config: string }> {
+  const env = claudeEnv(otelEndpoint, key, { prompts })
   return {
     claude_code: {
-      file: '~/.claude/settings.json', captures: 'Per-turn model, input / output / cache tokens and cost (from api_request logs), plus each prompt\'s text.', note: null,
-      config: ['"env": {', '  "CLAUDE_CODE_ENABLE_TELEMETRY": "1",', '  "OTEL_METRICS_EXPORTER": "otlp",', '  "OTEL_LOGS_EXPORTER": "otlp",',
-        '  "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",', `  "OTEL_EXPORTER_OTLP_ENDPOINT": "${otelEndpoint}",`,
-        `  "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer ${key}",`, '  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",', '  "OTEL_LOG_USER_PROMPTS": "1"', '}'].join('\n'),
+      file: '~/.claude/settings.json', note: null,
+      captures: 'Per-turn model, input / output / cache tokens and cost (from api_request logs)' + (prompts ? ', plus each prompt\'s text (opt out: setup --no-prompts).' : '. Prompt text capture is off for this workspace.'),
+      config: '"env": ' + JSON.stringify(env, null, 2),
     },
     codex_cli: {
       file: '~/.codex/config.toml  (user-level only)', captures: 'Per-turn tokens from the codex.turn.token_usage metric.',
-      note: 'metrics_exporter must be otlp-http — Codex defaults it to statsig, which sends metrics to OpenAI, not us.',
-      config: ['[otel]', 'exporter = "none"', 'metrics_exporter = "otlp-http"', 'log_user_prompt = true', '',
-        '[otel.metrics_exporter.otlp-http]', `endpoint = "${otelEndpoint}/v1/metrics"`, 'protocol = "json"', '',
-        '[otel.metrics_exporter.otlp-http.headers]', `Authorization = "Bearer ${key}"`].join('\n'),
+      note: 'The [otel.metrics_exporter.otlp-http] table is what routes metrics to TokenFin (Codex defaults to statsig, i.e. OpenAI). Do not also add a metrics_exporter = "…" line — next to the table it is invalid TOML and Codex won’t start.',
+      config: codexToml(otelEndpoint, key, { prompts }),
     },
     gemini_cli: {
       file: '~/.gemini/settings.json', captures: 'Per-turn tokens from the gen_ai.client.token.usage metric.',
       note: 'Gemini can’t set OTLP headers, so the key rides on the endpoint as ?key=.',
-      config: JSON.stringify({ telemetry: { enabled: true, target: 'local', useCollector: true, otlpProtocol: 'http', otlpEndpoint: `${otelEndpoint}?key=${key}`, logPrompts: true } }, null, 2),
+      config: JSON.stringify({ telemetry: geminiTelemetry(otelEndpoint, key, { prompts }) }, null, 2),
     },
     opencode: {
       file: '~/.config/opencode/opencode.json', captures: 'Per-turn tokens + cost from the opencode-otel-plugin (traces + metrics).',
       note: 'Requires the opencode-otel-plugin npm package in the "plugin" array, and the OTel env vars exported into the shell that launches opencode (endpoint, headers, protocol, exporters).',
-      config: JSON.stringify({
-        plugin: ['opencode-otel-plugin'],
-      }, null, 2),
+      config: JSON.stringify({ plugin: ['opencode-otel-plugin'] }, null, 2),
     },
   }
 }
 
 interface KeyInfo { id: string; raw: string; masked: string }
-interface Props { endpoint: string; appUrl: string; orgId: string; isAdmin: boolean; keyError: boolean; initialKey: KeyInfo | null }
+interface Props { endpoint: string; appUrl: string; orgId: string; isAdmin: boolean; keyError: boolean; initialKey: KeyInfo | null; rollout?: RolloutRow[]; capturePrompts?: boolean }
 interface SourceStatus { source: string; last_event_at: string | null; tokens_today: number; cost_basis: string | null; model?: string | null }
 
 function useCopy() {
@@ -133,7 +133,7 @@ const isLive = (s?: SourceStatus) => !!s?.last_event_at && Date.now() - new Date
 // since the last turn, which reads as broken when it isn't.
 const isConnected = (s?: SourceStatus) => !!s?.last_event_at
 
-export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey }: Props) {
+export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey, rollout = [], capturePrompts = true }: Props) {
   const { copied, copy } = useCopy()
   const [revealed, setRevealed] = useState(false)
   const [open, setOpen] = useState<string | null>('cli:Claude Code')
@@ -142,8 +142,9 @@ export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey }: Pr
 
   const otelEndpoint = `${appUrl.replace(/\/$/, '')}/api/otel`
   const key = initialKey?.raw ?? '<YOUR_KEY>'
-  const command = 'npx tokenfin login && npx tokenfin setup'
-  const CFG = pushConfig(otelEndpoint, key)
+  const command = 'npx tokenfin@latest setup'
+  const deviceCommand = 'npx tokenfin@latest login --device && npx tokenfin@latest setup'
+  const CFG = pushConfig(otelEndpoint, key, capturePrompts)
 
   useEffect(() => {
     let alive = true
@@ -166,10 +167,18 @@ export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey }: Pr
   return (
     <div className="mx-auto max-w-3xl space-y-6 py-2">
       <header className="space-y-1">
-        <h1 className="text-[22px] font-semibold text-[var(--fg)]">Connections</h1>
+        <h2 className="text-[22px] font-semibold text-[var(--fg)]">Connections</h2>
         <p className="text-[14px] text-[var(--fg-secondary)]">
           One command connects every installed CLI agent — real per-turn usage over OpenTelemetry, no
-          proxy, no hooks. We never see your API keys or your prompts.
+          proxy, no hooks. We never see your model-provider API keys.
+        </p>
+        <p className="text-[12.5px] text-[var(--fg-secondary)]">
+          <Eye size={12} className="mr-1 inline -translate-y-px" />
+          {capturePrompts ? (
+            <>By default the <span className="font-medium text-[var(--fg)]">text of each prompt</span> is sent too, so you can see which prompts cost what. It expires after 90 days (<Link href="/dashboard/settings/data" className="underline">Settings → Data</Link>). Opt out per machine with <code className="font-mono text-[11.5px]">--no-prompts</code>, or an admin can turn it off for the whole workspace.</>
+          ) : (
+            <>Prompt text capture is <span className="font-medium text-[var(--fg)]">off for this workspace</span> — only token counts, model and cost are stored.</>
+          )}
         </p>
         <p className="text-[12px] text-[var(--fg-tertiary)]">
           {connectedSourceIds.size === 0 ? (
@@ -191,7 +200,16 @@ export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey }: Pr
           <code className="overflow-x-auto font-mono text-[13px] text-[var(--fg)]">$ {command}</code>
           <CopyBtn text={command} id="cmd" copied={copied} copy={copy} />
         </div>
-        <p className="text-[12px] text-[var(--fg-tertiary)]">Writes each agent’s config, then waits until the first real event lands before reporting success.</p>
+        <p className="text-[12px] text-[var(--fg-tertiary)]">Signs you in (creates this device’s own keys), writes each installed agent’s config, then waits until the first real event lands. Add <code className="font-mono">--no-prompts</code> to never send prompt text, <code className="font-mono">--statusline</code> for a budget line in Claude Code.</p>
+        <details className="text-[12px] text-[var(--fg-secondary)]">
+          <summary className="cursor-pointer text-[var(--fg-tertiary)] hover:text-[var(--fg)]">No browser on that machine (SSH, devcontainer)?</summary>
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5">
+            <code className="overflow-x-auto font-mono text-[12.5px] text-[var(--fg)]">$ {deviceCommand}</code>
+            <CopyBtn text={deviceCommand} id="cmd-device" copied={copied} copy={copy} />
+          </div>
+          <p className="mt-1 text-[var(--fg-tertiary)]">Prints a short code — approve it at <span className="font-mono">/cli/device</span> from any signed-in browser.</p>
+        </details>
+        <FirstEventBeacon connected={connectedSourceIds.size > 0} live={liveSourceIds.size > 0} />
       </section>
 
       {/* categories — only tools we actually support today. A long "coming
@@ -281,8 +299,162 @@ export function SetupClient({ appUrl, orgId, isAdmin, keyError, initialKey }: Pr
             </div>
           </div>
         )}
-        <p className="text-[12px] text-[var(--fg-tertiary)]">Read-write ingest key. It authenticates OTLP pushes — the receiver maps it to your org. It is never sent to your model provider.</p>
+        <p className="text-[12px] text-[var(--fg-tertiary)]">Org-level, ingest-only key used in the snippets above and in managed settings. It can push usage but not read analytics. Developers who run the command get their own per-device keys instead. It is never sent to your model provider.</p>
       </section>
+
+      {isAdmin && !keyError && initialKey && (
+        <RolloutSection orgId={orgId} otelEndpoint={otelEndpoint} ingestKey={initialKey.raw} prompts={capturePrompts} rows={rollout} copied={copied} copy={copy} />
+      )}
     </div>
+  )
+}
+
+function FirstEventBeacon({ connected, live }: { connected: boolean; live: boolean }) {
+  if (connected) {
+    return (
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-[rgba(16,127,101,0.25)] bg-[var(--green-bg)] px-3 py-2.5 text-[12.5px] text-teal">
+        <span className="inline-flex items-center gap-2"><Check size={14} /> {live ? 'Events are arriving — you’re connected.' : 'Connected — events have arrived from this workspace.'}</span>
+        <Link href="/dashboard" className="font-medium underline">Open dashboard →</Link>
+      </div>
+    )
+  }
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-2.5 text-[12.5px] text-[var(--fg-secondary)]" aria-live="polite">
+      <Loader2 size={14} className="animate-spin text-[var(--fg-tertiary)]" />
+      Waiting for the first event… run the command, then send one message in your agent. This updates by itself.
+    </div>
+  )
+}
+
+// ── Roll out to your team (admins) ───────────────────────────────────────────
+const STATUS_META: Record<RolloutRow['status'], { label: string; cls: string }> = {
+  active:    { label: 'Active',          cls: 'bg-[var(--green-bg)] text-teal' },
+  stale:     { label: 'Quiet 7d+',       cls: 'bg-[var(--amber-bg)] text-[var(--amber)]' },
+  waiting:   { label: 'Keys, no events', cls: 'bg-[var(--amber-bg)] text-[var(--amber)]' },
+  no_device: { label: 'Not set up',      cls: 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]' },
+  invited:   { label: 'Invited',         cls: 'bg-[var(--bg-tertiary)] text-[var(--fg-tertiary)]' },
+}
+const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—')
+const ago = (iso: string | null) => {
+  if (!iso) return '—'
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000)
+  return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`
+}
+
+function RolloutSection({ orgId, otelEndpoint, ingestKey, prompts, rows, copied, copy }: {
+  orgId: string; otelEndpoint: string; ingestKey: string; prompts: boolean; rows: RolloutRow[]
+  copied: string | null; copy: (t: string, i: string) => void
+}) {
+  const [team, setTeam] = useState('')
+  const [tab, setTab] = useState<'jamf' | 'intune' | 'ansible'>('jamf')
+  const json = JSON.stringify(managedSettings(otelEndpoint, ingestKey, { prompts, team }), null, 2)
+  const href = `/api/v1/setup/managed-settings?org_id=${encodeURIComponent(orgId)}&download=1${team ? `&team=${encodeURIComponent(team)}` : ''}`
+  const snippets = {
+    jamf: [
+      '#!/bin/bash',
+      '# Jamf Pro → Settings → Scripts (runs as root); scope a policy to developer Macs.',
+      `DIR="${MANAGED_PATHS.macos.replace('/managed-settings.json', '')}"`,
+      'mkdir -p "$DIR"',
+      "cat > \"$DIR/managed-settings.json\" <<'JSON'",
+      json,
+      'JSON',
+      'chmod 644 "$DIR/managed-settings.json"',
+    ].join('\n'),
+    intune: [
+      '# Intune → Devices → Scripts and remediations → Platform scripts (PowerShell, run as system)',
+      `$dir = '${MANAGED_PATHS.windows.replace('\\managed-settings.json', '')}'`,
+      'New-Item -ItemType Directory -Force -Path $dir | Out-Null',
+      "$json = @'",
+      json,
+      "'@",
+      '# WriteAllText = UTF-8 without BOM (Claude Code rejects a BOM)',
+      '[System.IO.File]::WriteAllText("$dir\\managed-settings.json", $json)',
+    ].join('\n'),
+    ansible: [
+      '# Put the downloaded managed-settings.json next to this playbook.',
+      '- hosts: developer_machines',
+      '  become: true',
+      '  vars:',
+      "    cc_dir: \"{{ '/Library/Application Support/ClaudeCode' if ansible_facts['os_family'] == 'Darwin' else '/etc/claude-code' }}\"",
+      '  tasks:',
+      '    - ansible.builtin.file: { path: "{{ cc_dir }}", state: directory, mode: "0755" }',
+      '    - ansible.builtin.copy: { src: managed-settings.json, dest: "{{ cc_dir }}/managed-settings.json", mode: "0644" }',
+    ].join('\n'),
+  }
+  const configured = rows.filter(r => r.status === 'active' || r.status === 'stale').length
+  const people = rows.filter(r => r.status !== 'invited').length
+
+  return (
+    <section className="space-y-3 border-t border-[var(--border)] pt-6">
+      <div className="flex items-center gap-2 text-[14px] font-semibold text-[var(--fg)]"><Users size={15} /> Roll out to your team</div>
+      <p className="text-[12.5px] text-[var(--fg-secondary)]">
+        Push one managed settings file with your MDM instead of asking every developer to run the command. Claude Code
+        reads it with the highest precedence (developers can’t override it). It carries this org’s ingest-only key;
+        each developer is still attributed by the email Claude Code attaches to every event.
+        Prompt text: <span className="font-medium text-[var(--fg)]">{prompts ? 'captured' : 'off'}</span> (workspace policy).
+      </p>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-[11px] font-medium uppercase tracking-wide text-[var(--fg-tertiary)]">
+          Team tag (optional)
+          <input value={team} onChange={e => setTeam(e.target.value)} placeholder="e.g. platform"
+            className="w-48 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-[13px] normal-case tracking-normal text-[var(--fg)] outline-none focus:border-coral" />
+        </label>
+        <a href={href} className="inline-flex items-center gap-1.5 rounded border border-[var(--border)] bg-[var(--bg)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--fg)] hover:bg-[var(--bg-tertiary)]">
+          <Download size={13} /> Download managed-settings.json
+        </a>
+      </div>
+      <ul className="space-y-0.5 text-[12px] text-[var(--fg-secondary)]">
+        <li>macOS: <code className="font-mono">{MANAGED_PATHS.macos}</code></li>
+        <li>Linux / WSL: <code className="font-mono">{MANAGED_PATHS.linux}</code></li>
+        <li>Windows: <code className="font-mono">{MANAGED_PATHS.windows}</code></li>
+        <li className="text-[var(--fg-tertiary)]">Already ship a managed-settings.json? Merge the <code className="font-mono">env</code> block into it, or place this file in a <code className="font-mono">managed-settings.d/</code> folder next to it. Without a team tag, <code className="font-mono">team.name</code> is a placeholder — replace it per group or remove the line.</li>
+      </ul>
+
+      <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg)]">
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-2">
+          <div className="flex">
+            {(['jamf', 'intune', 'ansible'] as const).map(t => (
+              <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-[12px] font-medium ${tab === t ? 'border-b-2 border-coral text-[var(--fg)]' : 'text-[var(--fg-tertiary)] hover:text-[var(--fg)]'}`}>
+                {t === 'jamf' ? 'Jamf (macOS)' : t === 'intune' ? 'Intune (Windows)' : 'Ansible (Linux/macOS)'}
+              </button>
+            ))}
+          </div>
+          <CopyBtn text={snippets[tab]} id={`rollout-${tab}`} copied={copied} copy={copy} />
+        </div>
+        <pre className="max-h-72 overflow-auto px-4 py-3 font-mono text-[11.5px] leading-relaxed text-[var(--fg)]">{snippets[tab]}</pre>
+      </div>
+
+      <div className="space-y-1.5 pt-2">
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-[13px] font-semibold text-[var(--fg)]">Rollout tracker</h3>
+          <span className="text-[12px] text-[var(--fg-tertiary)]">{configured}/{people} sending usage</span>
+        </div>
+        {rows.length === 0 ? (
+          <p className="text-[12.5px] text-[var(--fg-tertiary)]">No members yet — invite your team from <Link href="/dashboard/teams" className="underline">Teams</Link>.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+            <table className="w-full text-left text-[12.5px]">
+              <thead className="bg-[var(--bg-secondary)] text-[11px] uppercase tracking-wide text-[var(--fg-tertiary)]">
+                <tr><th className="px-3 py-2 font-medium">Member</th><th className="px-3 py-2 font-medium">Status</th><th className="px-3 py-2 font-medium">Devices</th><th className="px-3 py-2 font-medium">First event</th><th className="px-3 py-2 font-medium">Last seen</th><th className="px-3 py-2 font-medium">Source</th></tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border)]">
+                {rows.map(r => (
+                  <tr key={r.userId ?? r.email}>
+                    <td className="px-3 py-2"><div className="text-[var(--fg)]">{r.name || r.email}</div><div className="text-[11px] text-[var(--fg-tertiary)]">{r.email}</div></td>
+                    <td className="px-3 py-2"><span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${STATUS_META[r.status].cls}`}>{STATUS_META[r.status].label}</span></td>
+                    <td className="px-3 py-2 tabular-nums text-[var(--fg-secondary)]">{r.devices || '—'}</td>
+                    <td className="px-3 py-2 text-[var(--fg-secondary)]">{fmtDate(r.firstEventAt)}</td>
+                    <td className="px-3 py-2 text-[var(--fg-secondary)]">{ago(r.lastSeenAt)}</td>
+                    <td className="px-3 py-2 font-mono text-[11.5px] text-[var(--fg-secondary)]">{r.source ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="text-[11.5px] text-[var(--fg-tertiary)]">Devices = active per-device CLI keys. Members on managed settings show events without devices. Offboarding: remove the member in Teams — their device keys stop working.</p>
+      </div>
+    </section>
   )
 }

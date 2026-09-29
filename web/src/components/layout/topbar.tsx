@@ -1,18 +1,17 @@
 'use client'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import {
   Bell, Search, LogOut, Settings, User as UserIcon,
-  ChevronRight, Moon, Sun, Check, Sparkles,
-  LayoutDashboard, Layers, Users, Key, BarChart3,
-  Shield, AlertTriangle, Zap, Clock, Hash,
-  TrendingUp, ArrowUpRight, Info, X, ChevronDown,
-  DollarSign, Activity, Database, HelpCircle,
+  ChevronRight, Moon, Sun, Check, Menu,
+  AlertTriangle, Zap, Info, ChevronDown, Database,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
+import { ALL_NAV_LINKS, ALL_HREFS, sectionOf } from './nav-config'
+import { activeHref } from './nav-match'
 
 /* ══════════════════════════════════════════════════════════════
    TYPES
@@ -27,52 +26,6 @@ interface Notif {
   title: string; body: string; time: string; timeMs: number; read: boolean
 }
 
-interface SearchResult {
-  type: 'page' | 'project' | 'key' | 'action'
-  label: string; desc?: string; href?: string; icon: React.ElementType
-  shortcut?: string
-}
-
-/* ══════════════════════════════════════════════════════════════
-   PAGE META
-══════════════════════════════════════════════════════════════ */
-const PAGE_META: Record<string, { label: string; desc?: string }> = {
-  dashboard:    { label: 'Overview',     desc: 'All projects · last 30 days'       },
-  analytics:    { label: 'Analytics',    desc: 'Usage, costs & model breakdown'    },
-  projects:     { label: 'Projects',     desc: 'Manage your projects'              },
-  teams:        { label: 'Teams',        desc: 'Members & permissions'             },
-  keys:         { label: 'API Keys',     desc: 'Manage access keys'               },
-  limits:       { label: 'Limits',       desc: 'Budget & spend controls'          },
-  alerts:       { label: 'Alerts',       desc: 'Notification rules'               },
-  settings:     { label: 'Settings',     desc: 'Workspace configuration'          },
-  integrations: { label: 'Integrations', desc: 'Connect your tools'              },
-  models:       { label: 'Models',       desc: 'LLM model registry & pricing'    },
-  setup:        { label: 'Connections',  desc: 'Connect your coding agents'       },
-  mcp:          { label: 'Platforms',    desc: 'Connected platforms & usage'      },
-}
-
-/* ══════════════════════════════════════════════════════════════
-   COMMAND PALETTE DATA
-══════════════════════════════════════════════════════════════ */
-const NAV_RESULTS: SearchResult[] = [
-  { type: 'page',   label: 'Overview',     desc: 'Dashboard home',          href: '/dashboard',          icon: LayoutDashboard },
-  { type: 'page',   label: 'Projects',     desc: 'All your projects',       href: '/dashboard/projects', icon: Layers          },
-  { type: 'page',   label: 'Teams',        desc: 'Members & permissions',   href: '/dashboard/teams',    icon: Users           },
-  { type: 'page',   label: 'API Keys',     desc: 'Manage access keys',      href: '/dashboard/keys',     icon: Key             },
-  { type: 'page',   label: 'Analytics',    desc: 'Usage & costs',           href: '/dashboard/analytics',icon: BarChart3       },
-  { type: 'page',   label: 'Limits',       desc: 'Budget controls',         href: '/dashboard/limits',   icon: Shield          },
-  { type: 'page',   label: 'Alerts',       desc: 'Notification rules',      href: '/dashboard/alerts',   icon: Bell            },
-  { type: 'page',   label: 'Settings',     desc: 'Workspace settings',      href: '/dashboard/settings', icon: Settings        },
-  { type: 'action', label: 'New Project',  desc: 'Create a project',        href: '/dashboard/projects', icon: Layers,         shortcut: '⌘N' },
-  { type: 'action', label: 'Invite Member',desc: 'Add to your team',        href: '/dashboard/teams',    icon: Users                         },
-  { type: 'action', label: 'View Usage',   desc: 'Cost breakdown',          href: '/dashboard/analytics',icon: TrendingUp                    },
-]
-
-const RECENT_PAGES = [
-  { label: 'Overview',  href: '/dashboard',          icon: LayoutDashboard },
-  { label: 'Projects',  href: '/dashboard/projects', icon: Layers          },
-  { label: 'Teams',     href: '/dashboard/teams',    icon: Users           },
-]
 
 type NotifTab = 'all' | 'budget' | 'team' | 'system'
 
@@ -101,150 +54,6 @@ const CATEGORY_BADGE: Record<NotifCategory, string> = {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   COMMAND PALETTE
-══════════════════════════════════════════════════════════════ */
-function CommandPalette({ onClose }: { onClose: () => void }) {
-  const router   = useRouter()
-  const inputRef = useRef<HTMLInputElement>(null)
-  const [query,   setQuery]   = useState('')
-  const [cursor,  setCursor]  = useState(0)
-
-  const results = query.trim()
-    ? NAV_RESULTS.filter(r =>
-        r.label.toLowerCase().includes(query.toLowerCase()) ||
-        (r.desc ?? '').toLowerCase().includes(query.toLowerCase())
-      )
-    : null
-
-  const shown = results ?? NAV_RESULTS.slice(0, 5)
-
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 50) }, [])
-  useEffect(() => { setCursor(0) }, [query])
-
-  function go(href?: string) {
-    if (href) { router.push(href); onClose() }
-  }
-
-  function handleKey(e: React.KeyboardEvent) {
-    if (e.key === 'Escape') { onClose(); return }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setCursor(c => Math.min(c + 1, shown.length - 1)) }
-    if (e.key === 'ArrowUp')   { e.preventDefault(); setCursor(c => Math.max(c - 1, 0)) }
-    if (e.key === 'Enter')     { go(shown[cursor]?.href) }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] px-4">
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-[3px]" onClick={onClose} />
-
-      {/* Panel */}
-      <div className="relative w-full max-w-[560px] bg-[var(--bg)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden">
-
-        {/* Input */}
-        <div className="flex items-center gap-3 px-4 py-3.5 border-b border-[var(--border)]">
-          <Search size={16} className="text-[var(--fg-tertiary)] flex-shrink-0" />
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyDown={handleKey}
-            placeholder="Search pages, projects, actions…"
-            className="flex-1 bg-transparent text-[14px] text-[var(--fg)] placeholder:text-[var(--fg-tertiary)] focus:outline-none"
-          />
-          {query && (
-            <button onClick={() => setQuery('')} className="text-[var(--fg-tertiary)] hover:text-[var(--fg)] transition-colors">
-              <X size={14} />
-            </button>
-          )}
-          <kbd className="flex items-center px-1.5 py-0.5 bg-[var(--bg-tertiary)] rounded text-[10px] font-mono text-[var(--fg-tertiary)] border border-[var(--border)] flex-shrink-0">
-            Esc
-          </kbd>
-        </div>
-
-        {/* Results */}
-        <div className="max-h-[360px] overflow-y-auto">
-          {!query && (
-            <div className="px-4 pt-3 pb-1.5">
-              <div className="flex items-center gap-1.5 mb-2">
-                <Clock size={11} className="text-[var(--fg-tertiary)]" />
-                <span className="text-[10.5px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider">Recent</span>
-              </div>
-              <div className="flex gap-1.5 flex-wrap mb-3">
-                {RECENT_PAGES.map(p => (
-                  <button
-                    key={p.href}
-                    onClick={() => go(p.href)}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] text-[11.5px] text-[var(--fg-secondary)] hover:text-[var(--fg)] hover:border-[var(--border-strong)] transition-all"
-                  >
-                    <p.icon size={11} /> {p.label}
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Hash size={11} className="text-[var(--fg-tertiary)]" />
-                <span className="text-[10.5px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider">Navigation</span>
-              </div>
-            </div>
-          )}
-
-          {shown.map((r, i) => {
-            const Icon = r.icon
-            const isPage   = r.type === 'page'
-            const isAction = r.type === 'action'
-            return (
-              <button
-                key={r.label}
-                onMouseEnter={() => setCursor(i)}
-                onClick={() => go(r.href)}
-                className={cn(
-                  'w-full flex items-center gap-3 px-4 py-3 text-left transition-colors',
-                  cursor === i ? 'bg-[var(--bg-secondary)]' : 'hover:bg-[var(--bg-hover)]',
-                )}
-              >
-                <div className={cn(
-                  'w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0',
-                  isAction ? 'bg-coral/10' : 'bg-[var(--bg-tertiary)]'
-                )}>
-                  <Icon size={15} className={isAction ? 'text-coral' : 'text-[var(--fg-secondary)]'} strokeWidth={1.75} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-semibold text-[var(--fg)] leading-tight">{r.label}</p>
-                  {r.desc && <p className="text-[11.5px] text-[var(--fg-tertiary)] leading-tight mt-0.5">{r.desc}</p>}
-                </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {r.shortcut && (
-                    <kbd className="px-1.5 py-0.5 bg-[var(--bg-tertiary)] rounded text-[10px] font-mono text-[var(--fg-tertiary)] border border-[var(--border)]">
-                      {r.shortcut}
-                    </kbd>
-                  )}
-                  {cursor === i && <ArrowUpRight size={12} className="text-[var(--fg-tertiary)]" />}
-                </div>
-              </button>
-            )
-          })}
-
-          {results?.length === 0 && (
-            <div className="px-4 py-10 text-center">
-              <p className="text-[13px] text-[var(--fg-secondary)]">No results for &quot;<span className="text-[var(--fg)]">{query}</span>&quot;</p>
-              <p className="text-[11.5px] text-[var(--fg-tertiary)] mt-1">Try searching for pages, projects, or actions</p>
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-t border-[var(--border)] bg-[var(--bg-secondary)]/60">
-          <div className="flex items-center gap-3 text-[10.5px] text-[var(--fg-tertiary)]">
-            <span className="flex items-center gap-1"><kbd className="font-mono bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-1">↑↓</kbd> navigate</span>
-            <span className="flex items-center gap-1"><kbd className="font-mono bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-1">↵</kbd> open</span>
-          </div>
-          <span className="text-[10.5px] text-[var(--fg-tertiary)]">⌘K to toggle</span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/* ══════════════════════════════════════════════════════════════
    NOTIFICATIONS PANEL
 ══════════════════════════════════════════════════════════════ */
 function NotificationsPanel({
@@ -265,7 +74,7 @@ function NotificationsPanel({
   const unread = notifs.filter(n => !n.read).length
 
   return (
-    <div className="w-[380px] bg-[var(--bg)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[520px]">
+    <div role="dialog" aria-label="Notifications" className="w-full sm:w-[380px] bg-[var(--bg)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[520px]">
 
       {/* Header */}
       <div className="px-4 pt-4 pb-0">
@@ -288,10 +97,12 @@ function NotificationsPanel({
               </button>
             )}
             <button
-              onClick={() => { router.push('/dashboard/settings'); onClose() }}
+              type="button"
+              aria-label="Notification settings"
+              onClick={() => { router.push('/dashboard/settings/notifications'); onClose() }}
               className="w-6 h-6 rounded-lg flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--fg)] transition-colors"
             >
-              <Settings size={12} />
+              <Settings size={12} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -343,7 +154,11 @@ function NotificationsPanel({
               return (
                 <div
                   key={n.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${n.read ? '' : 'Unread: '}${n.title}. Mark as read`}
                   onClick={() => onRead(n.dbId, n.id)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRead(n.dbId, n.id) } }}
                   className={cn(
                     'flex items-start gap-3 px-4 py-3.5 cursor-pointer transition-colors group relative',
                     n.read ? 'hover:bg-[var(--bg-hover)]' : 'hover:bg-[var(--bg-secondary)]'
@@ -411,7 +226,7 @@ function ProfileMenu({
   function go(href: string) { onClose(); router.push(href) }
 
   return (
-    <div className="w-[260px] bg-[var(--bg)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden">
+    <div role="menu" aria-label="Account" className="w-[260px] bg-[var(--bg)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden">
 
       {/* User card */}
       <div className="px-4 py-4 border-b border-[var(--border)]">
@@ -443,11 +258,12 @@ function ProfileMenu({
       {/* Menu items */}
       <div className="py-1.5">
         {[
-          { icon: UserIcon,   label: 'Profile',  desc: 'Account info',    href: '/dashboard/settings' },
+          { icon: UserIcon,   label: 'Profile',  desc: 'Account info',    href: '/dashboard/settings/profile' },
           { icon: Database,   label: 'Data',     desc: 'Retention & deletion', href: '/dashboard/settings/data' },
         ].map(({ icon: Icon, label, desc, href }) => (
           <button
             key={label}
+            role="menuitem"
             onClick={() => go(href)}
             className="w-full flex items-center gap-3 px-4 py-2 hover:bg-[var(--bg-hover)] transition-colors group"
           >
@@ -465,6 +281,7 @@ function ProfileMenu({
       {/* Divider + signout */}
       <div className="px-3 pt-1 pb-2 border-t border-[var(--border)]">
         <button
+          role="menuitem"
           onClick={onSignOut}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[12.5px] font-semibold text-[var(--red)] hover:bg-[var(--red-bg)] transition-colors"
         >
@@ -481,13 +298,18 @@ function ProfileMenu({
 /* ══════════════════════════════════════════════════════════════
    MAIN TOPBAR
 ══════════════════════════════════════════════════════════════ */
-export function Topbar({ user, notifications }: { user: User; notifications: Notif[] }) {
+export function Topbar({ user, notifications, onOpenPalette, onOpenNav, navOpen }: {
+  user: User
+  notifications: Notif[]
+  onOpenPalette: () => void
+  onOpenNav: () => void
+  navOpen: boolean
+}) {
   const router   = useRouter()
   const pathname = usePathname()
   const supabase = createClient()
   const { resolvedTheme, setTheme } = useTheme()
 
-  const [searchOpen, setSearchOpen] = useState(false)
   const [notifOpen,  setNotifOpen]  = useState(false)
   const [menuOpen,   setMenuOpen]   = useState(false)
   const [notifs,     setNotifs]     = useState<Notif[]>(notifications)
@@ -569,36 +391,21 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
     }).catch(() => {})
   }, [])
 
-  /* ── Global ⌘K shortcut ── */
+  /* ── Escape closes popovers (⌘K lives in AppShell) ── */
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault()
-        setSearchOpen(v => !v)
-        setNotifOpen(false)
-        setMenuOpen(false)
-      }
-      if (e.key === 'Escape') {
-        setSearchOpen(false)
-        setNotifOpen(false)
-        setMenuOpen(false)
-      }
+      if (e.key === 'Escape') { setNotifOpen(false); setMenuOpen(false) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  /* ── Breadcrumb ── */
-  const segments = pathname.split('/').filter(Boolean)
-  const lastSeg  = segments[segments.length - 1] ?? 'dashboard'
-  const meta     = PAGE_META[lastSeg] ?? { label: lastSeg.charAt(0).toUpperCase() + lastSeg.slice(1) }
-
-  const crumbs = segments
-    .filter(s => s !== 'dashboard' || segments.length === 1)
-    .map((seg, i, arr) => ({
-      label: PAGE_META[seg]?.label ?? seg.charAt(0).toUpperCase() + seg.slice(1),
-      last:  i === arr.length - 1,
-    }))
+  /* ── Title + breadcrumb from the nav config (most specific match) ── */
+  const activeLink = ALL_NAV_LINKS.find(l => l.href === activeHref(pathname ?? '/dashboard', ALL_HREFS))
+  const extraSeg   = activeLink && pathname !== activeLink.href ? pathname.slice(activeLink.href.length + 1).split('/')[0] : ''
+  const title      = activeLink?.label ?? 'Dashboard'
+  const section    = activeLink ? (sectionOf(activeLink.href) ?? 'Settings') : null
+  const crumbs     = [section && section !== title ? section : null, extraSeg ? title : null].filter(Boolean) as string[]
 
   async function signOut() {
     setMenuOpen(false)
@@ -617,28 +424,36 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
 
   return (
     <>
-      <header className="flex items-center justify-between h-[56px] px-5 bg-[var(--bg)] border-b border-[var(--border)] flex-shrink-0 z-20 relative">
+      <header className="flex items-center justify-between gap-2 h-[56px] px-3 sm:px-5 bg-[var(--bg)] border-b border-[var(--border)] flex-shrink-0 z-20 relative">
 
-        {/* ── Left: breadcrumb ── */}
-        <div className="flex flex-col justify-center min-w-0">
-          {crumbs.length > 1 && (
-            <div className="flex items-center gap-1 mb-0.5">
-              {crumbs.map((c, i) => (
-                <span key={i} className="flex items-center gap-1">
-                  {i > 0 && <ChevronRight size={10} className="text-[var(--fg-tertiary)]" />}
-                  <span className={cn(
-                    'text-[10.5px]',
-                    c.last ? 'text-[var(--fg-secondary)] font-medium' : 'text-[var(--fg-tertiary)]'
-                  )}>
-                    {c.label}
+        {/* ── Left: menu (mobile) + title ── */}
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            type="button"
+            onClick={onOpenNav}
+            aria-label="Open navigation"
+            aria-controls="mobile-nav"
+            aria-expanded={navOpen}
+            className="md:hidden w-9 h-9 -ml-1 rounded-lg flex items-center justify-center text-[var(--fg-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--fg)] flex-shrink-0"
+          >
+            <Menu size={18} aria-hidden="true" />
+          </button>
+          <div className="flex flex-col justify-center min-w-0">
+            {crumbs.length > 0 && (
+              <nav aria-label="Breadcrumb" className="hidden sm:flex items-center gap-1 mb-0.5">
+                {crumbs.map((c, i) => (
+                  <span key={i} className="flex items-center gap-1 text-[10.5px] text-[var(--fg-tertiary)]">
+                    {i > 0 && <ChevronRight size={10} aria-hidden="true" />}
+                    {c}
                   </span>
-                </span>
-              ))}
-            </div>
-          )}
-          <h1 className="text-[14.5px] font-bold text-[var(--fg)] leading-tight tracking-tight truncate">
-            {meta.label}
-          </h1>
+                ))}
+              </nav>
+            )}
+            {/* The page's single h1 — in-page titles are h2 (one h1 per page). */}
+            <h1 className="text-[14.5px] font-bold text-[var(--fg)] leading-tight tracking-tight truncate">
+              {title}{extraSeg && <span className="text-[var(--fg-tertiary)] font-medium"> · detail</span>}
+            </h1>
+          </div>
         </div>
 
         {/* ── Right: actions ── */}
@@ -646,31 +461,37 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
 
           {/* ── Search ── */}
           <button
-            onClick={() => { setSearchOpen(true); closeAll() }}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-[12px] text-[var(--fg-tertiary)] hover:border-[var(--border-strong)] hover:text-[var(--fg-secondary)] hover:bg-[var(--bg-tertiary)] transition-all"
-            aria-label="Search (⌘K)"
+            type="button"
+            onClick={() => { closeAll(); onOpenPalette() }}
+            className="flex items-center gap-2 h-8 px-2.5 md:px-3 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-[12px] text-[var(--fg-tertiary)] hover:border-[var(--border-strong)] hover:text-[var(--fg-secondary)] hover:bg-[var(--bg-tertiary)] transition-all"
+            aria-label="Search or ask (⌘K)"
+            aria-keyshortcuts="Meta+K Control+K"
           >
-            <Search size={13} strokeWidth={1.75} />
-            <span className="hidden md:block text-[12px]">Search…</span>
-            <kbd className="hidden md:flex items-center gap-0.5 px-1.5 py-0.5 bg-[var(--bg-tertiary)] rounded text-[10px] font-mono text-[var(--fg-tertiary)] border border-[var(--border)]">
+            <Search size={13} strokeWidth={1.75} aria-hidden="true" />
+            <span className="hidden md:block text-[12px]">Search or ask…</span>
+            <kbd className="hidden md:flex items-center gap-0.5 px-1.5 py-0.5 bg-[var(--bg-tertiary)] rounded text-[10px] font-mono text-[var(--fg-tertiary)] border border-[var(--border)]" aria-hidden="true">
               ⌘K
             </kbd>
           </button>
 
           {/* ── Theme toggle ── */}
           <button
+            type="button"
             onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--fg)] transition-all"
-            aria-label="Toggle theme"
+            className="hidden sm:flex w-8 h-8 rounded-lg items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--fg)] transition-all"
+            aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
           >
             {resolvedTheme === 'dark'
-              ? <Sun size={15} strokeWidth={1.75} />
-              : <Moon size={15} strokeWidth={1.75} />}
+              ? <Sun size={15} strokeWidth={1.75} aria-hidden="true" />
+              : <Moon size={15} strokeWidth={1.75} aria-hidden="true" />}
           </button>
 
           {/* ── Notifications ── */}
           <div className="relative">
             <button
+              type="button"
+              aria-expanded={notifOpen}
+              aria-haspopup="dialog"
               onClick={() => { setNotifOpen(v => !v); setMenuOpen(false) }}
               className={cn(
                 'relative w-8 h-8 rounded-lg flex items-center justify-center transition-all',
@@ -678,11 +499,11 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
                   ? 'bg-[var(--bg-secondary)] text-[var(--fg)]'
                   : 'text-[var(--fg-tertiary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--fg)]'
               )}
-              aria-label="Notifications"
+              aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
             >
-              <Bell size={15} strokeWidth={1.75} />
+              <Bell size={15} strokeWidth={1.75} aria-hidden="true" />
               {unread > 0 && (
-                <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-0.5 bg-coral rounded-full text-[9px] font-bold text-white flex items-center justify-center leading-none shadow-sm">
+                <span aria-hidden="true" className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-0.5 bg-coral rounded-full text-[9px] font-bold text-white flex items-center justify-center leading-none shadow-sm">
                   {unread > 9 ? '9+' : unread}
                 </span>
               )}
@@ -690,8 +511,8 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
 
             {notifOpen && (
               <>
-                <div className="fixed inset-0 z-30" onClick={() => setNotifOpen(false)} />
-                <div className="absolute right-0 top-full mt-2 z-40 animate-slide-up">
+                <div className="fixed inset-0 z-30" onClick={() => setNotifOpen(false)} aria-hidden="true" />
+                <div className="fixed sm:absolute left-3 right-3 sm:left-auto sm:right-0 top-[60px] sm:top-full sm:mt-2 z-40 animate-slide-up">
                   <NotificationsPanel
                     notifs={notifs}
                     onRead={markRead}
@@ -705,19 +526,23 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
           </div>
 
           {/* Divider */}
-          <div className="w-px h-5 bg-[var(--border)] mx-1" />
+          <div className="hidden sm:block w-px h-5 bg-[var(--border)] mx-1" aria-hidden="true" />
 
           {/* ── Profile / User menu ── */}
           <div className="relative">
             <button
+              type="button"
+              aria-label={`Account menu for ${displayName}`}
+              aria-expanded={menuOpen}
+              aria-haspopup="menu"
               onClick={() => { setMenuOpen(v => !v); setNotifOpen(false) }}
               className={cn(
-                'flex items-center gap-2 pl-1.5 pr-2.5 py-1.5 rounded-xl transition-all',
+                'flex items-center gap-2 pl-1 pr-1.5 sm:pl-1.5 sm:pr-2.5 py-1 sm:py-1.5 rounded-xl transition-all',
                 menuOpen ? 'bg-[var(--bg-secondary)]' : 'hover:bg-[var(--bg-secondary)]'
               )}
             >
               {/* Avatar */}
-              <div className="relative">
+              <div className="relative" aria-hidden="true">
                 <div className="w-7 h-7 rounded-full bg-gradient-to-br from-coral to-[#f07260] flex items-center justify-center flex-shrink-0 shadow-sm">
                   <span className="text-[11px] font-bold text-white">{avatarLetter}</span>
                 </div>
@@ -729,12 +554,12 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
                 </p>
                 <p className="text-[9.5px] text-[var(--fg-tertiary)]">Free · unlimited</p>
               </div>
-              <ChevronDown size={12} className={cn('text-[var(--fg-tertiary)] transition-transform duration-200', menuOpen && 'rotate-180')} />
+              <ChevronDown size={12} aria-hidden="true" className={cn('hidden sm:block text-[var(--fg-tertiary)] transition-transform duration-200', menuOpen && 'rotate-180')} />
             </button>
 
             {menuOpen && (
               <>
-                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
+                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} aria-hidden="true" />
                 <div className="absolute right-0 top-full mt-2 z-40 animate-slide-up">
                   <ProfileMenu
                     user={user}
@@ -750,9 +575,6 @@ export function Topbar({ user, notifications }: { user: User; notifications: Not
           </div>
         </div>
       </header>
-
-      {/* ── Command Palette (portal-like, rendered outside header) ── */}
-      {searchOpen && <CommandPalette onClose={() => setSearchOpen(false)} />}
     </>
   )
 }

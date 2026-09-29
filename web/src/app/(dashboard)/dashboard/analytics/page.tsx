@@ -1,59 +1,20 @@
-import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
-import { toISTDate } from '@/lib/dates'
+import { requireOrgContext }  from '@/lib/org-context'
+import { dashSummary, dashBreakdown, NO_PROJECT_ID } from '@/lib/rollups'
+import { resolveWindow, sourceLabel, fmtDayLabel } from '@/lib/rollup-scope'
 import { AnalyticsClient }    from './_client'
 import type { AnalyticsData, DayData, ModelSlice, ProjectSlice, PlatformSlice, SourceSlice } from './_types'
-import { fetchAllRows } from '@/lib/supabase/paginate'
+import { computeCacheStats } from '@/components/dashboard/cache-efficiency'
 
-/* ── Platform detection from usage_events.tags ─────────────────
- * Tags set by proxy: { source: 'proxy', tool: 'codex' }
- * Tags set by MCP:   { source: 'mcp' }
- * Tags set by SDK:   { source: 'sdk' }
- * No tags / unknown → "Direct API"
- * ─────────────────────────────────────────────────────────────── */
 const PLATFORM_COLORS: Record<string, string> = {
   'Claude Code':     '#E8533A',
   'Gemini CLI':      '#4285F4',
   'OpenCode':        '#0EA5E9',
   'Codex':           '#00C48C',
-  'Claude CLI':      '#E8533A',
-  'Claude Web':      '#8B5CF6',
-  'GitHub Copilot':  '#24292F',
-  'Cursor':          '#0D8A6A',
   'MCP':             '#4285F4',
   'SDK':             '#F59E0B',
   'Direct API':      '#6B7280',
   'Proxy':           '#94A3B8',
-}
-
-// usage_events.source values written by the OTLP receiver (lib/otlp/mapping.ts).
-const SOURCE_PLATFORM: Record<string, string> = {
-  claude_code: 'Claude Code',
-  codex_cli:   'Codex',
-  gemini_cli:  'Gemini CLI',
-  opencode:    'OpenCode',
-  sdk:         'SDK',
-  mcp:         'MCP',
-}
-
-function detectPlatform(tags: Record<string, string> | null, eventSource?: string | null): string {
-  if (eventSource && SOURCE_PLATFORM[eventSource]) return SOURCE_PLATFORM[eventSource]
-  if (!tags) return 'Direct API'
-  const source = tags.source ?? ''
-  const tool   = tags.tool   ?? ''
-  if (source === 'proxy') {
-    if (tool === 'codex')       return 'Codex'
-    if (tool === 'cursor')      return 'Cursor'
-    if (tool === 'copilot')     return 'GitHub Copilot'
-    if (tool === 'claude-cli')  return 'Claude CLI'
-    if (tool === 'claude-web')  return 'Claude Web'
-    return 'Proxy'
-  }
-  if (source === 'mcp')         return 'MCP'
-  if (source === 'sdk')         return 'SDK'
-  if (tool === 'claude-web')    return 'Claude Web'
-  if (tool === 'claude-cli')    return 'Claude CLI'
-  return 'Direct API'
 }
 
 export const metadata = { title: 'Analytics — TokenFin' }
@@ -63,72 +24,26 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 const MODEL_COLORS = ['#D97757','#E8896A','#10A37F','#F0AC8A','#0D8A6A','#4285F4','#6B7280']
-
-function fmtDay(iso: string) {
-  const d = new Date(iso)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
+const pctOf = (v: number, total: number) => total > 0 ? +(v / total * 100).toFixed(1) : 0
 
 export default async function AnalyticsPage({ searchParams: searchParamsPromise }: { searchParams?: Promise<{ days?: string; from?: string; to?: string }> }) {
   const searchParams = await searchParamsPromise
-  const supabase = createClient()
-  const admin    = createAdminClient()
+  const ctx   = await requireOrgContext()
+  const admin = createAdminClient()
+  const orgId = ctx.orgId
+  const win   = resolveWindow(searchParams, ctx.timezone, { defaultDays: 30 })
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: _mb } = await admin
-    .from('members').select('org_id').eq('user_id', user.id).limit(1)
-  const orgId = _mb?.[0]?.org_id ?? ''
-
-  const requestedDays = Math.min(Math.max(Number(searchParams?.days ?? 30) || 30, 1), 3650)
-  const customFrom = searchParams?.from && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.from) ? searchParams.from : null
-  const customTo = searchParams?.to && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.to) ? searchParams.to : null
-  const end = customTo ? new Date(`${customTo}T23:59:59.999Z`) : new Date()
-  const start = customFrom ? new Date(`${customFrom}T00:00:00.000Z`) : new Date(end.getTime() - requestedDays * 86400_000)
-  const periodDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400_000))
-  const since30 = start.toISOString()
-  const since60 = new Date(start.getTime() - periodDays * 86400_000).toISOString()
-  const endIso = end.toISOString()
-  const since30date = toISTDate(start.toISOString())
-  const since60date = toISTDate(new Date(start.getTime() - periodDays * 86400_000).toISOString())
-
-  /**
-   * Strategy: split the two concerns cleanly.
-   *
-   * COST + TOKENS  → usage_agg  (pre-aggregated, fast, written by Go worker)
-   *                  Falls back to usage_events when usage_agg is empty.
-   *
-   * REQUEST COUNTS → usage_events always (one row = one request, always accurate,
-   *                  never depends on the Go worker being online).
-   *
-   * This way concurrent hits to the ingest API are always counted correctly even
-   * if the aggregation worker is lagging or not running.
-   */
-  const [
-    { data: agg     },   // current 30d from usage_agg
-    { data: aggPrev },   // prior 30d from usage_agg
-    evts,                  // current 30d from usage_events (source of truth for counts)
-    evtsPrev,              // prior 30d from usage_events
-    { data: projects},
-    { data: apiKeys },
-    { data: orgLimit },
-  ] = await Promise.all([
-    admin.from('usage_agg')
-      .select('bucket,model,project_id,total_tokens,cost_usd')
-      .eq('org_id', orgId).gte('bucket', since30date).lte('bucket', toISTDate(end.toISOString())),
-    admin.from('usage_agg')
-      .select('bucket,model,project_id,total_tokens,cost_usd')
-      .eq('org_id', orgId).gte('bucket', since60date).lt('bucket', since30date),
-    fetchAllRows((from, to) => admin.from('usage_events')
-      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis,source')
-      .eq('org_id', orgId).gte('created_at', since30).lt('created_at', endIso).range(from, to)),
-    fetchAllRows((from, to) => admin.from('usage_events')
-      .select('project_id,model,created_at,cost_usd,total_tokens,input_tokens,output_tokens,tags,cost_basis,source')
-      .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30).range(from, to)),
+  // Everything below is read from the rollups (usage_daily / usage_daily_prompts),
+  // which include metered AND notional rows, bucketed in the org's time zone.
+  const [cur, prev, byModelBd, byProjectBd, bySourceBd, { data: projects }, { data: apiKeys }, { data: orgLimit }] = await Promise.all([
+    dashSummary(admin, orgId, win.from, win.to),
+    dashSummary(admin, orgId, win.prevFrom, win.prevTo),
+    dashBreakdown(admin, orgId, win.from, win.to, 'model', undefined, 50),
+    dashBreakdown(admin, orgId, win.from, win.to, 'project', undefined, 50),
+    dashBreakdown(admin, orgId, win.from, win.to, 'source', undefined, 20),
     admin.from('projects').select('id,name').eq('org_id', orgId),
     admin.from('api_keys').select('id,name,project_id').eq('org_id', orgId).eq('is_active', true),
-    // Org-level cost limit (scope='org', metric='cost', no project_id)
+    // Org-level cost limit (metric='cost', no project_id)
     admin.from('limits')
       .select('value,budget_usd')
       .eq('org_id', orgId)
@@ -139,174 +54,51 @@ export default async function AnalyticsPage({ searchParams: searchParamsPromise 
       .maybeSingle(),
   ])
 
-  /* ── Use usage_agg for cost/tokens, usage_events for counts ──
-   * A single nonzero row in usage_agg used to be enough to "trust" it
-   * wholesale — but the Go aggregation worker can lag or drop some (not
-   * all) rows, so a partially-populated usage_agg would still pass that
-   * check and silently under-report cost/tokens vs. the complete raw
-   * usage_events table (this is what produced diverging numbers between
-   * pages — e.g. Analytics showing less than Dashboard/My Usage). Compare
-   * totals instead: only trust usage_agg when it accounts for at least
-   * 95% of what the raw events show for the same window.
-   * usage_agg only ever holds METERED rows (persist.ts deliberately excludes
-   * notional/subscription usage from it) — comparing it against a raw total
-   * that still includes notional would make it look permanently incomplete
-   * for any org with subscription usage, so exclude notional here too. */
-  const aggCostTotal  = (agg  ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const evtsCostTotal = (evts ?? []).filter(r => r.cost_basis !== 'notional').reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const aggHasCost    = aggCostTotal > 0 && aggCostTotal >= evtsCostTotal * 0.95
+  const totalCost = cur.cost_usd
 
-  // usage_agg NEVER contains notional rows (by design), so whenever it's used
-  // as the primary source it must still be topped up with notional rows read
-  // straight from raw events — otherwise trusting agg silently drops
-  // subscription spend from every total below, even though it's complete for
-  // the metered portion it does track.
-  const notionalEvts     = (evts     ?? []).filter(r => r.cost_basis === 'notional')
-  const notionalEvtsPrev = (evtsPrev ?? []).filter(r => r.cost_basis === 'notional')
-
-  /* ── Build per-day cost+tokens from usage_agg (or usage_events fallback) ── */
-  const costMap     = new Map<string, { cost: number; tokens: number }>()
-  const costMapPrev = new Map<string, { cost: number; tokens: number }>()
-
-  if (aggHasCost) {
-    for (const r of agg ?? []) {
-      const key = toISTDate(r.bucket)   // bucket is IST date string; toISTDate normalises it
-      const e   = costMap.get(key) ?? { cost: 0, tokens: 0 }
-      e.cost   += Number(r.cost_usd     ?? 0)
-      e.tokens += Number(r.total_tokens ?? 0)
-      costMap.set(key, e)
-    }
-    for (const r of notionalEvts) {
-      const key = toISTDate(r.created_at)
-      const e   = costMap.get(key) ?? { cost: 0, tokens: 0 }
-      e.cost   += Number(r.cost_usd     ?? 0)
-      e.tokens += Number(r.total_tokens ?? 0)
-      costMap.set(key, e)
-    }
-    for (const r of aggPrev ?? []) {
-      const shifted = toISTDate(new Date(r.bucket).getTime() + periodDays * 86400_000)
-      const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
-      e.cost   += Number(r.cost_usd     ?? 0)
-      e.tokens += Number(r.total_tokens ?? 0)
-      costMapPrev.set(shifted, e)
-    }
-    for (const r of notionalEvtsPrev) {
-      const shifted = toISTDate(new Date(r.created_at).getTime() + periodDays * 86400_000)
-      const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
-      e.cost   += Number(r.cost_usd     ?? 0)
-      e.tokens += Number(r.total_tokens ?? 0)
-      costMapPrev.set(shifted, e)
-    }
-  } else {
-    // fallback — aggregate cost+tokens from raw events (bucket by IST date)
-    for (const r of evts ?? []) {
-      const key = toISTDate(r.created_at)
-      const e   = costMap.get(key) ?? { cost: 0, tokens: 0 }
-      e.cost   += Number(r.cost_usd     ?? 0)
-      e.tokens += Number(r.total_tokens ?? 0)
-      costMap.set(key, e)
-    }
-    for (const r of evtsPrev ?? []) {
-      const shifted = toISTDate(new Date(r.created_at).getTime() + periodDays * 86400_000)
-      const e = costMapPrev.get(shifted) ?? { cost: 0, tokens: 0 }
-      e.cost   += Number(r.cost_usd     ?? 0)
-      e.tokens += Number(r.total_tokens ?? 0)
-      costMapPrev.set(shifted, e)
-    }
-  }
-
-  /* ── Build per-day request counts from usage_events (always authoritative) ── */
-  const callMap     = new Map<string, number>()
-  const callMapPrev = new Map<string, number>()
-  for (const r of evts ?? []) {
-    const key = toISTDate(r.created_at)
-    callMap.set(key, (callMap.get(key) ?? 0) + 1)
-  }
-  for (const r of evtsPrev ?? []) {
-    const shifted = toISTDate(new Date(r.created_at).getTime() + periodDays * 86400_000)
-    callMapPrev.set(shifted, (callMapPrev.get(shifted) ?? 0) + 1)
-  }
-
-  /* ── Merge into sorted daily array ── */
-  const allDays    = new Set([...Array.from(costMap.keys()), ...Array.from(callMap.keys())])
-  const sortedDays = Array.from(allDays).sort()
-  const avgCost    = sortedDays.length > 0
-    ? sortedDays.reduce((s, k) => s + (costMap.get(k)?.cost ?? 0), 0) / sortedDays.length
-    : 0
-
-  const daily: DayData[] = sortedDays.map(dateStr => {
-    const c  = costMap.get(dateStr)     ?? { cost: 0, tokens: 0 }
-    const cp = costMapPrev.get(dateStr) ?? { cost: 0, tokens: 0 }
+  /* ── Daily series: prev window aligned index-by-index (same length) ── */
+  const avgCost = cur.series.length > 0 ? totalCost / cur.series.length : 0
+  const daily: DayData[] = cur.series.map((p, i) => {
+    const pp = prev.series[i]
     return {
-      d:         fmtDay(dateStr),
-      cost:      c.cost,
-      prev:      cp.cost,
-      tok:       c.tokens / 1_000_000,
-      prevTok:   cp.tokens / 1_000_000,
-      calls:     callMap.get(dateStr)     ?? 0,
-      prevCalls: callMapPrev.get(dateStr) ?? 0,
-      spike:     avgCost > 0 && c.cost > avgCost * 2.5,
+      d:         fmtDayLabel(p.day),
+      cost:      p.cost_usd,
+      prev:      pp?.cost_usd ?? 0,
+      tok:       p.total_tokens / 1_000_000,
+      prevTok:   (pp?.total_tokens ?? 0) / 1_000_000,
+      calls:     p.requests,
+      prevCalls: pp?.requests ?? 0,
+      spike:     avgCost > 0 && p.cost_usd > avgCost * 2.5,
     }
   })
 
-  /* ── By model — cost/tokens from agg, counts from events ── */
-  const modelCost  = new Map<string, { cost: number; tokens: number }>()
-  const modelCalls = new Map<string, number>()
+  /* ── By model ── */
+  const byModel: ModelSlice[] = byModelBd.rows.slice(0, 6).map((r, i) => ({
+    name:  r.key || 'unknown',
+    color: MODEL_COLORS[i % MODEL_COLORS.length],
+    cost:  r.cost_usd,
+    pct:   pctOf(r.cost_usd, totalCost),
+  }))
 
-  const costSource = aggHasCost ? [...(agg ?? []), ...notionalEvts] : (evts ?? [])
-  for (const r of costSource) {
-    const m = r.model ?? 'unknown'
-    const e = modelCost.get(m) ?? { cost: 0, tokens: 0 }
-    e.cost   += Number(r.cost_usd     ?? 0)
-    e.tokens += Number(r.total_tokens ?? 0)
-    modelCost.set(m, e)
-  }
-  for (const r of evts ?? []) {
-    const m = r.model ?? 'unknown'
-    modelCalls.set(m, (modelCalls.get(m) ?? 0) + 1)
-  }
+  /* ── By project (top 5, prompts per project from the rollup) ── */
+  const projNames = new Map((projects ?? []).map(p => [p.id as string, p.name as string]))
+  const topProjects = byProjectBd.rows.slice(0, 5)
+  const projPrompts = await Promise.all(topProjects.map(r =>
+    dashSummary(admin, orgId, win.from, win.to, { project_id: r.key }).then(s => s.prompts)))
+  const byProject: ProjectSlice[] = topProjects.map((r, i) => ({
+    name:    r.key === NO_PROJECT_ID ? 'Uncategorized' : projNames.get(r.key) ?? r.key.slice(0, 8),
+    cost:    r.cost_usd,
+    pct:     pctOf(r.cost_usd, totalCost),
+    calls:   r.requests,
+    prompts: projPrompts[i],
+  }))
+  const projCost = new Map(byProjectBd.rows.map(r => [r.key, r.cost_usd]))
 
-  const totalCost  = Array.from(modelCost.values()).reduce((s, v) => s + v.cost, 0)
-  const byModel: ModelSlice[] = Array.from(modelCost.entries())
-    .sort(([, a], [, b]) => b.cost - a.cost)
-    .slice(0, 6)
-    .map(([name, v], i) => ({
-      name,
-      color: MODEL_COLORS[i % MODEL_COLORS.length],
-      cost:  v.cost,
-      pct:   totalCost > 0 ? +(v.cost / totalCost * 100).toFixed(1) : 0,
-    }))
-
-  /* ── By project — cost from agg, counts from events ── */
-  const projNames  = new Map((projects ?? []).map(p => [p.id, p.name]))
-  const projCost   = new Map<string, number>()
-  const projCalls  = new Map<string, number>()
-
-  for (const r of costSource) {
-    const pid = r.project_id ?? '__none__'
-    projCost.set(pid, (projCost.get(pid) ?? 0) + Number(r.cost_usd ?? 0))
-  }
-  for (const r of evts ?? []) {
-    const pid = r.project_id ?? '__none__'
-    projCalls.set(pid, (projCalls.get(pid) ?? 0) + 1)
-  }
-
-  const allProjIds = new Set([...Array.from(projCost.keys()), ...Array.from(projCalls.keys())])
-  const byProject: ProjectSlice[] = Array.from(allProjIds)
-    .map(pid => ({
-      name:  projNames.get(pid) ?? (pid === '__none__' ? 'Uncategorized' : pid.slice(0, 8)),
-      cost:  projCost.get(pid)  ?? 0,
-      pct:   totalCost > 0 ? +((projCost.get(pid) ?? 0) / totalCost * 100).toFixed(1) : 0,
-      calls: projCalls.get(pid) ?? 0,
-    }))
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, 5)
-
-  /* ── By platform (api key → project cost) ── */
+  /* ── By platform (api key → its project's cost) ── */
   const platformColors = ['#D97757','#4285F4','#8B5CF6','#20B2AA','#F59E0B','#6B7280']
   const platformMap    = new Map<string, { cost: number; color: string }>()
   for (const key of apiKeys ?? []) {
-    const name = key.name ?? projNames.get(key.project_id) ?? key.id.slice(0, 8)
+    const name = key.name ?? projNames.get(key.project_id) ?? String(key.id).slice(0, 8)
     if (!platformMap.has(name)) {
       platformMap.set(name, {
         cost:  projCost.get(key.project_id) ?? 0,
@@ -317,68 +109,48 @@ export default async function AnalyticsPage({ searchParams: searchParamsPromise 
   const byPlatform: PlatformSlice[] = Array.from(platformMap.entries())
     .sort(([, a], [, b]) => b.cost - a.cost)
     .slice(0, 5)
-    .map(([name, v]) => ({
-      name,
-      cost:  v.cost,
-      pct:   totalCost > 0 ? +(v.cost / totalCost * 100).toFixed(1) : 0,
-      color: v.color,
-    }))
+    .map(([name, v]) => ({ name, cost: v.cost, pct: pctOf(v.cost, totalCost), color: v.color }))
 
-  /* ── Input / Output token totals ──
-   * Metered rows only, to match totTok (usage_agg-derived, metered-only) on
-   * the Tokens MTD card — otherwise the in/out breakdown silently includes
-   * notional (CLI-agent) tokens the headline total excludes, and the two
-   * numbers on the same card contradict each other. */
-  let totalInputTokens  = 0
-  let totalOutputTokens = 0
-  for (const r of evts ?? []) {
-    if ((r as Record<string,unknown>).cost_basis === 'notional') continue
-    const total  = Number(r.total_tokens ?? 0)
-    const inTok  = Number((r as Record<string,unknown>).input_tokens  ?? Math.round(total * 0.7))
-    const outTok = Number((r as Record<string,unknown>).output_tokens ?? (total - Math.round(total * 0.7)))
-    totalInputTokens  += inTok
-    totalOutputTokens += outTok
-  }
+  /* ── By source (usage_events.source) ── */
+  const srcPrompts = await Promise.all(bySourceBd.rows.map(r =>
+    dashSummary(admin, orgId, win.from, win.to, { source: r.key }).then(s => s.prompts)))
+  const bySource: SourceSlice[] = bySourceBd.rows
+    .map((r, i) => {
+      const platform = sourceLabel(r.key)
+      return {
+        platform,
+        calls:   r.requests,
+        prompts: srcPrompts[i],
+        tokens:  r.total_tokens,
+        cost:    r.cost_usd,
+        pct:     pctOf(r.cost_usd, totalCost),
+        color:   PLATFORM_COLORS[platform] ?? '#6B7280',
+      }
+    })
+    .sort((a, b) => b.calls - a.calls)
 
-  /* ── By Source (real platform detection from tags) ── */
-  const sourceMap = new Map<string, { calls: number; tokens: number; cost: number }>()
-  for (const r of evts ?? []) {
-    const tags     = (r as Record<string,unknown>).tags as Record<string,string> | null
-    const platform = detectPlatform(tags, (r as Record<string,unknown>).source as string | null)
-    const entry    = sourceMap.get(platform) ?? { calls: 0, tokens: 0, cost: 0 }
-    entry.calls  += 1
-    entry.tokens += Number(r.total_tokens ?? 0)
-    entry.cost   += Number(r.cost_usd     ?? 0)
-    sourceMap.set(platform, entry)
-  }
-  const bySource: SourceSlice[] = Array.from(sourceMap.entries())
-    .sort(([, a], [, b]) => b.calls - a.calls)
-    .map(([platform, v]) => ({
-      platform,
-      calls:   v.calls,
-      tokens:  v.tokens,
-      cost:    v.cost,
-      pct:     totalCost > 0 ? +(v.cost / totalCost * 100).toFixed(1) : 0,
-      color:   PLATFORM_COLORS[platform] ?? '#6B7280',
-    }))
-
-  const totalPrev = Array.from(costMapPrev.values()).reduce((s, v) => s + v.cost, 0)
-
-  // Org-level budget from limits table (real value, not hardcoded)
-  const limitRow  = orgLimit as Record<string,unknown> | null
-  const orgBudget = limitRow
-    ? Number(limitRow.budget_usd ?? limitRow.value ?? 0) || null
-    : null
-
-  // Real 30d token total (same source as cost)
-  const tokensUsed = Array.from(costMap.values()).reduce((s, v) => s + v.tokens, 0)
+  const limitRow  = orgLimit as Record<string, unknown> | null
+  const orgBudget = limitRow ? Number(limitRow.budget_usd ?? limitRow.value ?? 0) || null : null
 
   const analyticsData: AnalyticsData = {
-    rangeDays: periodDays,
+    rangeDays:    win.days,
+    windowLabel:  win.label,
+    customRange:  win.custom,
+    prompts:      cur.prompts,
+    prevPrompts:  prev.prompts,
+    meteredCost:  cur.metered_cost_usd,
+    notionalCost: cur.notional_cost_usd,
     daily, byModel, byProject, byPlatform, bySource,
-    totalCost, totalPrev, orgBudget, tokensUsed,
-    inputTokens:  totalInputTokens,
-    outputTokens: totalOutputTokens,
+    totalCost,
+    totalPrev:    prev.cost_usd,
+    orgBudget,
+    tokensUsed:   cur.total_tokens,
+    inputTokens:  cur.input_tokens,
+    outputTokens: cur.output_tokens,
+    // Cache efficiency per model over every row in range (metered + notional).
+    cache: computeCacheStats(byModelBd.rows.map(r => ({
+      model: r.key, input_tokens: r.input_tokens, cache_read_tokens: r.cache_read_tokens, cache_write_tokens: r.cache_write_tokens,
+    }))),
   }
 
   return <AnalyticsClient initialData={analyticsData} />

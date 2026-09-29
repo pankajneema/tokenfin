@@ -6,12 +6,12 @@ import {
 } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatCost, formatTokens, formatNumber } from '@/lib/utils'
 
 /* ── Types ──────────────────────────────────────────────────── */
 interface Row { bucket: string; cost_usd: number; total_tokens: number; request_count?: number }
 interface PrevTotals { tokens: number; cost: number; reqs: number }
-interface Props { data: Row[]; prevTotals?: PrevTotals }
+interface Props { data: Row[]; prevTotals?: PrevTotals; /** window length, for labels */ days?: number }
 type Metric = 'tokens' | 'cost' | 'reqs'
 
 /* ── Metric config ──────────────────────────────────────────── */
@@ -21,40 +21,40 @@ const METRICS = [
     label:    'Tokens',
     color:    '#00C48C',
     unit:     'tokens',
-    yFmt:     (v: number) => v >= 1_000_000 ? `${(v/1_000_000).toFixed(1)}M` : `${(v/1000).toFixed(0)}K`,
-    tipFmt:   (v: number) => v >= 1_000_000 ? `${(v/1_000_000).toFixed(2)}M` : v.toLocaleString(),
-    totalFmt: (v: number) => v >= 1_000_000 ? `${(v/1_000_000).toFixed(2)}M` : v >= 1000 ? `${(v/1000).toFixed(1)}K` : String(Math.round(v)),
+    yFmt:     (v: number) => formatTokens(v),
+    tipFmt:   (v: number) => formatNumber(v),
+    totalFmt: (v: number) => formatTokens(v),
   },
   {
     key:      'cost' as Metric,
     label:    'Cost',
     color:    '#E8533A',
     unit:     'USD',
-    yFmt:     (v: number) => `$${v.toFixed(2)}`,
-    tipFmt:   (v: number) => `$${v.toFixed(4)}`,
-    totalFmt: (v: number) => `$${v.toFixed(2)}`,
+    yFmt:     (v: number) => formatCost(v),
+    tipFmt:   (v: number) => formatCost(v),
+    totalFmt: (v: number) => formatCost(v),
   },
   {
     key:      'reqs' as Metric,
     label:    'Requests',
     color:    '#60A5FA',
     unit:     'requests',
-    yFmt:     (v: number) => v >= 1000 ? `${(v/1000).toFixed(0)}K` : String(v),
-    tipFmt:   (v: number) => v.toLocaleString(),
-    totalFmt: (v: number) => v >= 1000 ? `${(v/1000).toFixed(1)}K` : String(v),
+    yFmt:     (v: number) => formatTokens(v),
+    tipFmt:   (v: number) => formatNumber(v),
+    totalFmt: (v: number) => formatNumber(v),
   },
 ]
 
 /* ── Trend badge ─────────────────────────────────────────────── */
 function TrendBadge({
-  curr, prev, isCost,
-}: { curr: number; prev: number; isCost: boolean }) {
+  curr, prev, isCost, days,
+}: { curr: number; prev: number; isCost: boolean; days: number }) {
   if (!prev) return null
   const pct = (curr - prev) / prev * 100
   const up  = pct > 0
   if (Math.abs(pct) < 0.5) return (
     <span className="flex items-center gap-0.5 text-[10.5px] font-semibold text-[var(--fg-tertiary)] bg-[var(--bg-tertiary)] px-2 py-0.5 rounded-full">
-      <Minus size={9} strokeWidth={2.5} /> Flat vs prev 5d
+      <Minus size={9} strokeWidth={2.5} /> Flat vs prev {days}d
     </span>
   )
   const bad  = up && isCost
@@ -67,7 +67,7 @@ function TrendBadge({
              'bg-[var(--blue-bg)]  text-[var(--blue)]',
     )}>
       {up ? <TrendingUp size={9} strokeWidth={2.5} /> : <TrendingDown size={9} strokeWidth={2.5} />}
-      {Math.abs(pct).toFixed(1)}% vs prev 5d
+      {Math.abs(pct).toFixed(1)}% vs prev {days}d
     </span>
   )
 }
@@ -90,7 +90,7 @@ function CustomTooltip({ active, payload, label, m }: {
 }
 
 /* ═══════════════════════════════════════════════════════════════ */
-export function CostChart({ data, prevTotals }: Props) {
+export function CostChart({ data, prevTotals, days = data.length }: Props) {
   const [metric, setMetric] = useState<Metric>('tokens')
   const m = METRICS.find(x => x.key === metric)!
 
@@ -98,7 +98,7 @@ export function CostChart({ data, prevTotals }: Props) {
   const chartData = useMemo(() => data.map(r => ({
     date:   format(parseISO(r.bucket), 'MMM d'),
     tokens: r.total_tokens,
-    cost:   +r.cost_usd.toFixed(4),
+    cost:   r.cost_usd,
     reqs:   r.request_count ?? 0,
   })), [data])
 
@@ -128,9 +128,10 @@ export function CostChart({ data, prevTotals }: Props) {
         <div className="text-center">
           <p className="text-[13px] font-semibold text-[var(--fg)]">No usage data yet</p>
           <p className="text-[11.5px] text-[var(--fg-tertiary)] mt-0.5">
-            Send events via{' '}
+            Nothing in the last 30 days · connect a tool with{' '}
+            <code className="font-mono bg-[var(--bg-secondary)] px-1 rounded">npx tokenfin setup</code>
+            {' '}or send events via{' '}
             <code className="font-mono bg-[var(--bg-secondary)] px-1 rounded">POST /api/v1/ingest</code>
-            {' '}to see your usage trend
           </p>
         </div>
       </div>
@@ -144,7 +145,7 @@ export function CostChart({ data, prevTotals }: Props) {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-[13px] font-semibold text-[var(--fg)]">Usage Trend</h2>
-          <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">Daily · last 5 days</p>
+          <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">Daily · last {days} days (org time zone)</p>
         </div>
         <div className="flex items-center gap-0.5 p-0.5 bg-[var(--bg-tertiary)] rounded-lg">
           {METRICS.map(opt => (
@@ -174,11 +175,11 @@ export function CostChart({ data, prevTotals }: Props) {
             {m.totalFmt(currTotal)}
           </p>
           <p className="text-[11px] text-[var(--fg-tertiary)] mt-1">
-            {m.unit} · 5-day total
+            {m.unit} · {days}-day total
           </p>
         </div>
         <div className="mb-1">
-          <TrendBadge curr={currTotal} prev={prevTotal} isCost={metric === 'cost'} />
+          <TrendBadge curr={currTotal} prev={prevTotal} isCost={metric === 'cost'} days={days} />
         </div>
       </div>
 
@@ -254,7 +255,7 @@ export function CostChart({ data, prevTotals }: Props) {
           <p className="text-[11px] text-[var(--fg-tertiary)]">/ day</p>
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--fg-tertiary)]">Prev 5 days</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--fg-tertiary)]">Prev {days} days</p>
           <p className="text-[13px] font-bold text-[var(--fg)] mt-0.5 tabular-nums">
             {prevTotal > 0 ? m.totalFmt(prevTotal) : '—'}
           </p>

@@ -12,7 +12,7 @@ Please include:
 
 - A description of the issue and its impact
 - Steps to reproduce, or a proof of concept
-- Affected component(s): `web/`, `backend/`, `cli/`, `sdk/`, database migrations
+- Affected component(s): `web/`, `cli/`, `sdk/`, database migrations
 - Any suggested fix or mitigation
 
 What to expect:

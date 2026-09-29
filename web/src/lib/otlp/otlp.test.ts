@@ -75,6 +75,14 @@ describe('mapping', () => {
     expect(detectSource({ 'service.name': 'codex' })).toBe('codex_cli')
     expect(detectSource({}, 'gen_ai.client.token.usage')).toBe('gemini_cli')
     expect(detectSource({})).toBe('otlp')
+    // Prefix, not substring: generic apps that mention a vendor stay metered 'otlp'.
+    expect(detectSource({ 'service.name': 'claude-support-bot' })).toBe('otlp')
+    expect(detectSource({ 'service.name': 'my-gemini-app' })).toBe('otlp')
+    expect(detectSource({ 'service.name': 'support-bot' }, 'claude-sonnet-4-5')).toBe('otlp')
+    expect(detectSource({ 'service.name': 'support-bot' }, 'gen_ai.client.token.usage')).toBe('otlp')
+    expect(detectSource({ 'service.name': 'codex_cli_rs' })).toBe('codex_cli')
+    expect(detectSource({ 'service.name': 'gemini-cli' })).toBe('gemini_cli')
+    expect(detectSource({}, 'claude_code.api_request')).toBe('claude_code')
   })
   it('costBasisFor is notional for CLI agents', () => {
     expect(costBasisFor('claude_code')).toBe('notional')
@@ -193,21 +201,22 @@ describe('decode (protobuf)', () => {
 })
 
 // ── persist (idempotency + notional never rolls into usage_agg) ───────────────
-function mockAdmin({ projectId = 'proj1' as string | null, inserted = [{ id: 'ev1' }] as any[] } = {}) {
+function mockAdmin({ projectId = 'proj1' as string | null, duplicate = false } = {}) {
   const rpcCalls: any[] = []
   const upsertCalls: any[] = []
   const admin: any = {
     from(table: string) {
-      let isUpsert = false
+      let upserted: any[] | null = null
       const b: any = {
-        select: () => (isUpsert ? Promise.resolve({ data: inserted, error: null }) : b),
+        // An array upsert returns the rows it inserted (none for a replay).
+        select: () => (upserted ? Promise.resolve({ data: duplicate ? [] : upserted.map((r, i) => ({ id: `ev${i}`, event_id: r.event_id })), error: null }) : b),
         eq: () => b, order: () => b, limit: () => b, not: () => b, update: () => b,
         maybeSingle: () => Promise.resolve({ data: table === 'projects' ? (projectId ? { id: projectId } : null) : null, error: null }),
-        upsert: (rec: any) => { isUpsert = true; upsertCalls.push(rec); return b },
+        upsert: (rec: any) => { upserted = Array.isArray(rec) ? rec : [rec]; upsertCalls.push(rec); return b },
       }
       return b
     },
-    rpc: (name: string, params: any) => { rpcCalls.push({ name, params }); return Promise.resolve({ error: null }) },
+    rpc: (name: string, params: any) => { rpcCalls.push({ name, params }); return Promise.resolve({ data: null, error: null }) },
     __rpcCalls: rpcCalls, __upsertCalls: upsertCalls,
   }
   return admin
@@ -226,17 +235,17 @@ describe('persistRows', () => {
     const rows = normalizeLogs(logsBody([record(FULL)]), CTX)  // notional
     const res = await persistRows(admin, CTX, rows)
     expect(res.inserted).toBe(1)
-    expect(admin.__rpcCalls).toHaveLength(0)  // metered totals stay clean
+    expect(admin.__rpcCalls.filter((c: any) => c.name === 'upsert_usage_agg_batch')).toHaveLength(0)  // metered totals stay clean
   })
   it('metered rows DO roll into usage_agg', async () => {
     const admin = mockAdmin()
     const res = await persistRows(admin, CTX, [meteredRow])
     expect(res.inserted).toBe(1)
     expect(admin.__rpcCalls).toHaveLength(1)
-    expect(admin.__rpcCalls[0].name).toBe('upsert_usage_agg')
+    expect(admin.__rpcCalls[0].name).toBe('upsert_usage_agg_batch')
   })
   it('a duplicate (empty upsert result) counts as duplicate and skips agg', async () => {
-    const admin = mockAdmin({ inserted: [] })
+    const admin = mockAdmin({ duplicate: true })
     const res = await persistRows(admin, CTX, [meteredRow])
     expect(res).toEqual({ inserted: 0, duplicate: 1 })
     expect(admin.__rpcCalls).toHaveLength(0)

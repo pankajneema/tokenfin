@@ -1,27 +1,26 @@
 """
-tokenfin — Python SDK for TokenFin LLM Cost Attribution.
+tokenfin — Python SDK for TokenFin LLM cost attribution.
 
-Usage (sync)::
+Auto-instrumentation::
 
-    from tokenfin import TokenFinClient
+    from anthropic import Anthropic
+    from tokenfin import TokenFinClient, wrap_anthropic
 
-    tf = TokenFinClient(api_key="tfk_prod_...")
-    tf.track(model="gpt-4o", input_tokens=800, output_tokens=120)
-    tf.flush()          # drain before process exit
+    tf = TokenFinClient(api_key="tfk_...")
+    client = wrap_anthropic(Anthropic(), tf)      # every call is now tracked
 
-Usage (async)::
+Manual tracking::
 
-    from tokenfin import AsyncTokenFinClient
-
-    tf = AsyncTokenFinClient(api_key="tfk_prod_...")
-    await tf.track(model="gpt-4o", input_tokens=800, output_tokens=120)
-    await tf.flush()
-
+    tf.track(model="gpt-4o", input_tokens=800, output_tokens=120,
+             cache_read_tokens=400, user_email="dev@acme.com")
+    tf.shutdown()          # drain before exit
 """
 
 from .client import TokenFinClient
 from .async_client import AsyncTokenFinClient
 from .types import TrackEvent, FlushResult, TokenFinConfig
+from .utils import SDK_VERSION
+from .wrappers import wrap_anthropic, wrap_openai
 
 __all__ = [
     "TokenFinClient",
@@ -29,6 +28,8 @@ __all__ = [
     "TrackEvent",
     "FlushResult",
     "TokenFinConfig",
+    "wrap_anthropic",
+    "wrap_openai",
 ]
 
-__version__ = "0.1.0"
+__version__ = SDK_VERSION

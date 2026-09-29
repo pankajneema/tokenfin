@@ -1,75 +1,64 @@
 # tokenfin — Python SDK
 
-Track LLM token usage and cost from any Python application.
-
-## Install
+Track LLM token usage and cost in [TokenFin](https://github.com/pankajneema/tokenfin).
+The sync client has no dependencies. `anthropic`, `openai` and `aiohttp` are all optional.
 
 ```bash
-# Sync client (zero dependencies):
 pip install tokenfin
-
-# Async client (FastAPI / Django ASGI):
-pip install "tokenfin[async]"
+pip install "tokenfin[async]"   # optional aiohttp transport for AsyncTokenFinClient
 ```
 
-## Quick start — sync
+## Auto-instrument Anthropic / OpenAI
 
 ```python
-from tokenfin import TokenFinClient
+from anthropic import Anthropic
+from openai import OpenAI
+from tokenfin import TokenFinClient, wrap_anthropic, wrap_openai
 
-tf = TokenFinClient(api_key="tf_live_your_key")
-
-# After every LLM call:
-response = openai.chat.completions.create(model="gpt-4o", ...)
-tf.track(
-    model="gpt-4o",
-    input_tokens=response.usage.prompt_tokens,
-    output_tokens=response.usage.completion_tokens,
-    tags={"feature": "chat", "env": "prod"},
-)
-
-# Drain queue before exit:
-tf.flush()
+tf = TokenFinClient(api_key="tfk_...")
+anthropic = wrap_anthropic(Anthropic(), tf, user_email="dev@acme.com", tags={"feature": "chat"})
+openai = wrap_openai(OpenAI(), tf)
 ```
 
-## Quick start — async (FastAPI)
+Every `messages.create` / `messages.stream` / `chat.completions.create` / `responses.create`
+call is now recorded. This works for sync and async clients, with and without streaming.
+The wrappers record the model, input and output tokens, cache read/write tokens, and latency.
+
+- The wrappers do not change return values, and SDK errors propagate unchanged.
+- Prompt capture is **off** by default. Turn it on with `capture_prompts=True`.
+- For OpenAI streaming, `stream_options.include_usage` is set for you and the usage-only
+  chunk is hidden.
+
+## Manual tracking
 
 ```python
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from tokenfin import AsyncTokenFinClient
-
-tf = AsyncTokenFinClient(api_key="tf_live_your_key")
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    await tf.flush()          # drain on shutdown
-
-app = FastAPI(lifespan=lifespan)
-
-@app.post("/chat")
-async def chat():
-    response = await async_openai.chat.completions.create(...)
-    await tf.track(
-        model="gpt-4o",
-        input_tokens=response.usage.prompt_tokens,
-        output_tokens=response.usage.completion_tokens,
-    )
+tf.track("claude-sonnet-4-6", 1200, 380,
+         cache_read_tokens=9000, cache_write_tokens=400,
+         project_id="…uuid…", user_email="dev@acme.com", session_id="run-42",
+         latency_ms=812, idempotency_key="req_123", tags={"feature": "chat"})
+tf.shutdown()     # drain before exit (also runs from atexit; no signal handlers are installed)
 ```
+
+`flush()` and `shutdown()` return `FlushResult(sent, dropped)`, and `tf.stats()` returns
+lifetime counters. A non-retryable 4xx counts as **dropped**. The SDK retries 408, 429, 5xx
+and network errors, and honours `Retry-After`.
 
 ## Configuration
 
 | Parameter | Default | Description |
 |---|---|---|
-| `api_key` | required | API key starting with `tf_` |
-| `base_url` | `https://app.tokenfin.io` | Override for self-hosted |
-| `timeout` | `3.0` | Per-request timeout (seconds) |
-| `flush_interval` | `1.0` | Auto-flush interval (seconds). `0` = manual only |
-| `batch_size` | `50` | Max events per HTTP request |
-| `max_queue_size` | `1000` | Max in-memory queue depth |
-| `max_retries` | `3` | Retry attempts on 5xx/429 |
-| `debug` | `False` | Log debug output to stderr |
+| `api_key` | required | `tfk_…` key with the `ingest` or `write` scope |
+| `base_url` | `https://tokenfin.curiousdevs.com` | self-hosted URL |
+| `batch_size` | `100` | events per request (server max 500) |
+| `flush_interval` | `1.0` | seconds; `0` = manual flush only |
+| `max_queue_size` | `10000` | when full, the oldest event is dropped and counted |
+| `max_retries` | `3` | retries for 408 / 429 / 5xx / network errors |
+| `max_retry_after` | `30.0` | cap (seconds) on honouring `Retry-After` |
+| `timeout` | `5.0` | per-request timeout (seconds) |
+| `flush_on_exit` | `True` | drain the queue from `atexit` |
+| `debug` | `False` | debug logging on the `tokenfin` logger |
+
+See [`sdk/README.md`](../README.md) for the full guide.
 
 ## License
 

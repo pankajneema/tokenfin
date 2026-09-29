@@ -1,0 +1,9 @@
+{
+  "name": "tokenfin",
+  "version": "0.1.0",
+  "description": "Ask your TokenFin dashboard about AI spend from inside Claude Code: spend, budgets, forecasts and top models via TokenFin's read-only MCP server.",
+  "author": { "name": "TokenFin" },
+  "homepage": "https://tokenfin.curiousdevs.com",
+  "license": "MIT",
+  "keywords": ["finops", "cost", "tokens", "budget", "mcp"]
+}

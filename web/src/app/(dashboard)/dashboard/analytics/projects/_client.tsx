@@ -1,7 +1,7 @@
 'use client'
 import { useState, useMemo } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
-import { ArrowUpRight, ArrowDownRight, Download, Check, Users, Layers, DollarSign, BarChart3 } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, Download, Check, Users, Layers, DollarSign, BarChart3, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /* ═══════════════════════════════════════════════════════════
@@ -16,26 +16,29 @@ export interface ProjectRow {
   teamColor:  string
   color:      string
   cost30d:    number
+  metered:    number   // real bill
+  notional:   number   // subscription usage priced at API rates
   costPrev:   number
   tokens30d:  number
   calls30d:   number
+  prompts30d: number
   callsPrev:  number
   models:     string[]
   budget?:    number
   pctOfTotal: number
 }
 
-interface Props { projects: ProjectRow[]; days: number }
+interface Props { projects: ProjectRow[]; days: number; windowLabel: string }
 
 /* ═══════════════════════════════════════════════════════════
    CSV EXPORT
 ═══════════════════════════════════════════════════════════ */
 function downloadProjectsCSV(rows: ProjectRow[]) {
-  const headers = ['Project','Team','Cost ($)','vs Prior (%)','Tokens (M)','LLM Calls','Budget ($)','Budget Used (%)','% of Total']
+  const headers = ['Project','Team','Cost ($)','Metered ($)','Notional ($)','vs Prior (%)','Tokens (M)','Prompts','LLM Calls','Budget ($)','Budget Used (%)','% of Total']
   const lines = rows.map(p => {
     const delta   = p.costPrev > 0 ? ((p.cost30d - p.costPrev) / p.costPrev * 100).toFixed(1) + '%' : 'N/A'
     const budgPct = p.budget ? (p.cost30d / p.budget * 100).toFixed(1) + '%' : 'N/A'
-    return [p.name, p.team, p.cost30d.toFixed(4), delta, p.tokens30d.toFixed(2), p.calls30d, p.budget?.toFixed(2) ?? 'N/A', budgPct, p.pctOfTotal.toFixed(1) + '%']
+    return [p.name, p.team, p.cost30d.toFixed(4), p.metered.toFixed(4), p.notional.toFixed(4), delta, p.tokens30d.toFixed(2), p.prompts30d, p.calls30d, p.budget?.toFixed(2) ?? 'N/A', budgPct, p.pctOfTotal.toFixed(1) + '%']
   })
   const csv = [headers, ...lines].map(r => r.join(',')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv' })
@@ -119,6 +122,7 @@ function TreeCard({ p, max }: { p: ProjectRow; max: number }) {
           </div>
         )}
         <div className="flex items-center gap-3 text-[10px] text-[var(--fg-secondary)]">
+          <span>{p.prompts30d.toLocaleString()} prompts</span>
           <span>{p.calls30d.toLocaleString()} calls</span>
           <span>{fmtTokens(p.tokens30d)}</span>
           {p.models.length > 0 && <span>{p.models.length} model{p.models.length !== 1 ? 's' : ''}</span>}
@@ -133,7 +137,7 @@ function TreeCard({ p, max }: { p: ProjectRow; max: number }) {
 ═══════════════════════════════════════════════════════════ */
 const DAY_OPTIONS = [{ label:'7D', value:7 }, { label:'30D', value:30 }, { label:'90D', value:90 }]
 
-export function ProjectsClient({ projects, days }: Props) {
+export function ProjectsClient({ projects, days, windowLabel }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
   const [teamFil,    setTeamFil]    = useState<TeamFilter>('all')
@@ -148,11 +152,6 @@ export function ProjectsClient({ projects, days }: Props) {
     setTimeout(() => setExportDone(false), 2500)
   }
 
-  const dateRange = (() => {
-    const now = new Date()
-    const start = new Date(now.getTime() - days * 86400_000)
-    return `${start.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${now.toLocaleDateString('en-US',{month:'short',day:'numeric'})}`
-  })()
 
   const filtered = useMemo(() =>
     projects.filter(p => teamFil === 'all' || p.team === teamFil),
@@ -160,6 +159,7 @@ export function ProjectsClient({ projects, days }: Props) {
 
   const totalCost  = projects.reduce((s, p) => s + p.cost30d, 0)
   const totalCalls = projects.reduce((s, p) => s + p.calls30d, 0)
+  const totalPrompts = projects.reduce((s, p) => s + p.prompts30d, 0)
   const maxCost    = filtered.length > 0 ? Math.max(...filtered.map(p => p.cost30d)) : 1
 
   const teams = ['all', ...Array.from(new Set(projects.map(p => p.team).filter(t => t !== '—')))]
@@ -167,7 +167,7 @@ export function ProjectsClient({ projects, days }: Props) {
   if (projects.length === 0) {
     return (
       <div className="space-y-5">
-        <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Project</h1>
+        <p className="text-[13px] text-[var(--fg-secondary)]">{windowLabel}</p>
         <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-12 text-center">
           <Layers size={32} className="mx-auto mb-3 text-[var(--fg-tertiary)]" />
           <p className="text-[14px] font-semibold text-[var(--fg)]">No project usage yet</p>
@@ -184,10 +184,7 @@ export function ProjectsClient({ projects, days }: Props) {
 
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Project</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Cost leaderboard, team attribution, and budget tracking — {dateRange}</p>
-        </div>
+        <p className="text-[13px] text-[var(--fg-secondary)]">Cost leaderboard, team attribution, and budget tracking · {windowLabel}</p>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1 p-1 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl">
             {DAY_OPTIONS.map(opt => (
@@ -209,10 +206,11 @@ export function ProjectsClient({ projects, days }: Props) {
       </div>
 
       {/* ── KPIs ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
-          { label:'Total spend',     value:`$${totalCost.toFixed(2)}`, icon:DollarSign, color:'#D97757' },
+          { label:`Spend · $${projects.reduce((s, p) => s + p.metered, 0).toFixed(2)} metered · $${projects.reduce((s, p) => s + p.notional, 0).toFixed(2)} notional`, value:`$${totalCost.toFixed(2)}`, icon:DollarSign, color:'#D97757' },
           { label:'Active projects', value:`${projects.filter(p=>p.name!=='Uncategorized').length}`,  icon:Layers,    color:'#4285F4' },
+          { label:'Prompts',          value:totalPrompts.toLocaleString(), icon:MessageSquare, color:'#F59E0B' },
           { label:'LLM calls',        value:totalCalls.toLocaleString(), icon:BarChart3,  color:'#20B2AA' },
           { label:'Teams tracked',   value:`${new Set(projects.map(p=>p.team).filter(t=>t!=='—')).size}`, icon:Users, color:'#8B5CF6' },
         ].map(s => {
@@ -264,7 +262,7 @@ export function ProjectsClient({ projects, days }: Props) {
       {viewMode === 'table' && (
         <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
           <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr] gap-3 px-5 py-3 border-b border-[var(--border)] bg-[var(--bg-secondary)]">
-            {['Project','Team','Cost MTD','vs Budget','Calls','% of Total'].map(h => (
+            {['Project','Team','Cost MTD','vs Budget','Prompts / Calls','% of Total'].map(h => (
               <p key={h} className="text-[10.5px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider">{h}</p>
             ))}
           </div>
@@ -308,7 +306,10 @@ export function ProjectsClient({ projects, days }: Props) {
                       </>
                     ) : <span className="text-[11px] text-[var(--fg-tertiary)]">No budget</span>}
                   </div>
-                  <p className="text-[12.5px] font-semibold text-[var(--fg)] tabular-nums">{p.calls30d.toLocaleString()}</p>
+                  <div>
+                    <p className="text-[12.5px] font-semibold text-[var(--fg)] tabular-nums">{p.prompts30d.toLocaleString()}</p>
+                    <p className="text-[10px] text-[var(--fg-tertiary)] tabular-nums">{p.calls30d.toLocaleString()} calls</p>
+                  </div>
                   <div>
                     <p className="text-[12.5px] font-semibold text-[var(--fg)] tabular-nums">{p.pctOfTotal.toFixed(1)}%</p>
                     <div className="h-1 bg-[var(--bg-secondary)] rounded-full overflow-hidden mt-1 w-[60px]">

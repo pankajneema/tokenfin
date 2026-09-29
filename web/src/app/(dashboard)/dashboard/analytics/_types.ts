@@ -1,3 +1,5 @@
+import type { CacheStats } from '@/components/dashboard/cache-efficiency'
+
 export interface DayData {
   d:          string   // "Jun 1"
   cost:       number
@@ -21,6 +23,7 @@ export interface ProjectSlice {
   cost:  number
   pct:   number
   calls: number
+  prompts: number
 }
 
 export interface PlatformSlice {
@@ -30,10 +33,11 @@ export interface PlatformSlice {
   color: string
 }
 
-/** Source = where the call originated (from usage_events.tags) */
+/** Source = where the call originated (usage_events.source) */
 export interface SourceSlice {
   platform: string   // "Codex" | "MCP" | "Claude CLI" | "Direct API" | …
   calls:    number
+  prompts:  number
   tokens:   number
   cost:     number
   pct:      number   // % of total cost
@@ -42,6 +46,15 @@ export interface SourceSlice {
 
 export interface AnalyticsData {
   rangeDays:   number
+  /** "Last 30 days" or a custom "Sep 1 – Sep 20" */
+  windowLabel:  string
+  customRange:  boolean
+  /** distinct prompts in the window / previous window (from the rollups) */
+  prompts:      number
+  prevPrompts:  number
+  /** metered (a real bill) vs notional (subscription usage priced at API rates) */
+  meteredCost:  number
+  notionalCost: number
   daily:        DayData[]
   byModel:      ModelSlice[]
   byProject:    ProjectSlice[]
@@ -53,4 +66,5 @@ export interface AnalyticsData {
   tokensUsed:   number            // total tokens (input + output)
   inputTokens:  number            // input tokens (prompt)
   outputTokens: number            // output tokens (completion)
+  cache:        CacheStats        // prompt-cache efficiency (all events in range, per model)
 }

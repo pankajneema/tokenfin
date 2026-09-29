@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
-import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { createClient } from '@/lib/supabase/server'
+import { getOrgContext } from '@/lib/org-context'
 import { CliAuthorizeClient } from './_client'
 
 export const metadata = { title: 'Authorize CLI — TokenFin' }
@@ -7,7 +8,7 @@ export const metadata = { title: 'Authorize CLI — TokenFin' }
 export default async function CliAuthorizePage({
   searchParams: searchParamsPromise,
 }: {
-  searchParams: Promise<{ port?: string; state?: string; label?: string }>
+  searchParams: Promise<{ port?: string; state?: string; label?: string; device?: string; device_id?: string }>
 }) {
   const searchParams = await searchParamsPromise
   const supabase = createClient()
@@ -22,12 +23,14 @@ export default async function CliAuthorizePage({
 
   const port  = Number(searchParams.port)
   const state = searchParams.state ?? ''
-  const label = (searchParams.label ?? 'TokenFin CLI').slice(0, 60)
+  // `device` (new CLI) or `label` (older CLI, hostname) — shown to the user and used as the key name.
+  const label = (searchParams.device ?? searchParams.label ?? 'TokenFin CLI').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 60)
+  const rawDeviceId = (searchParams.device_id ?? '').slice(0, 128)
+  const deviceId = /^[A-Za-z0-9._:-]{1,128}$/.test(rawDeviceId) ? rawDeviceId : ''
   const valid = Number.isInteger(port) && port >= 1 && port <= 65535 && state.length > 0
 
-  const admin = createAdminClient()
-  const { data: members } = await admin.from('members').select('org_id').eq('user_id', user.id).limit(1)
-  const hasOrg = !!members?.[0]?.org_id
+  const ctx = await getOrgContext()
+  const hasOrg = !!ctx?.orgId
 
   return (
     <CliAuthorizeClient
@@ -36,6 +39,7 @@ export default async function CliAuthorizePage({
       port={port}
       state={state}
       label={label}
+      deviceId={deviceId}
       email={user.email ?? ''}
     />
   )

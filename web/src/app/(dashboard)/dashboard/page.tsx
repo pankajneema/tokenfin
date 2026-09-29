@@ -1,15 +1,18 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server'
-import { toISTDate, daysAgoIST, tsNDaysAgo } from '@/lib/dates'
-import { selectAll } from '@/lib/supabase/paginate'
+import { createAdminClient } from '@/lib/supabase/server'
+import { requireOrgContext } from '@/lib/org-context'
+import { daysAgoIn, shiftDay } from '@/lib/dates'
+import { dashSummary, dashBreakdown, NO_PROJECT_ID, type DashBreakdown } from '@/lib/rollups'
+import { projectMonthEnd, monthToDate } from '@/lib/forecast'
 import { StatsCards }     from '@/components/dashboard/stats-cards'
 import { CostChart }      from '@/components/dashboard/cost-chart'
 import { ModelBreakdown } from '@/components/dashboard/model-breakdown'
 import { TopProjects }    from '@/components/dashboard/top-projects'
-import { TeamBreakdown }  from '@/components/dashboard/team-breakdown'
+import { TeamBreakdown, type MemberStat }  from '@/components/dashboard/team-breakdown'
 import { RecentEvents }   from '@/components/dashboard/recent-events'
 import { AlertBanner }            from '@/components/dashboard/alert-banner'
 import { OnboardingChecklist }    from '@/components/dashboard/onboarding-checklist'
 import { FirstEventCelebration }  from '@/components/dashboard/first-event-celebration'
+import { LivePill }               from '@/components/dashboard/live-pill'
 
 export const metadata = { title: 'Overview — TokenFin' }
 
@@ -17,286 +20,229 @@ export const metadata = { title: 'Overview — TokenFin' }
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-type UsageRow = {
-  id: string; total_tokens: number | null; input_tokens?: number | null; output_tokens?: number | null
-  cost_usd: number | null; cost_basis?: string | null; model?: string | null
-  project_id?: string | null; user_id?: string | null; created_at: string; tags?: unknown
-}
-
-/* ── Sparkline builder ────────────────────────────────── */
-type SparkRow = { cost_usd?: number | null; total_tokens?: number | null; created_at: string }
-function buildSparklines(events: SparkRow[]) {
-  const days: Record<string, { cost: number; tokens: number; reqs: number }> = {}
-  for (let i = 6; i >= 0; i--) {
-    const key = daysAgoIST(i)
-    days[key] = { cost: 0, tokens: 0, reqs: 0 }
-  }
-  for (const e of events) {
-    const key = toISTDate(e.created_at)
-    if (days[key]) {
-      days[key].cost   += e.cost_usd     ?? 0
-      days[key].tokens += e.total_tokens ?? 0
-      days[key].reqs++
-    }
-  }
-  const vals = Object.values(days)
-  return { costs: vals.map(v => v.cost), tokens: vals.map(v => v.tokens), reqs: vals.map(v => v.reqs) }
-}
+/** Days shown in the usage-trend chart (compared with the N days before). */
+const CHART_DAYS = 14
+const SPARK_DAYS = 7
 
 function trendPct(curr: number, prev: number): number | null {
-  if (prev === 0) return null
+  if (!(prev > 0)) return null
   return +((curr - prev) / prev * 100).toFixed(1)
+}
+
+type Admin = ReturnType<typeof createAdminClient>
+
+/** Distinct prompts per org-local day = rows in usage_daily_prompts (PK org·day·prompt_key). */
+async function promptsOnDay(admin: Admin, orgId: string, day: string): Promise<number> {
+  const { count } = await admin.from('usage_daily_prompts')
+    .select('prompt_key', { count: 'exact', head: true })
+    .eq('org_id', orgId).eq('day', day)
+  return count ?? 0
+}
+
+/** Top members by cost → display rows. Keys are lower(email) or a user id (see userKeyFor). */
+async function resolveMembers(
+  admin: Admin, orgId: string, bd: DashBreakdown,
+  members: { user_id: string; team_id: string | null; role: string }[],
+  teamNames: Map<string, string>,
+): Promise<MemberStat[]> {
+  const rows = bd.rows.filter(r => r.key)
+  const byUserId = new Map(members.map(m => [m.user_id, m]))
+  const emails = rows.map(r => r.key).filter(k => k.includes('@'))
+  const emailToId = new Map<string, string>()
+  if (emails.length) {
+    const { data } = await admin.rpc('org_member_ids_by_email', { p_org: orgId, p_emails: emails })
+    for (const r of (data ?? []) as { email: string; user_id: string }[]) emailToId.set(r.email, r.user_id)
+  }
+
+  // Merge a member's email-keyed and id-keyed rows.
+  const merged = new Map<string, { userId: string | null; key: string; cost: number }>()
+  for (const r of rows) {
+    const uid = r.key.includes('@') ? emailToId.get(r.key) ?? null : byUserId.has(r.key) ? r.key : null
+    const id = uid ?? r.key
+    const e = merged.get(id) ?? { userId: uid, key: r.key, cost: 0 }
+    e.cost += r.cost_usd
+    if (r.key.includes('@')) e.key = r.key
+    merged.set(id, e)
+  }
+
+  const ids = Array.from(merged.values()).map(m => m.userId).filter((x): x is string => !!x)
+  const users = await Promise.all(ids.map(id => admin.auth.admin.getUserById(id).then(r => r.data.user).catch(() => null)))
+  const info = new Map(users.filter(Boolean).map(u => [u!.id, u!]))
+
+  return Array.from(merged.values()).map(m => {
+    const u = m.userId ? info.get(m.userId) : undefined
+    const member = m.userId ? byUserId.get(m.userId) : undefined
+    const email = u?.email ?? (m.key.includes('@') ? m.key : '')
+    return {
+      userId: m.userId ?? m.key,
+      name:   (u?.user_metadata?.full_name as string | undefined) ?? (email ? email.split('@')[0] : m.key.slice(0, 8)),
+      email,
+      team:   member?.team_id ? teamNames.get(member.team_id) ?? '—' : '—',
+      role:   member?.role ?? '',
+      cost:   m.cost,
+    }
+  }).sort((a, b) => b.cost - a.cost)
 }
 
 /* ════════════════════════════════════════════════════════ */
 export default async function DashboardPage() {
-  const supabase = createClient()
-  const admin    = createAdminClient()
-  const now      = Date.now()
-  const since30  = tsNDaysAgo(30)   // UTC timestamp for usage_events.created_at queries
-  const since60  = tsNDaysAgo(60)
-  const since7   = tsNDaysAgo(7)
+  const { orgId, timezone: tz } = await requireOrgContext()
+  const admin = createAdminClient()
+  const now   = Date.now()
 
-  /* ── Identify org ── */
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
+  // Org-local day labels, inclusive ranges.
+  const today    = daysAgoIn(0, tz)
+  const from30   = shiftDay(today, -29)
+  const prevTo   = shiftDay(today, -30)
+  const prevFrom = shiftDay(today, -59)
+  const sparkDays = Array.from({ length: SPARK_DAYS }, (_, i) => shiftDay(today, i - (SPARK_DAYS - 1)))
 
-  const { data: _mb } = await admin
-    .from('members').select('org_id').eq('user_id', user.id).limit(1)
-  const orgId = _mb?.[0]?.org_id ?? ''
-
-  /* ── Parallel data fetch — all scoped to orgId ── */
-  const [
-    { data: events30   },
-    { data: eventsPrev },
-    { data: events7    },
-    { data: recent     },
-    { data: members    },
-    { data: projects   },
-    { data: teams      },
-    { data: apiKeys    },
-  ] = await Promise.all([
-    selectAll<UsageRow>(() => admin.from('usage_events')
-      .select('id,total_tokens,input_tokens,output_tokens,cost_usd,cost_basis,model,project_id,user_id,created_at,tags')
-      .eq('org_id', orgId).gte('created_at', since30)),
-    selectAll<UsageRow>(() => admin.from('usage_events')
-      .select('id,total_tokens,cost_usd,cost_basis,created_at')
-      .eq('org_id', orgId).gte('created_at', since60).lt('created_at', since30)),
-    selectAll<UsageRow>(() => admin.from('usage_events')
-      .select('id,total_tokens,cost_usd,created_at')
-      .eq('org_id', orgId).gte('created_at', since7)),
+  const [rollups, recentRes, projectsRes, teamsRes, membersRes, keysRes] = await Promise.all([
+    Promise.all([
+      dashSummary(admin, orgId, from30, today),
+      dashSummary(admin, orgId, prevFrom, prevTo),
+      dashBreakdown(admin, orgId, from30, today, 'model', undefined, 5),
+      dashBreakdown(admin, orgId, from30, today, 'project', undefined, 5),
+      dashBreakdown(admin, orgId, from30, today, 'member', undefined, 5),
+      Promise.all(sparkDays.map(d => promptsOnDay(admin, orgId, d))),
+    ]).then(r => ({ ok: true as const, r }), (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) })),
     admin.from('usage_events')
-      .select('id,model,total_tokens,cost_usd,created_at,tags,metadata')
-      .eq('org_id', orgId).order('created_at', { ascending: false }).limit(10),
-    admin.from('members')
-      .select('id,user_id,team_id,role').eq('org_id', orgId).limit(100),
-    admin.from('projects')
-      .select('id,name,slug').eq('org_id', orgId),
-    admin.from('teams')
-      .select('id,name').eq('org_id', orgId),
-    admin.from('api_keys')
-      .select('id').eq('org_id', orgId).eq('is_active', true).limit(1),
+      .select('id,model,total_tokens,cost_usd,cost_basis,created_at,tags,metadata')
+      .eq('org_id', orgId).order('created_at', { ascending: false }).limit(20),
+    admin.from('projects').select('id,name').eq('org_id', orgId).limit(1000),
+    admin.from('teams').select('id,name').eq('org_id', orgId).limit(1000),
+    admin.from('members').select('user_id,team_id,role', { count: 'exact' }).eq('org_id', orgId).limit(1000),
+    admin.from('api_keys').select('id').eq('org_id', orgId).eq('is_active', true).limit(1),
   ])
 
-  /* ── Current period aggregations ── */
-  // Notional = subscription usage priced at API rates (e.g. Claude Code on
-  // Pro/Max) — not a real bill. Product decision: the headline "Total Cost"
-  // and breakdowns show the COMBINED figure (metered+notional) as one
-  // coherent number, matching Analytics/Cost Reports/By Project/By Model/My
-  // Usage — metered and notional are still broken out separately wherever a
-  // completeness check needs to compare like-for-like against usage_agg
-  // (which only ever holds metered rows).
-  const isNotional   = (r: { cost_basis?: string | null }) => r.cost_basis === 'notional'
-  const meteredCost  = (events30 ?? []).filter(r => !isNotional(r)).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const notionalCost = (events30 ?? []).filter(isNotional).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const totalCost    = meteredCost + notionalCost
-  const totalTokens  = (events30 ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
-  const totalReqs    = events30?.length ?? 0
-  const memberCount  = members?.length  ?? 0
-  const inputTokens  = (events30 ?? []).reduce((s, r) => {
-    const total = Number(r.total_tokens ?? 0)
-    return s + Number((r as Record<string,unknown>).input_tokens  ?? Math.round(total * 0.7))
-  }, 0)
-  const outputTokens = (events30 ?? []).reduce((s, r) => {
-    const total = Number(r.total_tokens ?? 0)
-    return s + Number((r as Record<string,unknown>).output_tokens ?? (total - Math.round(total * 0.7)))
-  }, 0)
+  if (!rollups.ok) {
+    return (
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="max-w-[1400px] mx-auto px-6 py-6">
+          <h2 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Overview</h2>
+          <div className="mt-5 rounded-2xl border border-[var(--red)]/30 bg-[var(--red-bg)] p-5">
+            <p className="text-[13px] font-semibold text-[var(--red)]">Couldn’t load usage totals</p>
+            <p className="mt-1 text-[12px] text-[var(--fg-secondary)]">
+              The usage rollups did not respond ({rollups.error}). Check that migration 011 is applied, then reload.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  const [cur, prev, models, projectsBd, membersBd, sparkPrompts] = rollups.r
 
-  /* ── Prev period ── */
-  const prevMetered  = (eventsPrev ?? []).filter(r => !isNotional(r)).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const prevNotional = (eventsPrev ?? []).filter(isNotional).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const prevCost     = prevMetered + prevNotional
-  const prevTokens   = (eventsPrev ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
-  const prevReqs     = eventsPrev?.length ?? 0
+  const recent = recentRes.data ?? []
+  const lastEventAt = recent[0]?.created_at ?? null
+  const members = (membersRes.data ?? []) as { user_id: string; team_id: string | null; role: string }[]
+  const memberCount = membersRes.count ?? members.length
 
+  /* ── Month to date (org-local) + projection ──
+   * MTD can start up to 30 days back, so join the previous window's series. */
+  const allDays = [...prev.series, ...cur.series]
+  const pick = (k: 'cost_usd' | 'metered_cost_usd' | 'notional_cost_usd') => allDays.map(p => ({ day: p.day, value: p[k] }))
+  const mtdCost     = monthToDate(pick('cost_usd'), today)
+  const mtdMetered  = monthToDate(pick('metered_cost_usd'), today)
+  const mtdNotional = monthToDate(pick('notional_cost_usd'), today)
+  const forecast    = projectMonthEnd(pick('cost_usd'), today)
+
+  /* ── Trends: current 30d vs the 30d before; null without previous data ── */
   const trends = {
-    cost:   trendPct(totalCost,   prevCost),
-    tokens: trendPct(totalTokens, prevTokens),
-    reqs:   trendPct(totalReqs,   prevReqs),
+    cost:    trendPct(cur.cost_usd, prev.cost_usd),
+    tokens:  trendPct(cur.total_tokens, prev.total_tokens),
+    reqs:    trendPct(cur.requests, prev.requests),
+    prompts: trendPct(cur.prompts, prev.prompts),
   }
 
-  /* ── Model breakdown (combined, matches the headline Total Cost) ── */
-  const modelMap: Record<string, { cost: number; tokens: number; reqs: number }> = {}
-  for (const e of events30 ?? []) {
-    const m = e.model ?? 'unknown'
-    if (!modelMap[m]) modelMap[m] = { cost: 0, tokens: 0, reqs: 0 }
-    modelMap[m].cost   += Number(e.cost_usd ?? 0)
-    modelMap[m].tokens += Number(e.total_tokens ?? 0)
-    modelMap[m].reqs++
-  }
-  const modelBreakdown = Object.entries(modelMap)
-    .map(([name, v]) => ({ name, ...v, pct: totalCost > 0 ? +(v.cost / totalCost * 100).toFixed(1) : 0 }))
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, 5)
-
-  /* ── Chart data: always bucket events30 by day for last 5 days ──────────────
-   * Usage_agg can be sparse (old ingest attempts may have missed upsert).
-   * Raw usage_events are the source of truth — bucket them in JS.
-   * Pre-seed all 5 days so days with zero usage still appear as flat bars.
-   * ──────────────────────────────────────────────────────────────────────── */
-  type ChartRow = { bucket: string; cost_usd: number; total_tokens: number; request_count: number }
-
-  const dayMap = new Map<string, { cost: number; tokens: number; reqs: number }>()
-  for (let i = 4; i >= 0; i--) {
-    dayMap.set(daysAgoIST(i), { cost: 0, tokens: 0, reqs: 0 })
-  }
-  for (const e of events30 ?? []) {
-    const day = toISTDate(e.created_at)
-    if (!dayMap.has(day)) continue
-    const entry = dayMap.get(day)!
-    entry.cost   += Number(e.cost_usd ?? 0)
-    entry.tokens += Number(e.total_tokens ?? 0)
-    entry.reqs++
-  }
-  const chartData: ChartRow[] = Array.from(dayMap.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([bucket, v]) => ({
-      bucket,
-      cost_usd:      v.cost,
-      total_tokens:  v.tokens,
-      request_count: v.reqs,
-    }))
-
-  /* ── Project breakdown: combined (metered + notional) over the full 30 days,
-   * matching the headline Total Cost card. ── */
-  const projMap: Record<string, { cost: number; calls: number }> = {}
-  for (const e of events30 ?? []) {
-    const pid = e.project_id ?? '__none__'
-    if (!projMap[pid]) projMap[pid] = { cost: 0, calls: 0 }
-    projMap[pid].cost  += Number(e.cost_usd ?? 0)
-    projMap[pid].calls += 1
+  const spark = cur.series.slice(-SPARK_DAYS)
+  const sparks = {
+    costs:   spark.map(p => p.cost_usd),
+    tokens:  spark.map(p => p.total_tokens),
+    reqs:    spark.map(p => p.requests),
+    prompts: sparkPrompts,
   }
 
-  const projNames = new Map((projects ?? []).map(p => [p.id, p.name]))
-  const topProjects = Object.entries(projMap)
-    .map(([pid, v]) => ({
-      id:       pid,
-      name:     projNames.get(pid) ?? (pid === '__none__' ? 'Uncategorized' : 'Unknown'),
-      cost30d:  v.cost,
-      calls30d: v.calls,
-      pct:      totalCost > 0 ? +(v.cost / totalCost * 100).toFixed(1) : 0,
-    }))
-    .filter(p => p.cost30d > 0 || p.calls30d > 0)
-    .sort((a, b) => b.cost30d - a.cost30d)
-    .slice(0, 5)
-
-  /* ── Member cost attribution: each event belongs to the member whose key sent it ── */
-  const userCostMap = new Map<string, number>()
-  for (const e of events30 ?? []) {
-    if (!e.user_id) continue
-    userCostMap.set(e.user_id, (userCostMap.get(e.user_id) ?? 0) + Number(e.cost_usd ?? 0))
-  }
-
-  /* ── Member display names from auth ── */
-  const teamNameMap = new Map((teams ?? []).map(t => [t.id, t.name]))
-  const userInfo = new Map<string, { name: string; email: string }>()
-  if (memberCount > 0) {
-    const { data: authData } = await admin.auth.admin.listUsers({ perPage: 200 })
-    for (const u of authData?.users ?? []) {
-      userInfo.set(u.id, {
-        name:  (u.user_metadata?.full_name as string | undefined) ?? u.email?.split('@')[0] ?? u.id.slice(0, 8),
-        email: u.email ?? '',
-      })
-    }
-  }
-
-  const memberRows = (members ?? [])
-    .map(m => {
-      const info = userInfo.get(m.user_id) ?? { name: m.user_id.slice(0, 8), email: '' }
-      return {
-        userId: m.user_id,
-        name:   info.name,
-        email:  info.email,
-        team:   m.team_id ? (teamNameMap.get(m.team_id as string) ?? '—') : '—',
-        role:   m.role,
-        cost:   userCostMap.get(m.user_id) ?? 0,
-      }
-    })
-    .sort((a, b) => b.cost - a.cost)
-
-  const sparks = buildSparklines(events7 ?? [])
-
-  // Previous 5 IST days (days 5–9 ago), same combined basis as the chart.
-  const prev5dDays = new Set(Array.from({ length: 5 }, (_, i) => daysAgoIST(i + 5)))
-  const prev5d = (events30 ?? []).filter(e => prev5dDays.has(toISTDate(e.created_at)))
+  /* ── Chart: last 14 days vs the 14 before (both inside the 30d series) ── */
+  const chartData = cur.series.slice(-CHART_DAYS).map(p => ({
+    bucket: p.day, cost_usd: p.cost_usd, total_tokens: p.total_tokens, request_count: p.requests,
+  }))
+  const prevChart = cur.series.slice(-2 * CHART_DAYS, -CHART_DAYS)
   const prevTotals = {
-    tokens: prev5d.reduce((s, r) => s + Number(r.total_tokens ?? 0), 0),
-    cost:   prev5d.reduce((s, r) => s + Number(r.cost_usd     ?? 0), 0),
-    reqs:   prev5d.length,
+    tokens: prevChart.reduce((s, p) => s + p.total_tokens, 0),
+    cost:   prevChart.reduce((s, p) => s + p.cost_usd, 0),
+    reqs:   prevChart.reduce((s, p) => s + p.requests, 0),
   }
+
+  /* ── Breakdowns (combined cost, split shown in the cards) ── */
+  const totalCost = cur.cost_usd
+  const share = (c: number) => totalCost > 0 ? +(c / totalCost * 100).toFixed(1) : 0
+  const modelBreakdown = models.rows.map(r => ({
+    name: r.key || 'unknown', cost: r.cost_usd, tokens: r.total_tokens, reqs: r.requests, pct: share(r.cost_usd),
+  }))
+
+  const projNames = new Map((projectsRes.data ?? []).map(p => [p.id as string, p.name as string]))
+  const topProjects = projectsBd.rows.map(r => ({
+    id:       r.key,
+    name:     r.key === NO_PROJECT_ID ? 'Uncategorized' : projNames.get(r.key) ?? 'Deleted project',
+    cost30d:  r.cost_usd,
+    calls30d: r.requests,
+    tokens30d: r.total_tokens,
+    prompts30d: r.prompts ?? null,
+    pct:      share(r.cost_usd),
+  }))
+
+  const teamNames = new Map((teamsRes.data ?? []).map(t => [t.id as string, t.name as string]))
+  const memberRows = await resolveMembers(admin, orgId, membersBd, members, teamNames)
+
+  const hasAnyEvent = Boolean(lastEventAt)
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
       <div className="max-w-[1400px] mx-auto px-6 py-6 space-y-5">
 
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Overview</h1>
-            <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Last 30 days · All projects</p>
-          </div>
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--green-bg)] border border-[var(--green)]/20">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal opacity-75" />
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-teal" />
-            </span>
-            <span className="text-[11px] font-semibold text-[var(--green)] tracking-wide">Live</span>
-          </div>
+        <div className="flex items-center justify-between gap-3">
+          {/* The page title lives in the top bar (the page's h1). */}
+          <p className="text-[13px] text-[var(--fg-secondary)]">
+            All projects · days in {tz}
+          </p>
+          <LivePill lastEventAt={lastEventAt} now={now} />
         </div>
 
         <AlertBanner />
 
         {/* First-event celebration — fires once via localStorage gate */}
-        <FirstEventCelebration enabled={totalReqs > 0} />
+        <FirstEventCelebration enabled={hasAnyEvent} />
 
-        {/* Onboarding checklist — visible until first event arrives */}
-        {totalReqs === 0 && (
+        {/* Onboarding checklist — visible until the first event arrives */}
+        {!hasAnyEvent && (
           <OnboardingChecklist
-            hasProject={Boolean(projects?.length)}
-            hasApiKey={Boolean(apiKeys?.length)}
+            hasProject={Boolean(projectsRes.data?.length)}
+            hasApiKey={Boolean(keysRes.data?.length)}
             hasEvent={false}
           />
         )}
 
         <StatsCards
-          totalCost={totalCost}
-          notionalCost={notionalCost}
-          meteredCost={meteredCost}
-          totalTokens={totalTokens}
-          inputTokens={inputTokens}
-          outputTokens={outputTokens}
-          totalRequests={totalReqs}
+          mtd={{ cost: mtdCost, metered: mtdMetered, notional: mtdNotional, projected: forecast?.projected ?? null }}
+          last30={{ cost: cur.cost_usd, metered: cur.metered_cost_usd, notional: cur.notional_cost_usd }}
+          totalTokens={cur.total_tokens}
+          inputTokens={cur.input_tokens}
+          outputTokens={cur.output_tokens}
+          totalRequests={cur.requests}
+          totalPrompts={cur.prompts}
           memberCount={memberCount}
+          activeUsers={cur.active_users}
           sparks={sparks}
           trends={trends}
         />
 
         <div className="grid grid-cols-1 xl:grid-cols-5 gap-5">
           <div className="xl:col-span-3">
-            <CostChart data={chartData} prevTotals={prevTotals} />
+            <CostChart data={cur.requests > 0 ? chartData : []} prevTotals={prevTotals} days={CHART_DAYS} />
           </div>
           <div className="xl:col-span-2">
-            <ModelBreakdown data={modelBreakdown} totalCost={totalCost} />
+            <ModelBreakdown data={modelBreakdown} totalCost={totalCost} otherCount={models.other?.keys ?? 0} />
           </div>
         </div>
 
@@ -305,11 +251,11 @@ export default async function DashboardPage() {
             <TopProjects topProjects={topProjects} totalCost={totalCost} />
           </div>
           <div className="xl:col-span-2">
-            <TeamBreakdown memberRows={memberRows} memberCount={memberCount} />
+            <TeamBreakdown memberRows={memberRows} memberCount={memberCount} activeUsers={cur.active_users} />
           </div>
         </div>
 
-        <RecentEvents events={recent ?? []} />
+        <RecentEvents events={recent} />
 
       </div>
     </div>

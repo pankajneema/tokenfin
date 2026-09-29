@@ -16,9 +16,7 @@ k8s/
 ```
 
 ## Services planned
-- `web` — Next.js (UI + API routes), replicas: 2+
-- `go-ingest` — Go ingest service (high throughput), replicas: 3+
-- `go-worker` — Go background worker (alerts, aggregation), replicas: 1
+- `web` — Next.js (UI + API routes, incl. SDK ingest and OTLP receivers), replicas: 2+
 
 ## Deploy
 ```bash

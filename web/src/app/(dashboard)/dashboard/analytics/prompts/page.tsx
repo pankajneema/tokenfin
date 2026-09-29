@@ -1,12 +1,19 @@
-import { createClient }       from '@/lib/supabase/server'
 import { createAdminClient }  from '@/lib/supabase/server'
+import { requireOrgContext }  from '@/lib/org-context'
+import { promptScope }        from '@/lib/rbac'
+import type { DashPrompt }    from '@/lib/rollups'
+import {
+  resolveWindow, resolveUserScope, scopedSummary, scopedPrompts, eventScopeOr, zonedDayStartIso, sourceLabel, memberEmailMap,
+} from '@/lib/rollup-scope'
 import { PromptsClient }       from './_client'
 import type { PromptPattern }  from '@/app/api/v1/analytics/prompts/route'
-import { inputPrice, outputPrice } from '@/lib/mcp/pricing'
+import { inputPrice, outputPrice, priceFor } from '@/lib/mcp/pricing'
 import { selectAll } from '@/lib/supabase/paginate'
 
-// Cheapest capable tier used as the "could you route down?" reference.
-const CHEAP_IN = 0.8, CHEAP_OUT = 4 // ~Haiku / gpt-4o-mini class, per 1M
+// Cheapest capable model used as the "could you route down?" reference —
+// priced from the same table as ingest (lib/mcp/pricing.ts).
+const CHEAP_REF = priceFor('claude-haiku-4-5')
+const CHEAP_IN = CHEAP_REF.in, CHEAP_OUT = CHEAP_REF.out
 
 // Efficiency rating (A–F) + a REAL dollar savings estimate per prompt pattern.
 // Cost-first heuristic: reward tight I/O, penalise premium models doing short
@@ -52,32 +59,39 @@ function rate(p: PromptPattern): Pick<PromptPattern, 'rating' | 'rating_score' |
 export { type PromptPattern } from '@/app/api/v1/analytics/prompts/route'
 
 export const metadata = { title: 'Prompt Analytics — TokenFin' }
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
-export default async function PromptsAnalyticsPage() {
-  const supabase = createClient()
-  const admin    = createAdminClient()
+export default async function PromptsAnalyticsPage({ searchParams }: { searchParams?: Promise<{ days?: string }> }) {
+  const ctx   = await requireOrgContext()
+  const admin = createAdminClient()
+  const orgId = ctx.orgId
+  const win   = resolveWindow(await searchParams, ctx.timezone, { defaultDays: 30, allowed: [7, 30, 90] })
+  // Members & viewers only ever see their own prompts; owners & admins see everyone's.
+  const scope = await resolveUserScope(admin, promptScope(ctx.role, ctx.user.id), ctx.user.email)
+  const since = zonedDayStartIso(win.from, ctx.timezone)
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: _mb } = await admin
-    .from('members').select('org_id').eq('user_id', user.id).limit(1)
-  const orgId = _mb?.[0]?.org_id ?? ''
-
-  const since30 = new Date(Date.now() - 30 * 86_400_000).toISOString()
-
-  // Every event in the window (no row cap), grouped by the prompt_hash column.
+  // Totals + the top prompts come from the rollups; pattern analysis (grouping by
+  // prompt text fingerprint, latency percentiles) needs the raw rows that carry
+  // a prompt_hash, read with keyset pagination.
   type EventRow = {
+    id: string; created_at: string
     model: string | null; cost_usd: number | null; input_tokens: number | null; output_tokens: number | null
     cache_read_tokens: number | null; cache_write_tokens: number | null; latency_ms: number | null
     prompt_hash: string | null; prompt_preview: string | null; prompt_chars: number | null
   }
-  const EVENT_COLS = 'model, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, prompt_hash, prompt_preview, prompt_chars'
-  const { data: rows } = await selectAll<EventRow>(() => admin
-    .from('usage_events')
-    .select(EVENT_COLS)
-    .eq('org_id', orgId)
-    .gte('created_at', since30))
+  const EVENT_COLS = 'id, created_at, model, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms, prompt_hash, prompt_preview, prompt_chars'
+  const [summary, top, { data: rows }, emails] = await Promise.all([
+    scopedSummary(admin, orgId, win.from, win.to, scope),
+    scopedPrompts(admin, orgId, win.from, win.to, scope, undefined, { limit: 25, order: 'cost' }),
+    selectAll<EventRow>(() => {
+      let q = admin.from('usage_events').select(EVENT_COLS)
+        .eq('org_id', orgId).gte('created_at', since).not('prompt_hash', 'is', null)
+      if (scope) q = q.or(eventScopeOr(scope))
+      return q
+    }),
+    memberEmailMap(admin, orgId),
+  ])
 
   // Context tokens = fresh input + cache reads/writes (what the model actually read).
   const ctxTokens = (r: EventRow) => Number(r.input_tokens ?? 0) + Number(r.cache_read_tokens ?? 0) + Number(r.cache_write_tokens ?? 0)
@@ -90,8 +104,6 @@ export default async function PromptsAnalyticsPage() {
   }
 
   const byHash = new Map<string, Agg>()
-  const totalRequests = rows.length
-
   for (const row of rows) {
     const hash = row.prompt_hash
     if (!hash) continue
@@ -112,17 +124,35 @@ export default async function PromptsAnalyticsPage() {
     byHash.set(hash, ex)
   }
 
-  // Captured prompt text (SDK prompt_text, or CLI-agent user_prompt events).
-  const { data: capturedRaw } = await admin
-    .from('prompt_captures')
-    .select('id, model, prompt_hash, prompt_text, response_text, input_tokens, output_tokens, cost_usd, created_at')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: false })
-    .limit(50)
+  // Captured prompt text (SDK prompt_text, or CLI-agent user_prompt events) —
+  // scoped: a member sees captures they made or that belong to their prompts.
+  const CAP_COLS = 'id, model, prompt_hash, prompt_text, response_text, input_tokens, output_tokens, cost_usd, created_at'
+  type Capture = { id: string; model: string | null; prompt_hash: string | null; prompt_text: string; response_text: string | null; input_tokens: number; output_tokens: number; cost_usd: number; created_at: string }
+  let capturedRaw: Capture[]
+  const topKeys = top.rows.map(p => p.prompt_key)
+  if (!scope) {
+    const { data } = await admin.from('prompt_captures').select(CAP_COLS).eq('org_id', orgId)
+      .order('created_at', { ascending: false }).limit(50)
+    capturedRaw = (data ?? []) as Capture[]
+  } else {
+    const [{ data: mine }, { data: ofMine }] = await Promise.all([
+      admin.from('prompt_captures').select(CAP_COLS).eq('org_id', orgId).eq('user_id', scope.userId)
+        .order('created_at', { ascending: false }).limit(50),
+      topKeys.length
+        ? admin.from('prompt_captures').select(CAP_COLS).eq('org_id', orgId).in('prompt_hash', topKeys)
+          .order('created_at', { ascending: false }).limit(50)
+        : Promise.resolve({ data: [] as Capture[] }),
+    ])
+    const seen = new Set<string>()
+    capturedRaw = [...(mine ?? []), ...(ofMine ?? [])]
+      .filter(c => !seen.has(c.id) && seen.add(c.id))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, 50) as Capture[]
+  }
 
-  // Use captured text as the preview for patterns that have none.
+  // Use captured text as the preview for patterns / top prompts that have none.
   const textByHash = new Map<string, string>()
-  for (const c of capturedRaw ?? []) if (c.prompt_hash && c.prompt_text) textByHash.set(c.prompt_hash, c.prompt_text)
+  for (const c of capturedRaw) if (c.prompt_hash && c.prompt_text) textByHash.set(c.prompt_hash, c.prompt_text)
   for (const a of Array.from(byHash.values())) {
     if (!a.promptPreview && textByHash.has(a.hash)) {
       const t = textByHash.get(a.hash)!
@@ -133,19 +163,18 @@ export default async function PromptsAnalyticsPage() {
 
   // A CLI-agent prompt row carries no tokens/cost itself — they arrive on the
   // api_request events that share its prompt id. Join them here.
-  const captured = (capturedRaw ?? []).map(c => {
-    const agg = c.prompt_hash ? byHash.get(c.prompt_hash) : undefined
+  const topByKey = new Map(top.rows.map(p => [p.prompt_key, p]))
+  const captured = capturedRaw.map(c => {
     const hasOwn = Number(c.cost_usd ?? 0) > 0 || Number(c.input_tokens ?? 0) + Number(c.output_tokens ?? 0) > 0
-    if (hasOwn || !agg) return { ...c, model: c.model ?? '—', calls: hasOwn ? 1 : 0 }
-    const topModel = Object.entries(agg.models).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—'
-    return {
-      ...c,
-      model: topModel,
-      input_tokens: agg.totalInput,
-      output_tokens: agg.totalOutput,
-      cost_usd: +agg.totalCost.toFixed(6),
-      calls: agg.count,
+    const agg = c.prompt_hash ? byHash.get(c.prompt_hash) : undefined
+    const tp  = c.prompt_hash ? topByKey.get(c.prompt_hash) : undefined
+    if (hasOwn) return { ...c, model: c.model ?? '—', calls: 1 }
+    if (agg) {
+      const topModel = Object.entries(agg.models).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—'
+      return { ...c, model: topModel, input_tokens: agg.totalInput, output_tokens: agg.totalOutput, cost_usd: +agg.totalCost.toFixed(6), calls: agg.count }
     }
+    if (tp) return { ...c, model: tp.model || '—', input_tokens: tp.total_tokens, output_tokens: 0, cost_usd: tp.cost_usd, calls: tp.requests }
+    return { ...c, model: c.model ?? '—', calls: 0 }
   })
 
   const patterns: PromptPattern[] = Array.from(byHash.values())
@@ -173,27 +202,69 @@ export default async function PromptsAnalyticsPage() {
       return { ...base, ...rate(base) }
     })
 
-  // Summary stats over ALL fingerprinted requests, not just the top 100 patterns.
-  const allAggs = Array.from(byHash.values())
-  const hashedRequests = allAggs.reduce((s, p) => s + p.count, 0)
-  const totalCost = allAggs.reduce((s, p) => s + p.totalCost, 0)
-  const allLat = allAggs.flatMap(p => p.latencies)
-  const globalAvgLatency = allLat.length
-    ? Math.round(allLat.reduce((s, v) => s + v, 0) / allLat.length)
-    : null
+  const hashedRequests = rows.length
+  const scopeNote = scope ? 'Showing your prompts only — owners and admins see everyone\'s.' : null
 
   return (
     <>
       <PromptsClient
         patterns={patterns}
         orgId={orgId}
-        totalRequests={totalRequests}
+        windowLabel={win.label}
+        scopeNote={scopeNote}
+        prompts={summary.prompts}
+        totalRequests={summary.requests}
         hashedRequests={hashedRequests}
-        totalCost={+totalCost.toFixed(4)}
-        avgLatencyMs={globalAvgLatency}
+        totalCost={+summary.cost_usd.toFixed(4)}
+        meteredCost={summary.metered_cost_usd}
+        notionalCost={summary.notional_cost_usd}
+        avgLatencyMs={summary.avg_latency_ms == null ? null : Math.round(summary.avg_latency_ms)}
       />
-      <CapturedPrompts rows={captured ?? []} />
+      <TopPrompts rows={top.rows} total={top.total} preview={textByHash} emails={emails} windowLabel={win.label} />
+      <CapturedPrompts rows={captured} />
     </>
+  )
+}
+
+function TopPrompts({ rows, total, preview, emails, windowLabel }: { rows: DashPrompt[]; total: number; preview: Map<string, string>; emails: Map<string, string>; windowLabel: string }) {
+  if (rows.length === 0) return null
+  return (
+    <div className="mt-8">
+      <div className="mb-1 text-[15px] font-bold text-[var(--fg)]">Top prompts by cost</div>
+      <p className="mb-3 text-[12.5px] text-[var(--fg-secondary)]">
+        One prompt = everything a person asked once (all its LLM calls). {windowLabel} · {rows.length} of {total.toLocaleString()} prompts.
+      </p>
+      <div className="overflow-x-auto rounded-2xl border border-[var(--border)]">
+        <table className="w-full text-[12px]">
+          <thead className="bg-[var(--bg-secondary)] text-[var(--fg-tertiary)]">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium">Prompt</th>
+              <th className="px-3 py-2 text-left font-medium">User</th>
+              <th className="px-3 py-2 text-left font-medium">Model · source</th>
+              <th className="px-3 py-2 text-right font-medium">LLM calls</th>
+              <th className="px-3 py-2 text-right font-medium">Tokens</th>
+              <th className="px-3 py-2 text-right font-medium">Cost</th>
+              <th className="px-3 py-2 text-right font-medium">Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(p => (
+              <tr key={p.prompt_key} className="border-t border-[var(--border)]">
+                <td className="px-3 py-2 max-w-[280px] truncate text-[var(--fg)]" title={preview.get(p.prompt_key) ?? p.prompt_key}>
+                  {preview.get(p.prompt_key) ? clipText(preview.get(p.prompt_key)!, 90) : <span className="font-mono text-[11px] text-[var(--fg-tertiary)]">{p.prompt_key.slice(0, 18)}</span>}
+                </td>
+                <td className="px-3 py-2 max-w-[180px] truncate text-[var(--fg-secondary)]">{emails.get(p.user_key) ?? (p.user_key || '—')}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-[var(--fg-secondary)]">{p.model || '—'} · {sourceLabel(p.source)}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{p.requests.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{p.total_tokens.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-semibold">{usd(p.cost_usd)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap text-[var(--fg-tertiary)]">{new Date(p.last_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
 

@@ -11,11 +11,9 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
-import { requireApiKeyOrOrgMember, dbError } from '@/lib/api/auth'
-
-function db() { return createAdminClient() }
-
-const istToday = () => new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10)
+import { requireApiKeyOrOrgMember, dbError, type ReadGuard } from '@/lib/api/auth'
+import { getOrgTimezone } from '@/lib/org-timezone'
+import { zonedMidnightIso } from '@/app/api/v1/me/_window'
 
 interface SourceStatus {
   source: string
@@ -25,31 +23,21 @@ interface SourceStatus {
   model: string | null
 }
 
-async function statusFor(orgId: string, source: string): Promise<SourceStatus> {
-  const admin = db()
-  // Latest event for this source.
-  const { data: last } = await admin
-    .from('usage_events')
-    .select('created_at, cost_basis, model')
-    .eq('org_id', orgId).eq('source', source)
-    .order('created_at', { ascending: false }).limit(1).maybeSingle()
-
-  // Today's tokens for this source (IST day, matching agg buckets).
-  const sinceIso = `${istToday()}T00:00:00.000Z`
-  const { data: today } = await admin
-    .from('usage_events')
-    .select('total_tokens')
-    .eq('org_id', orgId).eq('source', source)
-    .gte('created_at', sinceIso)
-
-  const tokensToday = (today ?? []).reduce((s, r) => s + Number(r.total_tokens ?? 0), 0)
-  return {
-    source,
-    last_event_at: (last?.created_at as string | undefined) ?? null,
-    tokens_today: tokensToday,
-    cost_basis: (last?.cost_basis as string | undefined) ?? null,
-    model: (last?.model as string | undefined) ?? null,
-  }
+/**
+ * Whose events count. Key callers see only their OWN events so `setup`/`status`
+ * never report a teammate's traffic:
+ *   • personal key (api_keys.user_id) → that user's events;
+ *   • org-level key (setup-hub etc.)  → events sent with any org-level key the
+ *     same admin minted (the ingest/read pair share created_by).
+ * Dashboard sessions keep the org-wide view (the setup beacon).
+ */
+async function callerFilter(g: ReadGuard): Promise<{ user: string | null; keyIds: string[] | null }> {
+  if (!g.viaKey) return { user: null, keyIds: null }
+  const { data: k } = await createAdminClient().from('api_keys').select('user_id, created_by').eq('id', g.keyId!).maybeSingle()
+  if (k?.user_id) return { user: k.user_id as string, keyIds: null }
+  const { data: sibs } = await createAdminClient().from('api_keys').select('id')
+    .eq('org_id', g.orgId).is('user_id', null).eq('created_by', (k?.created_by as string | null) ?? '00000000-0000-0000-0000-000000000000')
+  return { user: null, keyIds: Array.from(new Set([g.keyId!, ...(sibs ?? []).map(r => r.id as string)])) }
 }
 
 export async function GET(req: NextRequest) {
@@ -58,17 +46,25 @@ export async function GET(req: NextRequest) {
   const { orgId } = guard
 
   const source = req.nextUrl.searchParams.get('source')
-  try {
-    if (source) return NextResponse.json(await statusFor(orgId, source))
+  const tz     = await getOrgTimezone(orgId)
+  const since  = zonedMidnightIso(Date.now(), tz)
+  const who    = await callerFilter(guard)
 
-    // All sources seen for this org.
-    const { data: rows, error } = await db()
-      .from('usage_events').select('source').eq('org_id', orgId).not('source', 'is', null).limit(1000)
-    if (error) return dbError(error, 'GET connections sources')
-    const sources = Array.from(new Set((rows ?? []).map(r => r.source as string)))
-    const statuses = await Promise.all(sources.map(s => statusFor(orgId, s)))
-    return NextResponse.json({ sources: statuses })
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? 'failed' }, { status: 500 })
+  const { data, error } = await createAdminClient().rpc('tf_connection_sources', {
+    p_org: orgId, p_since: since, p_user: who.user, p_key_ids: who.keyIds, p_source: source,
+  })
+  if (error) return dbError(error, 'GET connections')
+
+  const statuses: SourceStatus[] = ((data ?? []) as any[]).map(r => ({
+    source:        r.source as string,
+    last_event_at: (r.last_event_at as string | null) ?? null,
+    tokens_today:  Number(r.tokens_today ?? 0),
+    cost_basis:    (r.cost_basis as string | null) ?? null,
+    model:         (r.model as string | null) ?? null,
+  }))
+
+  if (source) {
+    return NextResponse.json(statuses[0] ?? { source, last_event_at: null, tokens_today: 0, cost_basis: null, model: null })
   }
+  return NextResponse.json({ sources: statuses, scope: guard.viaKey ? 'caller' : 'org' })
 }

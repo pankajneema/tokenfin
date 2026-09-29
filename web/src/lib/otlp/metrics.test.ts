@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { deriveMetricEvents, type MetricState } from './metrics'
+import { deriveMetricEvents, memoryMetricState, type MetricState } from './metrics'
 import type { KeyCtx } from './auth'
 
 const CTX: KeyCtx = { orgId: 'org1', projectId: 'proj1', keyId: 'key1', userId: null }
 
 function fakeState(): MetricState {
-  const m = new Map<string, number>()
-  return { get: async (k) => (m.has(k) ? m.get(k)! : null), set: async (k, v) => { m.set(k, v) } }
+  return memoryMetricState()
 }
 const kv = (key: string, s: string) => ({ key, value: { stringValue: s } })
 const metricsBody = (metrics: any[], res: any[] = []) => ({ resourceMetrics: [{ resource: { attributes: res }, scopeMetrics: [{ metrics }] }] })

@@ -1,9 +1,9 @@
 'use client'
 import Link from 'next/link'
 import { ArrowRight } from 'lucide-react'
-import { formatCost, formatTokens, formatDate } from '@/lib/utils'
-import { cn } from '@/lib/utils'
-import { TimeAgo } from '@/components/ui/time-ago'
+import { cn, formatCost, formatTokens } from '@/lib/utils'
+import { TimeAgo, relTime } from '@/components/ui/time-ago'
+import { NOTIONAL_LABEL } from './cost-basis'
 
 /* ── Types ──────────────────────────────────────────────────── */
 interface Event {
@@ -11,6 +11,7 @@ interface Event {
   model:        string
   total_tokens: number
   cost_usd:     number
+  cost_basis?:  string | null
   created_at:   string
   tags?:        Record<string, string>
   metadata?:    Record<string, unknown>
@@ -44,7 +45,7 @@ function ModelBadge({ model }: { model: string }) {
   )
 }
 
-function CostChip({ cost }: { cost: number }) {
+function CostChip({ cost, notional }: { cost: number; notional?: boolean }) {
   const level = cost >= 0.1 ? 'high' : cost >= 0.02 ? 'mid' : 'low'
   return (
     <span className={cn(
@@ -52,6 +53,7 @@ function CostChip({ cost }: { cost: number }) {
       level === 'high' ? 'text-[var(--red)]' : level === 'mid' ? 'text-[var(--amber)]' : 'text-[var(--green)]',
     )}>
       {formatCost(cost)}
+      {notional && <span className="ml-1 text-[10px] font-medium text-[var(--fg-tertiary)]" title={NOTIONAL_LABEL}>notional</span>}
     </span>
   )
 }
@@ -72,14 +74,6 @@ const TOOL_LABEL: Record<string, string> = {
   api:        'API',
 }
 
-function reltime(iso: string) {
-  const s = (Date.now() - new Date(iso).getTime()) / 1000
-  if (s < 60)    return `${Math.round(s)}s ago`
-  if (s < 3600)  return `${Math.round(s / 60)}m ago`
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`
-  return formatDate(iso)
-}
-
 /* ═══════════════════════════════════════════════════════════════ */
 export function RecentEvents({ events }: { events: Event[] }) {
 
@@ -89,14 +83,14 @@ export function RecentEvents({ events }: { events: Event[] }) {
         <div className="flex items-center justify-between mb-5">
           <div>
             <h2 className="text-[13px] font-semibold text-[var(--fg)]">Recent Events</h2>
-            <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">Latest API calls · real-time</p>
+            <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">Latest 20 LLM calls</p>
           </div>
           <Link href="/dashboard/analytics" className="flex items-center gap-1.5 text-[11.5px] text-coral font-medium hover:underline">
             View all <ArrowRight size={11} />
           </Link>
         </div>
         <p className="text-[12.5px] text-[var(--fg-tertiary)] text-center py-8">
-          No events yet · send usage data via <code className="font-mono text-coral">POST /api/v1/ingest</code>
+          No events yet · run <code className="font-mono text-coral">npx tokenfin setup</code> or send usage via <code className="font-mono text-coral">POST /api/v1/ingest</code>
         </p>
       </div>
     )
@@ -107,7 +101,7 @@ export function RecentEvents({ events }: { events: Event[] }) {
       <div className="flex items-center justify-between mb-5">
         <div>
           <h2 className="text-[13px] font-semibold text-[var(--fg)]">Recent Events</h2>
-          <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">Latest API calls · real-time</p>
+          <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">Latest 20 LLM calls</p>
         </div>
         <Link href="/dashboard/analytics" className="flex items-center gap-1.5 text-[11.5px] text-coral font-medium hover:underline">
           View all <ArrowRight size={11} />
@@ -130,8 +124,8 @@ export function RecentEvents({ events }: { events: Event[] }) {
               <tr key={ev.id}
                 className={cn('hover:bg-[var(--bg-hover)] transition-colors', i < events.length - 1 && 'border-b border-[var(--border)]')}>
                 <td className="px-3 py-3"><ModelBadge model={ev.model} /></td>
-                <td className="px-3 py-3 text-[12.5px] text-[var(--fg-secondary)] tabular-nums font-mono">{formatTokens(ev.total_tokens)}</td>
-                <td className="px-3 py-3"><CostChip cost={ev.cost_usd} /></td>
+                <td className="px-3 py-3 text-[12.5px] text-[var(--fg-secondary)] tabular-nums font-mono">{formatTokens(Number(ev.total_tokens ?? 0))}</td>
+                <td className="px-3 py-3"><CostChip cost={Number(ev.cost_usd ?? 0)} notional={ev.cost_basis === 'notional'} /></td>
                 <td className="px-3 py-3">
                   <div className="flex flex-wrap gap-1">
                     {/* tool tag → "via Codex" badge */}
@@ -157,7 +151,7 @@ export function RecentEvents({ events }: { events: Event[] }) {
                       ))}
                   </div>
                 </td>
-                <td className="px-3 py-3 text-[11.5px] text-[var(--fg-tertiary)] whitespace-nowrap"><TimeAgo value={ev.created_at} format={reltime} /></td>
+                <td className="px-3 py-3 text-[11.5px] text-[var(--fg-tertiary)] whitespace-nowrap"><TimeAgo value={ev.created_at} format={relTime} /></td>
               </tr>
             ))}
           </tbody>

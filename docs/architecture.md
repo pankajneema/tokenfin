@@ -1,9 +1,8 @@
 # TokenFin Architecture
 
-> Supersedes the previous version of this file, which described a
-> pre-monorepo layout and an unbuilt "planned" Go backend that now exists and
-> is live. If you find this file drifting from the code again, fix the file —
-> don't work around it.
+> If you find this file drifting from the code, fix the file — don't work
+> around it. Deployment is **Vercel (the `web/` app) + Supabase**, nothing else:
+> the optional Go ingest service / worker / Redis layer was deleted.
 
 TokenFin is an LLM cost-attribution / FinOps platform. It tracks token usage
 and spend across projects, models, and team members, for two very different
@@ -34,19 +33,13 @@ flowchart TB
         MCPClient["MCP client<br/>(Claude Desktop, Cursor, chat)"]
     end
 
-    subgraph Web["web/ — Next.js 15 App Router (the only service most deploys need)"]
+    subgraph Web["web/ — Next.js 15 App Router on Vercel (the only service)"]
         OTLP["/api/otel/v1/{logs,metrics,traces}<br/>OTLP receiver"]
         Ingest["/api/v1/ingest<br/>SDK ingest + enforcement"]
         API["/api/v1/*<br/>REST (keys, limits, alerts, projects…)"]
         Cron["/api/v1/cron/alerts<br/>scheduled alert sweep"]
         MCP["/api/mcp<br/>read-only MCP server"]
         Dash["Dashboard pages<br/>(App Router, RSC)"]
-    end
-
-    subgraph Go["backend/ — Go (optional, high-throughput SDK path only)"]
-        GoIngest["cmd/ingest<br/>:8001"]
-        GoWorker["cmd/worker<br/>Redis→Supabase consumer,<br/>limit sync, alert publish"]
-        Redis[("Redis<br/>counters + stream")]
     end
 
     subgraph DB["Supabase (Postgres + Auth + RLS)"]
@@ -64,12 +57,10 @@ flowchart TB
     SDK -- "POST /ingest" --> Ingest
     Browser --> Dash
     Browser --> API
-    MCPClient -- "Bearer read-only key" --> MCP
+    MCPClient -- "Bearer read key" --> MCP
 
     OTLP -->|"cost_basis=notional<br/>never rolls into usage_agg"| Events
     Ingest -->|"cost_basis=metered"| Events
-    Ingest -.->|"if INGEST_SERVICE_URL set"| GoIngest
-    GoIngest --> Redis --> GoWorker --> Events
     Ingest -->|"block 403 / throttle 429<br/>checked against metered MTD spend"| Ingest
 
     Events -->|"metered rows only"| Agg
@@ -113,7 +104,9 @@ tokenfin/
 │   │   ├── api/v1/                REST routes (keys, limits, alerts, projects, orgs, ingest…)
 │   │   ├── api/otel/v1/{logs,metrics,traces}   OTLP receiver
 │   │   ├── api/mcp/               MCP server (JSON-RPC over Streamable HTTP)
-│   │   └── cli/authorize/         browser half of `tokenfin login`
+│   │   ├── api/v1/cli/{token,device/*}  per-device CLI keys; device-code login
+│   │   ├── cli/authorize/         browser half of `tokenfin login`
+│   │   └── cli/device/            approve a `tokenfin login --device` code
 │   ├── src/lib/
 │   │   ├── otlp/                  auth · decode · mapping · normalize · metrics · persist
 │   │   ├── alerts/engine.ts       rule evaluation + delivery (used by cron and "test fire")
@@ -121,14 +114,10 @@ tokenfin/
 │   │   └── supabase/server.ts     createClient() (RLS) vs createAdminClient() (service-role)
 │   └── src/components/            dashboard/, layout/, onboarding/, ui/
 │
-├── backend/                       Go — SDK ingest scaling path, OFF by default
-│   ├── cmd/ingest/                high-throughput POST /v1/ingest (Redis-buffered)
-│   ├── cmd/worker/                consumer + limits sync + alert-stream publisher
-│   └── internal/{auth,config,db,redis,models,pricing}/
-│
 ├── cli/                           npm package `tokenfin` — the customer-facing setup tool
 │   ├── bin/tokenfin.js
-│   └── lib/{login,setup,status,doctor,remove,otel,api,config}.js
+│   ├── lib/{login,setup,status,doctor,budget,statusline,remove,otel,api,config,fsx,proc,update}.js
+│   └── test/                      node:test (unit + e2e against a mock server, temp HOME)
 │
 ├── sdk/                           Client SDKs customers embed in their own backend
 ├── db/                            schema.sql, migrations/, functions.sql
@@ -148,7 +137,7 @@ tokenfin/
 | Database | Supabase (Postgres + Auth + RLS) |
 | Styling | Tailwind CSS + CSS custom properties |
 | Charts | Recharts |
-| High-throughput ingest (optional) | Go + Redis |
+| Hosting | Vercel (`web/`, Root Directory `web`, region `icn1`) + Supabase |
 | CLI | Plain Node (CommonJS), zero dependencies beyond what ships in `cli/lib` |
 | Email | Resend (alerts only; blank key = alerts silently skip email, everything else still works) |
 

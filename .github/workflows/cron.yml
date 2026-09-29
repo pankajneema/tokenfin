@@ -2,7 +2,9 @@ name: Scheduled jobs
 
 # Vercel Hobby only allows daily crons (see web/vercel.json), so this runs the
 # alert sweep every 15 minutes on any plan. Alerts are claimed atomically, so a
-# run that overlaps Vercel's daily cron never fires the same alert twice.
+# run that overlaps Vercel's daily cron never fires the same alert twice. The
+# other jobs back up Vercel's schedule: the digest is idempotent per org per
+# ISO week (digest_runs) and reconcile is safe to re-run.
 #
 # Setup: Settings → Secrets and variables → Actions
 #   secret   CRON_SECRET     same value as CRON_SECRET in Vercel
@@ -11,28 +13,32 @@ on:
   schedule:
     - cron: "*/15 * * * *"     # alert sweep
     - cron: "30 3 * * *"       # daily data-retention purge (backup to Vercel's)
+    - cron: "0 2 * * *"        # daily cost reconciliation
+    - cron: "30 2 * * *"       # daily coding-tool + GitHub connector sync
+    - cron: "0 5 * * 1"        # weekly digest (Mondays 05:00 UTC)
+    - cron: "45 3 * * *"       # daily model price sync
   workflow_dispatch:
     inputs:
       job:
         description: "Job to run"
         type: choice
-        options: [alerts, retention]
+        options: [alerts, retention, reconcile, digest, connectors, prices]
         default: alerts
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     if: ${{ vars.TOKENFIN_URL != '' }}
     steps:
       - name: Call cron endpoint
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           BASE_URL: ${{ vars.TOKENFIN_URL }}
-          JOB: ${{ github.event.inputs.job || (github.event.schedule == '30 3 * * *' && 'retention' || 'alerts') }}
+          JOB: ${{ github.event.inputs.job || (github.event.schedule == '30 3 * * *' && 'retention') || (github.event.schedule == '0 2 * * *' && 'reconcile') || (github.event.schedule == '0 5 * * 1' && 'digest') || (github.event.schedule == '30 2 * * *' && 'connectors') || (github.event.schedule == '45 3 * * *' && 'prices') || 'alerts' }}
         run: |
           if [ -z "$CRON_SECRET" ]; then echo "::error::CRON_SECRET secret is not set"; exit 1; fi
-          status=$(curl -sS -o response.json -w '%{http_code}' --max-time 60 \
+          status=$(curl -sS -o response.json -w '%{http_code}' --max-time 300 \
             -H "Authorization: Bearer $CRON_SECRET" "$BASE_URL/api/v1/cron/$JOB")
           cat response.json; echo
           if [ "$status" != "200" ]; then echo "::error::/api/v1/cron/$JOB returned HTTP $status"; exit 1; fi

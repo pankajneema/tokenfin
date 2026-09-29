@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
-import { buildOrgCtx, evaluateRule, deliverAlert, inCooldown, claimFire, type AlertRule } from '@/lib/alerts/engine'
+import { recordDeliveryResults } from '@/lib/integrations/delivery'
+import { buildOrgCtx, evaluateRuleDetailed, deliverAlert, inCooldown, claimFire, type AlertRule, type Evaluation } from '@/lib/alerts/engine'
 import crypto from 'crypto'
+import { withJobRun } from '@/lib/jobs'
+import { log } from '@/lib/log'
+
+const ROUTE = '/api/v1/cron/alerts'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -24,48 +29,61 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
-  const admin = createAdminClient()
+  return withJobRun('alerts', async () => {
+    const admin = createAdminClient()
 
-  // Optional scope to one org — for targeted runs / safe testing.
-  const orgFilter = req.nextUrl.searchParams.get('org')
+    // Optional scope to one org — for targeted runs / safe testing.
+    const orgFilter = req.nextUrl.searchParams.get('org')
 
-  let q = admin
-    .from('alert_rules')
-    .select('id, org_id, project_id, name, trigger_type, condition, threshold, channels, is_active, fired_count, last_fired_at, cooldown_hours')
-    .eq('is_active', true)
-  if (orgFilter) q = q.eq('org_id', orgFilter)
-  const { data: rules } = await q
-  const active = (rules ?? []) as AlertRule[]
-  if (active.length === 0) return NextResponse.json({ evaluated: 0, fired: 0 })
-
-  // Resolve emails once (shared across orgs).
-  const emailByUser = new Map<string, string>()
-  try {
-    const { data: list } = await admin.auth.admin.listUsers({ perPage: 1000 })
-    for (const u of list?.users ?? []) if (u.email) emailByUser.set(u.id, u.email)
-  } catch {}
-
-  // Group by org so we fetch each org's data once.
-  const byOrg = new Map<string, AlertRule[]>()
-  for (const r of active) { if (!byOrg.has(r.org_id)) byOrg.set(r.org_id, []); byOrg.get(r.org_id)!.push(r) }
-
-  let evaluated = 0, fired = 0
-  for (const [orgId, orgRules] of Array.from(byOrg.entries())) {
-    let ctx
-    try { ctx = await buildOrgCtx(admin, orgId, emailByUser) } catch { continue }
-    for (const rule of orgRules) {
-      evaluated++
-      if (inCooldown(rule)) continue
-      let message: string | null = null
-      try { message = evaluateRule(rule, ctx) } catch { message = null }
-      if (!message) continue
-      // Atomically claim this firing window so overlapping cron runs can't double-deliver.
-      let claimed = false
-      try { claimed = await claimFire(admin, rule) } catch { claimed = false }
-      if (!claimed) continue
-      try { await deliverAlert(admin, rule, ctx, message, { claimed: true }) ; fired++ } catch {}
+    const COLS = 'id, org_id, project_id, name, trigger_type, condition, threshold, channels, is_active, fired_count, last_fired_at, cooldown_hours'
+    const load = (cols: string) => {
+      let q = admin.from('alert_rules').select(cols).eq('is_active', true)
+      if (orgFilter) q = q.eq('org_id', orgFilter)
+      return q
     }
-  }
+    // anomaly_scope arrives with migration 009; fall back so a not-yet-migrated
+    // DB keeps evaluating every rule (anomaly rules then default to org scope).
+    let { data: rules, error } = await load(COLS + ', anomaly_scope')
+    if (error) ({ data: rules } = await load(COLS))
+    const active = (rules ?? []) as unknown as AlertRule[]
+    if (active.length === 0) return NextResponse.json({ evaluated: 0, fired: 0 })
 
-  return NextResponse.json({ evaluated, fired })
+    // Resolve emails once (shared across orgs).
+    const emailByUser = new Map<string, string>()
+    try {
+      const { data: list } = await admin.auth.admin.listUsers({ perPage: 1000 })
+      for (const u of list?.users ?? []) if (u.email) emailByUser.set(u.id, u.email)
+    } catch {}
+
+    // Group by org so we fetch each org's data once.
+    const byOrg = new Map<string, AlertRule[]>()
+    for (const r of active) { if (!byOrg.has(r.org_id)) byOrg.set(r.org_id, []); byOrg.get(r.org_id)!.push(r) }
+
+    let evaluated = 0, fired = 0
+    for (const [orgId, orgRules] of Array.from(byOrg.entries())) {
+      let ctx
+      try { ctx = await buildOrgCtx(admin, orgId, emailByUser) } catch { continue }
+      for (const rule of orgRules) {
+        evaluated++
+        if (inCooldown(rule)) continue
+        let hit: Evaluation | null = null
+        try { hit = evaluateRuleDetailed(rule, ctx) } catch { hit = null }
+        if (!hit) continue
+        // Atomically claim this firing window so overlapping cron runs can't double-deliver.
+        let claimed = false
+        try { claimed = await claimFire(admin, rule) } catch { claimed = false }
+        if (!claimed) continue
+        try {
+          const results = await deliverAlert(admin, rule, ctx, hit.message, { claimed: true, critical: hit.critical })
+          fired++
+          // Show the real outcome (OK / failed: reason) on the Integrations page.
+          if (results) await recordDeliveryResults(admin, rule.org_id, results as Record<string, unknown>)
+        } catch (e) {
+          log.error('alert delivery failed', { route: ROUTE, org_id: rule.org_id, rule_id: rule.id, err: e })
+        }
+      }
+    }
+
+    return NextResponse.json({ evaluated, fired })
+  }, { route: ROUTE })
 }

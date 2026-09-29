@@ -98,14 +98,7 @@ async function main() {
   console.log('\n🔑  FULL RAW KEY — use this in curl:')
   console.log(`\n   ${rawKey}\n`)
   console.log('─'.repeat(60))
-  console.log('Hit Go ingest directly (port 8001):')
-  console.log(`
-curl -X POST http://localhost:8001/v1/ingest \\
-  -H "Authorization: Bearer ${rawKey}" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-4o","input_tokens":800,"output_tokens":200}'
-`)
-  console.log('Hit Next.js proxy (port 3001):')
+  console.log('Send a test event (port 3001):')
   console.log(`
 curl -X POST http://localhost:3001/api/v1/ingest \\
   -H "Authorization: Bearer ${rawKey}" \\

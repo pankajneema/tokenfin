@@ -1,8 +1,10 @@
-import { createClient }      from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
-import { getOrgRole }         from '@/lib/api/auth'
+import { requireOrgContext }  from '@/lib/org-context'
+import { ruleCoversLimit }    from '../alerts/_budget-link'
+import { channelStatus, INTEG_COLS, type IntegRow } from '../alerts/_channels'
 import { LimitsClient }       from './_client'
 import { selectAll } from '@/lib/supabase/paginate'
+import { dailyTotals, runRate, forecastLimit, periodStartDay } from '@/lib/alerts/forecast'
 
 export const metadata = { title: 'Budget Limits — TokenFin' }
 
@@ -23,6 +25,18 @@ export interface LimitRow {
   blockAt:       number
   isActive:      boolean
   hasAlert:      boolean
+  hasForecastAlert: boolean
+  /** Alert rules that watch this budget (same logic as the alert engine). */
+  alertRules:    { id: string; name: string; triggerType: 'limit_breach' | 'forecast'; isActive: boolean }[]
+  // Forecast (lib/alerts/forecast): 14-day run-rate weighted to the recent 7.
+  forecast: {
+    ratePerDay:   number
+    projectedUsd: number         // projected spend at period end
+    projectedPct: number
+    runwayDays:   number | null  // null = never runs out at current rate
+    exceedDate:   string | null  // YYYY-MM-DD, within this period
+    onTrack:      boolean
+  } | null                       // null = scope not measurable (member limits)
 }
 
 export interface ScopeOption {
@@ -32,20 +46,8 @@ export interface ScopeOption {
 
 /* ── Server page ── */
 export default async function LimitsPage() {
-  const supabase = createClient()
-  const admin    = createAdminClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: _mb } = await admin
-    .from('members')
-    .select('org_id')
-    .eq('user_id', user!.id)
-    .limit(1)
-
-  const orgId = _mb?.[0]?.org_id ?? ''
-  const role  = await getOrgRole(user.id, orgId)
+  const { orgId, role } = await requireOrgContext()
+  const admin = createAdminClient()
 
   // Look back far enough to cover any period (monthly is the widest window).
   const since = new Date(Date.now() - 31 * 86400_000).toISOString().slice(0, 10)
@@ -58,6 +60,7 @@ export default async function LimitsPage() {
     { data: members   },
     { data: events    },
     { data: limitAlerts },
+    { data: integ },
   ] = await Promise.all([
     admin
       .from('limits')
@@ -77,21 +80,14 @@ export default async function LimitsPage() {
     // single "bill" elsewhere in the app — this is limits-only, for warning
     // purposes; the "How limits work" copy below reflects the difference.
     selectAll<{ user_id: string | null; project_id: string | null; cost_usd: number; created_at: string }>(() => admin.from('usage_events').select('user_id, project_id, cost_usd, created_at').eq('org_id', orgId).gte('created_at', sinceTs)),
-    // Limit-linked alert rules — there's no limit_id FK, so "linked" is inferred
-    // by (org, trigger_type, scope name), matching how the create-limit and
-    // add-alert flows name these rules.
-    admin.from('alert_rules').select('scope').eq('org_id', orgId).eq('trigger_type', 'limit_breach').eq('is_active', true),
+    // Budget alert rules. There's no limit_id FK: a rule watches a limit exactly
+    // when the alert engine would evaluate it (alerts/_budget-link.ts).
+    admin.from('alert_rules').select('id, name, trigger_type, project_id, is_active, created_at').eq('org_id', orgId).in('trigger_type', ['limit_breach', 'forecast']).order('created_at'),
+    admin.from('org_integrations').select(INTEG_COLS).eq('org_id', orgId).eq('is_active', true),
   ])
 
-  const alertedScopes = new Set((limitAlerts ?? []).map(a => a.scope))
-
-  // Period window start (UTC date string) for a given limit period.
-  const fromDate = (period: LimitPeriod): string => {
-    const now = new Date()
-    if (period === 'daily')  return now.toISOString().slice(0, 10)
-    if (period === 'weekly') return new Date(now.getTime() - 7 * 86400_000).toISOString().slice(0, 10)
-    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10)
-  }
+  const alertRows = (limitAlerts ?? []) as { id: string; name: string; trigger_type: 'limit_breach' | 'forecast'; project_id: string | null; is_active: boolean }[]
+  const now = new Date()
 
   const evs = (events ?? []) as { user_id: string | null; project_id: string | null; cost_usd: number; created_at: string }[]
   const teamUsers = new Map<string, Set<string>>()
@@ -101,19 +97,29 @@ export default async function LimitsPage() {
     teamUsers.get(m.team_id)!.add(m.user_id)
   }
 
-  // Actual period-to-date spend for a limit, scoped correctly.
-  function spendFor(scope: LimitScope, projectId: string | null, teamId: string | null, period: LimitPeriod): number {
-    const from = fromDate(period)
-    const fromTs = from + 'T00:00:00Z'
-    if (scope === 'org')
-      return +evs.filter(e => e.created_at >= fromTs).reduce((s, e) => s + Number(e.cost_usd), 0).toFixed(4)
-    if (scope === 'project')
-      return +evs.filter(e => e.project_id === projectId && e.created_at >= fromTs).reduce((s, e) => s + Number(e.cost_usd), 0).toFixed(4)
+  // Events in a limit's scope (last 31 days); null for member scope — the
+  // limits table has no member id yet (needs a migration).
+  function eventsFor(scope: LimitScope, projectId: string | null, teamId: string | null) {
+    if (scope === 'org')     return evs
+    if (scope === 'project') return evs.filter(e => e.project_id === projectId)
     if (scope === 'team') {
       const users = teamUsers.get(teamId ?? '') ?? new Set<string>()
-      return +evs.filter(e => e.user_id && users.has(e.user_id) && e.created_at >= fromTs).reduce((s, e) => s + Number(e.cost_usd), 0).toFixed(4)
+      return evs.filter(e => e.user_id && users.has(e.user_id))
     }
-    return 0 // member scope: limits table has no member id yet (needs a migration)
+    return null
+  }
+
+  // Actual period-to-date spend (UTC) + run-rate forecast for a limit.
+  function measure(scope: LimitScope, projectId: string | null, teamId: string | null, period: LimitPeriod, budget: number) {
+    const scoped = eventsFor(scope, projectId, teamId)
+    if (!scoped) return { spent: 0, forecast: null }
+    const fromTs = periodStartDay(period, now) + 'T00:00:00Z'
+    const spent = +scoped.filter(e => e.created_at >= fromTs).reduce((s, e) => s + Number(e.cost_usd), 0).toFixed(4)
+    const f = forecastLimit({ budget, spent, rate: runRate(dailyTotals(scoped), now), period, now })
+    return {
+      spent,
+      forecast: { ratePerDay: f.rate, projectedUsd: f.projected, projectedPct: f.projectedPct, runwayDays: f.runwayDays, exceedDate: f.exceedDate, onTrack: f.onTrack },
+    }
   }
 
   const limits: LimitRow[] = (rawLimits ?? []).map(l => {
@@ -125,6 +131,8 @@ export default async function LimitsPage() {
       l.scope === 'team'    ? (teamName ?? 'Unknown team') :
                                'Member'
 
+    const m = measure(l.scope as LimitScope, l.project_id, l.team_id, l.period as LimitPeriod, Number(l.budget_usd))
+    const watching = alertRows.filter(r => ruleCoversLimit(r, l))
     return {
       id:            l.id,
       scope:         l.scope as LimitScope,
@@ -132,12 +140,15 @@ export default async function LimitsPage() {
       scopeTargetId: l.project_id ?? l.team_id ?? null,
       period:        l.period as LimitPeriod,
       budgetUsd:     l.budget_usd,
-      spentUsd:      spendFor(l.scope as LimitScope, l.project_id, l.team_id, l.period as LimitPeriod),
+      spentUsd:      m.spent,
       warnAt:        l.warn_at,
       throttleAt:    l.throttle_at,
       blockAt:       l.block_at,
       isActive:      l.is_active,
-      hasAlert:      alertedScopes.has(scopeName),
+      hasAlert:      watching.some(r => r.is_active && r.trigger_type === 'limit_breach'),
+      hasForecastAlert: watching.some(r => r.is_active && r.trigger_type === 'forecast'),
+      alertRules:    watching.map(r => ({ id: r.id, name: r.name, triggerType: r.trigger_type, isActive: r.is_active })),
+      forecast:      m.forecast,
     }
   })
 
@@ -151,6 +162,7 @@ export default async function LimitsPage() {
       teams={teamOptions}
       orgId={orgId}
       role={role}
+      channels={channelStatus(integ as unknown as IntegRow[] | null)}
     />
   )
 }

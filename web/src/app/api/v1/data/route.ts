@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/server'
 import { requireOrgMember, requirePermission, dbError } from '@/lib/api/auth'
+import { audit } from '@/lib/audit'
 
 /**
  * Settings → Data. Customer-controlled retention and deletion of monitoring
@@ -65,6 +66,7 @@ export async function PATCH(req: NextRequest) {
     .update({ retention_days: parsed.data.retention_days })
     .eq('id', parsed.data.org_id)
   if (error) return dbError(error, 'PATCH data retention')
+  await audit({ orgId: parsed.data.org_id, actorUserId: guard.userId, action: 'data.retention', targetType: 'organization', targetId: parsed.data.org_id, details: { retention_days: parsed.data.retention_days } })
   return NextResponse.json({ ok: true, retention_days: parsed.data.retention_days })
 }
 
@@ -89,5 +91,6 @@ export async function POST(req: NextRequest) {
   if (error) return dbError(error, 'POST data purge')
 
   console.log(`[data] org=${parsed.data.org_id} purge before=${before ?? 'ALL'} by=${guard.userId}`, data)
+  await audit({ orgId: parsed.data.org_id, actorUserId: guard.userId, action: 'data.delete', targetType: 'organization', targetId: parsed.data.org_id, details: { older_than_days: parsed.data.older_than_days, deleted: data } })
   return NextResponse.json({ ok: true, deleted: data })
 }

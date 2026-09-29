@@ -1,21 +1,22 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name            = "tokenfin"
-version         = "0.1.0"
+version         = "0.2.0"
 description     = "TokenFin Python SDK — LLM cost attribution and FinOps"
 readme          = "README.md"
 license         = { text = "MIT" }
 requires-python = ">=3.9"
-keywords        = ["llm", "cost", "tokens", "observability", "finops"]
+keywords        = ["llm", "cost", "tokens", "observability", "finops", "anthropic", "openai"]
 classifiers     = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Intended Audience :: Developers",
@@ -25,18 +26,20 @@ classifiers     = [
 dependencies = []   # zero required deps for the sync client
 
 [project.optional-dependencies]
-async = ["aiohttp>=3.9"]
-dev   = ["pytest>=8", "pytest-asyncio>=0.23", "aiohttp>=3.9", "responses>=0.25"]
+async     = ["aiohttp>=3.9"]
+anthropic = ["anthropic>=0.30"]
+openai    = ["openai>=1.26"]
+dev       = ["pytest>=8"]
 
 [project.urls]
-Homepage      = "https://tokenfin.io"
-Documentation = "https://docs.tokenfin.io"
-Repository    = "https://github.com/tokenfin/tokenfin-py"
+Homepage      = "https://github.com/pankajneema/tokenfin/tree/main/sdk/python"
+Documentation = "https://github.com/pankajneema/tokenfin/blob/main/sdk/README.md"
+Repository    = "https://github.com/pankajneema/tokenfin"
+Issues        = "https://github.com/pankajneema/tokenfin/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["tokenfin*"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths    = ["tests"]
+testpaths = ["tests"]

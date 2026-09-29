@@ -1,8 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { ArrowRight } from 'lucide-react'
-import { formatCost } from '@/lib/utils'
-import { cn } from '@/lib/utils'
+import { cn, formatCost, formatTokens, formatNumber } from '@/lib/utils'
 
 /* ── Types ──────────────────────────────────────────────────── */
 interface ProjectRow {
@@ -10,6 +9,8 @@ interface ProjectRow {
   name:     string
   cost30d:  number
   calls30d: number
+  tokens30d: number
+  prompts30d: number | null
   pct:      number
 }
 
@@ -37,7 +38,7 @@ export function TopProjects({ topProjects }: Props) {
         </div>
         <div className="flex-1 flex items-center justify-center">
           <p className="text-[12.5px] text-[var(--fg-tertiary)] text-center px-4">
-            No usage data yet · start sending events to see projects here
+            No project spend in the last 30 days · tag events with a project key to see them here
           </p>
         </div>
       </div>
@@ -59,8 +60,8 @@ export function TopProjects({ topProjects }: Props) {
       </div>
 
       {/* Column headers */}
-      <div className="grid grid-cols-[1fr_76px_52px_60px] gap-2 px-2 pb-2.5 border-b border-[var(--border)]">
-        {['Project', 'Cost', 'Share', 'Calls'].map((h, i) => (
+      <div className="grid grid-cols-[1fr_72px_44px_52px_52px_48px] gap-2 px-2 pb-2.5 border-b border-[var(--border)]">
+        {['Project', 'Cost', 'Share', 'Tokens', 'Prompts', 'Calls'].map((h, i) => (
           <p key={h} className={cn('text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider', i > 0 && 'text-right')}>
             {h}
           </p>
@@ -71,7 +72,7 @@ export function TopProjects({ topProjects }: Props) {
       <div className="flex flex-col gap-0.5 mt-1 flex-1">
         {topProjects.map((row, i) => (
           <div key={row.id}
-            className="grid grid-cols-[1fr_76px_52px_60px] gap-2 items-center px-2 py-2.5 rounded-xl hover:bg-[var(--bg-hover)] transition-colors">
+            className="grid grid-cols-[1fr_72px_44px_52px_52px_48px] gap-2 items-center px-2 py-2.5 rounded-xl hover:bg-[var(--bg-hover)] transition-colors">
             {/* Name + progress bar */}
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 mb-1">
@@ -90,8 +91,14 @@ export function TopProjects({ topProjects }: Props) {
             <p className="text-[11.5px] text-[var(--fg-secondary)] tabular-nums text-right">
               {row.pct}%
             </p>
+            <p className="text-[11.5px] text-[var(--fg-secondary)] tabular-nums text-right">
+              {formatTokens(row.tokens30d)}
+            </p>
+            <p className="text-[11.5px] text-[var(--fg-secondary)] tabular-nums text-right">
+              {row.prompts30d == null ? '—' : formatNumber(row.prompts30d)}
+            </p>
             <p className="text-[11.5px] text-[var(--fg-tertiary)] tabular-nums text-right">
-              {row.calls30d.toLocaleString()}
+              {formatNumber(row.calls30d)}
             </p>
           </div>
         ))}

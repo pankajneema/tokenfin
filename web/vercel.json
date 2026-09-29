@@ -1,7 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["icn1"],
   "crons": [
     { "path": "/api/v1/cron/alerts",    "schedule": "0 4 * * *" },
-    { "path": "/api/v1/cron/retention", "schedule": "30 3 * * *" }
+    { "path": "/api/v1/cron/retention", "schedule": "30 3 * * *" },
+    { "path": "/api/v1/cron/prices",    "schedule": "30 3 * * *" },
+    { "path": "/api/v1/cron/reconcile", "schedule": "0 2 * * *" },
+    { "path": "/api/v1/cron/connectors", "schedule": "30 2 * * *" },
+    { "path": "/api/v1/cron/digest",    "schedule": "0 5 * * 1" }
   ]
 }

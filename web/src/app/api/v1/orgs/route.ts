@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { requirePermission, dbError } from '@/lib/api/auth'
 import { z } from 'zod'
+import { audit } from '@/lib/audit'
+import { isValidTimeZone } from '@/lib/dates'
+import { clearOrgTimezone } from '@/lib/org-timezone'
+import { invalidateKeyCache } from '@/lib/otlp/auth'
 
 function db() { return createAdminClient() }
 
@@ -83,6 +87,10 @@ export async function PATCH(req: NextRequest) {
     org_id: z.string().uuid(),
     name:   z.string().trim().min(1).max(100).optional(),
     slug:   z.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/).optional(),
+    // IANA zone used to bucket days on every dashboard (e.g. "UTC", "Asia/Kolkata").
+    timezone: z.string().max(64).refine(isValidTimeZone, 'Unknown time zone').optional(),
+    // Privacy switch: when false, prompt text is dropped on arrival (usage is still recorded).
+    capture_prompts: z.boolean().optional(),
   }).strict()
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
@@ -108,6 +116,10 @@ export async function PATCH(req: NextRequest) {
     .single()
 
   if (error) return dbError(error, 'PATCH orgs')
+  if (fields.timezone) clearOrgTimezone(org_id)
+  // Key lookups cache the org's timezone + capture_prompts alongside the key.
+  if (fields.timezone || fields.capture_prompts !== undefined) invalidateKeyCache()
+  await audit({ orgId: org_id, actorUserId: guard.userId, action: fields.timezone ? 'org.timezone' : fields.capture_prompts !== undefined ? 'org.privacy' : 'org.update', targetType: 'organization', targetId: org_id, details: fields })
   return NextResponse.json(data)
 }
 

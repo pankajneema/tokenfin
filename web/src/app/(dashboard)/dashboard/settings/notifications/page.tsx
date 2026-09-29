@@ -1,38 +1,13 @@
 import { createClient }         from '@/lib/supabase/server'
 import { createAdminClient }    from '@/lib/supabase/server'
 import { NotificationsClient }  from './_client'
+import { resolvePrefs, type NotifPrefs } from '@/lib/alerts/prefs'
 
 export const metadata = { title: 'Notification Settings — TokenFin' }
 
-export interface NotifPrefs {
-  budget_breach_email:   boolean
-  budget_breach_slack:   boolean
-  weekly_digest_email:   boolean
-  weekly_digest_inapp:   boolean
-  anomaly_email:         boolean
-  anomaly_inapp:         boolean
-  member_events_email:   boolean
-  member_events_inapp:   boolean
-  api_errors_email:      boolean
-  api_errors_inapp:      boolean
-  quiet_start:           string
-  quiet_end:             string
-}
-
-const DEFAULTS: NotifPrefs = {
-  budget_breach_email:  true,
-  budget_breach_slack:  false,
-  weekly_digest_email:  true,
-  weekly_digest_inapp:  true,
-  anomaly_email:        true,
-  anomaly_inapp:        true,
-  member_events_email:  false,
-  member_events_inapp:  true,
-  api_errors_email:     true,
-  api_errors_inapp:     true,
-  quiet_start:          '22:00',
-  quiet_end:            '08:00',
-}
+// Keys, defaults and validation live in lib/alerts/prefs (shared with the
+// alert engine, weekly digest and /api/v1/preferences).
+export type { NotifPrefs }
 
 export default async function NotificationsPage() {
   const supabase = createClient()
@@ -47,8 +22,7 @@ export default async function NotificationsPage() {
     .eq('user_id', user.id)
     .maybeSingle()
 
-  const saved = (prefRow?.settings ?? {}) as Partial<NotifPrefs>
-  const prefs: NotifPrefs = { ...DEFAULTS, ...saved }
+  const prefs: NotifPrefs = resolvePrefs(prefRow?.settings)
 
   return <NotificationsClient initialPrefs={prefs} userEmail={user.email ?? ''} />
 }

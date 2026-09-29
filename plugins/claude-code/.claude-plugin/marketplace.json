@@ -1,0 +1,13 @@
+{
+  "name": "tokenfin",
+  "owner": { "name": "TokenFin" },
+  "metadata": { "description": "TokenFin plugins for Claude Code" },
+  "plugins": [
+    {
+      "name": "tokenfin",
+      "source": "./",
+      "description": "Query TokenFin AI spend, budgets and forecasts from Claude Code (read-only MCP + slash commands).",
+      "version": "0.1.0"
+    }
+  ]
+}

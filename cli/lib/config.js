@@ -1,11 +1,20 @@
 'use strict'
 
 // Persistent CLI credential store: ~/.tokenfin/config.json (chmod 600).
-// Shape: { key, url, appUrl }.
+// Shape: {
+//   key,        ingest key (write) — goes into agent OTLP configs
+//   read_key,   read key — used for status/doctor/budget/MCP (falls back to key
+//               for 0.3-era single read+write keys)
+//   device_id,  stable random id for this machine (per-device server keys)
+//   url, appUrl,
+//   prompts     false when the user opted out with `setup --no-prompts`
+// }
 
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const crypto = require('crypto')
+const { writeJsonAtomic } = require('./fsx')
 
 function dir() { return path.join(os.homedir(), '.tokenfin') }
 function configPath() { return path.join(dir(), 'config.json') }
@@ -15,9 +24,18 @@ function readConfig() {
 }
 
 function writeConfig(cfg) {
-  fs.mkdirSync(dir(), { recursive: true })
-  fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2) + '\n')
-  try { fs.chmodSync(configPath(), 0o600) } catch { /* no-op on Windows */ }
+  writeJsonAtomic(configPath(), cfg, { mode: 0o600 })
 }
 
-module.exports = { dir, configPath, readConfig, writeConfig }
+// Stable per-machine id, created on first use and persisted in config.json.
+function ensureDeviceId() {
+  const cfg = readConfig()
+  if (cfg.device_id && /^[A-Za-z0-9-]{8,64}$/.test(cfg.device_id)) return cfg.device_id
+  const id = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex')
+  writeConfig({ ...cfg, device_id: id })
+  return id
+}
+
+const readKeyOf = (cfg) => String(cfg.read_key || cfg.key || '').trim()
+
+module.exports = { dir, configPath, readConfig, writeConfig, ensureDeviceId, readKeyOf }

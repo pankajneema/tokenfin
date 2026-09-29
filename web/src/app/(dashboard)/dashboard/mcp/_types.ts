@@ -21,7 +21,21 @@ export interface PlatformRow {
   tokens30d:   number
   cost30d:     number
   calls30d:    number
+  prompts30d:  number
   models:      PlatformModel[]
   tier:        Tier | null
   accuracy:    Accuracy | null
+}
+
+/** An active key with the 'read' scope — what the MCP server authenticates with. */
+export interface ReadKeyRow {
+  id:         string
+  name:       string
+  keyPrefix:  string
+  lastUsedAt: string | null
+  createdAt:  string
+  /** Owned by the viewer (personal key, or org key they created). */
+  mine:       boolean
+  /** Split read-only key (vs a legacy read+write key). */
+  readOnly:   boolean
 }

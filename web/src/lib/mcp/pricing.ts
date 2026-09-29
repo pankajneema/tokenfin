@@ -2,9 +2,9 @@
 // computes: SDK ingest, OTLP logs/metrics/traces, prompt analytics, savings.
 // Anthropic rates are first-party API list prices (2026-06). Cache reads bill
 // at 0.1x input and 5-minute cache writes at 1.25x input unless overridden.
-type Price = { in: number; out: number; cacheRead?: number; cacheWrite?: number }
+export type Price = { in: number; out: number; cacheRead?: number; cacheWrite?: number }
 
-const PRICES: Record<string, Price> = {
+export const PRICES: Readonly<Record<string, Price>> = {
   // Anthropic
   'claude-fable-5-1':  { in: 10,   out: 50, cacheRead: 0.25 },
   'claude-fable-5':    { in: 10,   out: 50 },
@@ -80,8 +80,32 @@ export const outputPrice = (model: string) => priceFor(model).out
 
 /** USD cost for a call. Cache tokens are optional and priced at their own rates. */
 export function computeCost(model: string, inTok: number, outTok: number, cacheReadTok = 0, cacheWriteTok = 0): number {
-  const p = priceFor(model)
+  return costFromPrice(priceFor(model), inTok, outTok, cacheReadTok, cacheWriteTok)
+}
+
+/** USD cost for a call at an explicit price (used by per-org overrides). */
+export function costFromPrice(p: Price, inTok: number, outTok: number, cacheReadTok = 0, cacheWriteTok = 0): number {
   const cacheRead  = p.cacheRead  ?? p.in * 0.1
   const cacheWrite = p.cacheWrite ?? p.in * 1.25
   return +((inTok * p.in + outTok * p.out + cacheReadTok * cacheRead + cacheWriteTok * cacheWrite) / 1e6).toFixed(8)
+}
+
+/** A client-reported cost further than this factor from our price is ignored. */
+export const CLIENT_COST_TOLERANCE = 10
+
+/**
+ * The cost to store for an SDK-reported call. Clients can't be trusted to
+ * price their own usage (a budget could be dodged by under-reporting), so:
+ *  - known model (list price or org override) → always the server price;
+ *  - unknown model → the client's figure only when it is within 10x of our
+ *    fallback estimate, else the estimate.
+ * The client's figure is still returned so it can be kept as vendor_cost_usd.
+ */
+export function reconcileClientCost(serverCost: number, priceKnown: boolean, clientCost: unknown): { cost: number; usedClient: boolean; client: number | null } {
+  const c = typeof clientCost === 'number' ? clientCost : typeof clientCost === 'string' && clientCost.trim() !== '' ? Number(clientCost) : NaN
+  const client = Number.isFinite(c) && c >= 0 ? +c.toFixed(8) : null
+  if (priceKnown || client == null) return { cost: serverCost, usedClient: false, client }
+  const lo = serverCost / CLIENT_COST_TOLERANCE
+  const hi = serverCost * CLIENT_COST_TOLERANCE
+  return client >= lo && client <= hi ? { cost: client, usedClient: true, client } : { cost: serverCost, usedClient: false, client }
 }

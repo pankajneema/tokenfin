@@ -1,18 +1,24 @@
 'use client'
-import { ArrowRight, Zap, BarChart3, Key } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowRight, Terminal, Copy, Check } from 'lucide-react'
 import type { OnboardingData } from '@/app/(onboarding)/onboarding/_client'
 
-const NEXT_STEPS = [
-  { icon: Key,      title: 'Create an API key',       desc: 'Start tracking token usage in minutes' },
-  { icon: BarChart3, title: 'Explore analytics',      desc: 'See real-time cost attribution' },
-  { icon: Zap,      title: 'Set a budget limit',      desc: 'Get alerted before you overspend' },
-]
+const COMMAND = 'npx tokenfin@latest setup'
 
-export function StepDone({ data, onGo }: { data: OnboardingData; onGo: () => void }) {
+/**
+ * Last onboarding step. No "create an API key" detour — `setup` signs the
+ * developer in and mints this device's keys itself. The primary CTA goes to
+ * /dashboard/setup, which shows the same command and a live "waiting for
+ * first event" beacon.
+ */
+export function StepDone({ data, onGo }: { data: OnboardingData; onGo: (href: string) => void }) {
+  const [copied, setCopied] = useState(false)
+  function copy() {
+    navigator.clipboard?.writeText(COMMAND).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400) })
+  }
+
   return (
     <div className="p-7 text-center">
-
-      {/* Success animation */}
       <div className="relative mx-auto w-20 h-20 mb-7">
         <div className="absolute inset-0 rounded-full bg-teal/10 animate-ping-slow" />
         <div className="relative w-full h-full rounded-full bg-teal/15 border border-teal/30 flex items-center justify-center">
@@ -36,29 +42,38 @@ export function StepDone({ data, onGo }: { data: OnboardingData; onGo: () => voi
         </p>
       )}
 
-      {/* What's next */}
-      <div className="mt-7 mb-7 text-left space-y-3">
-        <p className="text-[11px] font-semibold tracking-widest text-[var(--fg-tertiary)] uppercase px-1 mb-4">
-          Suggested next steps
+      <div className="mt-7 mb-7 text-left">
+        <p className="text-[11px] font-semibold tracking-widest text-[var(--fg-tertiary)] uppercase px-1 mb-3">
+          Last step — connect your coding agent
         </p>
-        {NEXT_STEPS.map(({ icon: Icon, title, desc }) => (
-          <div key={title} className="flex items-start gap-3 px-3.5 py-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)]">
-            <div className="w-8 h-8 rounded-lg bg-coral/10 flex items-center justify-center flex-shrink-0">
-              <Icon size={14} className="text-coral" strokeWidth={2} />
-            </div>
-            <div>
-              <p className="text-[13px] font-semibold text-[var(--fg)]">{title}</p>
-              <p className="text-[11.5px] text-[var(--fg-secondary)]">{desc}</p>
-            </div>
+        <div className="rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)] px-3.5 py-3">
+          <div className="flex items-center gap-2 text-[12px] text-[var(--fg-secondary)] mb-2">
+            <Terminal size={13} className="text-coral" /> Run this in your terminal:
           </div>
-        ))}
+          <div className="flex items-center justify-between gap-2 rounded-lg bg-[var(--bg)] border border-[var(--border)] px-3 py-2">
+            <code className="font-mono text-[13px] text-[var(--fg)] overflow-x-auto">$ {COMMAND}</code>
+            <button onClick={copy} className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-[11.5px] text-[var(--fg-secondary)] hover:bg-[var(--bg-tertiary)]">
+              {copied ? <><Check size={12} className="text-teal" />Copied</> : <><Copy size={12} />Copy</>}
+            </button>
+          </div>
+          <p className="mt-2 text-[11.5px] text-[var(--fg-tertiary)]">
+            Signs you in, creates this device’s keys and configures Claude Code, Codex, Gemini and OpenCode —
+            then the next page lights up the moment your first event arrives.
+          </p>
+        </div>
       </div>
 
       <button
-        onClick={onGo}
+        onClick={() => onGo('/dashboard/setup')}
         className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-coral text-white text-[13.5px] font-semibold hover:bg-[#D4432B] shadow-[0_2px_8px_rgba(232,83,58,0.3)] hover:shadow-[0_4px_14px_rgba(232,83,58,0.38)] active:scale-[0.985] transition-all duration-150"
       >
-        Go to dashboard <ArrowRight size={14} strokeWidth={2.5} />
+        I ran it — wait for my first event <ArrowRight size={14} strokeWidth={2.5} />
+      </button>
+      <button
+        onClick={() => onGo('/dashboard')}
+        className="w-full mt-2 py-2.5 text-[12.5px] text-[var(--fg-tertiary)] hover:text-[var(--fg-secondary)] transition-colors font-medium"
+      >
+        Skip to the dashboard
       </button>
     </div>
   )

@@ -2,10 +2,12 @@ import { NextResponse }                                          from 'next/serv
 import type { NextRequest }                                     from 'next/server'
 import { createAdminClient }                                    from '@/lib/supabase/server'
 import { requireOrgMemberWithRole, requirePermission, assertOrgOwnsIds, dbError } from '@/lib/api/auth'
-import { can } from '@/lib/rbac'
+import { can, kindForScopes } from '@/lib/rbac'
 import crypto                                                    from 'crypto'
 import { sealKey }                                               from '@/lib/crypto/key-reveal'
 import { z }                                                     from 'zod'
+import { audit } from '@/lib/audit'
+import { invalidateKeyCache } from '@/lib/otlp/auth'
 
 function db() { return createAdminClient() }
 
@@ -38,7 +40,7 @@ export async function GET(req: NextRequest) {
   // key_hash is NEVER selected — only key_prefix
   let q = db()
     .from('api_keys')
-    .select('id, name, key_prefix, env, scopes, expires_at, is_active, last_used_at, created_at, created_by, user_id, project_id, projects(name)')
+    .select('id, name, key_prefix, env, scopes, kind, device_id, expires_at, is_active, last_used_at, created_at, created_by, user_id, project_id, projects(name)')
     .eq('org_id', orgId!)
   if (!can(guard.role, 'keys:view')) q = q.eq('user_id', guard.userId)
   const { data, error } = await q.order('created_at', { ascending: false })
@@ -71,7 +73,8 @@ export async function POST(req: NextRequest) {
     user_id:    z.string().uuid(),                        // team member — required
     team_id:    z.string().uuid().nullable().optional(),  // team attribution — optional
     env:        z.enum(['production', 'staging', 'development']).default('production'),
-    scopes:     z.array(z.enum(['read', 'write', 'admin'])).default(['read', 'write']),
+    // 'ingest' = telemetry-only (OTLP/SDK), 'read' = analytics/MCP; ['read','write'] = legacy combined.
+    scopes:     z.array(z.enum(['read', 'write', 'ingest', 'admin'])).min(1).default(['read', 'write']),
     expires_at: z.string().datetime().nullable().optional(),
   })
   const parsed = schema.safeParse(body)
@@ -81,6 +84,7 @@ export async function POST(req: NextRequest) {
   if (guard instanceof NextResponse) return guard
 
   const { org_id, project_id, name, user_id, team_id, env, scopes, expires_at } = parsed.data
+  const kind = kindForScopes(scopes)
   const created_by = guard.userId   // never trust a client-supplied creator
 
   // ── Validation: every referenced id must belong to this org ──
@@ -109,7 +113,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Validation: 1 active key per member per project ──
+  // ── Validation: 1 active manual key per member per project per kind ──
+  // (CLI per-device keys carry a device_id and don't count.)
   {
     const { data: existing } = await db()
       .from('api_keys')
@@ -117,7 +122,10 @@ export async function POST(req: NextRequest) {
       .eq('org_id', org_id)
       .eq('project_id', project_id)
       .eq('user_id', user_id)
+      .eq('kind', kind)
+      .is('device_id', null)
       .eq('is_active', true)
+      .limit(1)
       .maybeSingle()
 
     if (existing) {
@@ -165,7 +173,7 @@ export async function POST(req: NextRequest) {
     team_id: team_id ?? null,
     key_hash:   keyHash,
     key_prefix: keyPrefix,
-    env, scopes, expires_at: expires_at ?? null,
+    env, scopes, kind, expires_at: expires_at ?? null,
   }
   if (sealed) {
     insertPayload.key_enc_cipher = sealed.ciphertext
@@ -194,6 +202,7 @@ export async function POST(req: NextRequest) {
 
   if (error) return dbError(error, 'POST keys')
 
+  await audit({ orgId: org_id, actorUserId: guard.userId, action: 'key.create', targetType: 'api_key', targetId: data?.id ?? null, details: { name, project_id, env: data?.env, scopes: data?.scopes } })
   return NextResponse.json({ ...data, user_id, team_id: team_id ?? null, raw_key: rawKey }, { status: 201 })
 }
 
@@ -216,6 +225,8 @@ export async function PATCH(req: NextRequest) {
 
   const { error } = await db().from('api_keys').update({ is_active: parsed.data.is_active }).eq('id', parsed.data.id).eq('org_id', keyRow.org_id)
   if (error) return dbError(error, 'PATCH keys')
+  invalidateKeyCache()
+  await audit({ orgId: keyRow.org_id, actorUserId: guard.userId, action: 'key.toggle', targetType: 'api_key', targetId: parsed.data.id, details: { is_active: parsed.data.is_active } })
   return NextResponse.json({ ok: true })
 }
 
@@ -230,5 +241,7 @@ export async function DELETE(req: NextRequest) {
 
   const { error } = await db().from('api_keys').delete().eq('id', id!).eq('org_id', keyRow.org_id)
   if (error) return dbError(error, 'DELETE keys')
+  invalidateKeyCache()
+  await audit({ orgId: keyRow.org_id, actorUserId: guard.userId, action: 'key.delete', targetType: 'api_key', targetId: id, details: {} })
   return NextResponse.json({ ok: true })
 }

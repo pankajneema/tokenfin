@@ -3,24 +3,29 @@ import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
 import { requireOrgMember, requireApiKeyOrOrgMember, requireResourcePermission, assertOrgOwnsIds, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
+import { dashSummary }                                from '@/lib/rollups'
+import { getOrgTimezone }                             from '@/lib/org-timezone'
+import { resolveWindow }                              from '@/lib/rollup-scope'
 
 function db() { return createAdminClient() }
 
+/* GET /api/v1/budget — org budget vs spend over the last 30 days (org-local).
+ * Org-level figures, readable by every role ('analytics:view'). spent_usd is
+ * METERED spend (a bill); notional (subscription usage priced at API rates) is
+ * reported separately and never counted against the budget. */
 export async function GET(req: NextRequest) {
-  const guard = await requireApiKeyOrOrgMember(req, req.nextUrl.searchParams.get('org_id'))
+  const guard = await requireApiKeyOrOrgMember(req, req.nextUrl.searchParams.get('org_id'), { permission: 'analytics:view' })
   if (guard instanceof NextResponse) return guard
   const { orgId } = guard
 
-  // Get current month spend from usage_agg
-  const since = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
-  const { data: agg, error: aggErr } = await db()
-    .from('usage_agg')
-    .select('cost_usd')
-    .eq('org_id', orgId)
-    .gte('bucket', since)
-  if (aggErr) return dbError(aggErr, 'GET budget spend')
-
-  const spentUsd = (agg ?? []).reduce((s, r) => s + r.cost_usd, 0)
+  const win = resolveWindow({ days: '30' }, await getOrgTimezone(orgId))
+  let summary
+  try {
+    summary = await dashSummary(db(), orgId, win.from, win.to)
+  } catch (e) {
+    return dbError(e, 'GET budget spend')
+  }
+  const spentUsd = summary.metered_cost_usd
 
   // Get the active org-level monthly limit (budget)
   const { data: limits } = await db()
@@ -40,7 +45,10 @@ export async function GET(req: NextRequest) {
     spent_usd:   +spentUsd.toFixed(4),
     remaining:   budgetUsd != null ? +(budgetUsd - spentUsd).toFixed(4) : null,
     pct_used:    budgetUsd ? +(spentUsd / budgetUsd * 100).toFixed(1) : null,
+    notional_usd: +summary.notional_cost_usd.toFixed(4),
     period:      'last_30d',
+    from:        win.from,
+    to:          win.to,
   })
 }
 

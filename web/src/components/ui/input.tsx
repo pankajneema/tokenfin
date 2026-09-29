@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import type { InputHTMLAttributes } from 'react'
+import { useId, type InputHTMLAttributes } from 'react'
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?:   string
@@ -8,7 +8,9 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export function Input({ label, error, hint, className, id, ...props }: InputProps) {
-  const inputId = id ?? label?.toLowerCase().replace(/\s+/g, '-')
+  const autoId  = useId()
+  const inputId = id ?? (label ? `${label.toLowerCase().replace(/\s+/g, '-')}-${autoId}` : autoId)
+  const msgId   = `${inputId}-msg`
   return (
     <div className="w-full">
       {label && (
@@ -18,15 +20,17 @@ export function Input({ label, error, hint, className, id, ...props }: InputProp
       )}
       <input
         id={inputId}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error || hint ? msgId : undefined}
         className={cn(
           'input w-full',
-          error && 'border-red-400 focus:ring-red-400',
+          error && 'border-[var(--red)] focus:ring-[var(--red)]/30',
           className
         )}
         {...props}
       />
-      {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
-      {!error && hint && <p className="mt-1 text-xs" style={{ color: 'var(--fg-muted)' }}>{hint}</p>}
+      {error && <p id={msgId} role="alert" className="mt-1 text-xs text-[var(--red)]">{error}</p>}
+      {!error && hint && <p id={msgId} className="mt-1 text-xs text-[var(--fg-tertiary)]">{hint}</p>}
     </div>
   )
 }

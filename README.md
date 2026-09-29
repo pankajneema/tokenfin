@@ -10,7 +10,6 @@ See what Claude Code, Codex CLI, Gemini CLI, OpenCode and your own services spen
 [![Next.js 15](https://img.shields.io/badge/Next.js-15-black?logo=nextdotjs)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Supabase](https://img.shields.io/badge/Supabase-Postgres%20%2B%20RLS-3FCF8E?logo=supabase&logoColor=white)](https://supabase.com/)
-[![Go 1.23](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
 
 </div>
@@ -66,23 +65,24 @@ TokenFin answers those questions:
 
 | Area | What you get |
 |---|---|
-| **One-command capture** | `npx tokenfin login && npx tokenfin setup` configures every installed agent (Claude Code, Codex CLI, Gemini CLI, OpenCode) and only reports success once a real event arrives. |
+| **One-command capture** | `npx tokenfin@latest setup` signs you in, mints this device's own keys, configures every installed agent (Claude Code, Codex CLI, Gemini CLI, OpenCode) and only reports success once a real event arrives. `login --device` covers SSH / devcontainers. |
+| **Team rollout** | Download a Claude Code `managed-settings.json` for Jamf / Intune / Ansible from the Connections page, and watch a per-member rollout tracker ([`docs/ROLLOUT.md`](./docs/ROLLOUT.md)). |
 | **Cost attribution** | Spend and tokens by org, project, model, team, member, tool and account. Includes input, output, cache-read, cache-write and reasoning tokens. |
 | **Honest cost accounting** | Every event carries a `cost_basis`. `metered` is a real bill (SDK path). `notional` is subscription usage priced at API rates (CLI agents). Notional dollars are never added into a "real bill" total. One pricing table covers Anthropic, OpenAI (GPT-5, GPT-4.1, o-series) and Gemini 2.5 / 3.x, including cache-read and cache-write pricing. |
-| **Prompt analytics** | Prompt text capture is **on by default**. Prompts are joined to their token counts and cost by prompt id, so you can see which prompts are expensive. Set `CAPTURE_PROMPTS=0` to turn it off for a deployment. |
+| **Prompt analytics** | Prompt text capture is **on by default** — `setup` says so when it runs. Prompts are joined to their token counts and cost by prompt id, so you can see which prompts are expensive. Prompt text expires after 90 days. Opt out per machine with `setup --no-prompts`, per workspace with the org prompt-capture setting, or per deployment with `CAPTURE_PROMPTS=0`. |
 | **Data controls** | **Dashboard → Settings → Data** (owner-only): delete monitoring data (usage events, daily aggregates, captured prompts, traces) older than 7, 30 or 90 days, or delete all of it. Set automatic retention (keep the last *N* days). A daily cron (`/api/v1/cron/retention`) purges expired data. |
 | **Limits and alerts** | Budgets with warn / throttle / block thresholds. Alert rules are evaluated on a schedule and delivered by email (Resend), Slack or webhook. Throttle and block apply to the SDK path only (see [`docs/alerts-and-limits.md`](./docs/alerts-and-limits.md)). |
 | **Team management** | Orgs, projects, teams, roles (owner / admin / member / viewer), invites and bulk provisioning with single-use key-reveal links. |
-| **Read-only MCP server** | `get_spend`, `get_usage_by_model`, `get_daily_costs`, `get_budget_status`, `list_projects`, plus the token-saving tools `compress`, `retrieve` and `savings_stats`. No write tools. |
+| **MCP server (read key)** | `get_spend`, `get_usage_by_model`, `get_daily_costs`, `get_budget_status`, `list_projects`, `savings_stats`, `get_eval_summary`, plus `compress`/`retrieve` (stores the original for reversal) and `evaluate` (calls your configured judge model). Never captures usage. See [`docs/MCP.md`](./docs/MCP.md). |
+| **Budget in your status bar** | `npx tokenfin@latest budget` and an optional Claude Code statusline: `TokenFin $1.23 today · $45.67 MTD · 62% of budget`. |
 | **SDKs** | `@tokenfin/sdk` (TypeScript) and `tokenfin` (Python, sync and async): batched, non-blocking, retry with backoff, circuit breaker. |
-| **Optional scale-out** | A Go ingest service and worker, buffered through Redis, for very high SDK ingest volume. Off by default. |
 
 ## How it works
 
-1. **Connect.** `npx tokenfin login` opens a browser, you approve, and an ingest key (`tfk_…`) is saved to `~/.tokenfin/config.json` (mode `0600`).
-2. **Configure.** `npx tokenfin setup` writes each agent's own telemetry config: an `env` block in `~/.claude/settings.json`, `[otel]` in `~/.codex/config.toml`, `telemetry` in `~/.gemini/settings.json`, and the `opencode-otel-plugin` in `~/.config/opencode/opencode.json`.
+1. **Connect.** `npx tokenfin@latest setup` (or `login`) opens a browser, you approve, and this device gets its own **ingest** key (for telemetry) and **read** key (for status, budget and MCP), saved to `~/.tokenfin/config.json` (mode `0600`) with a stable device id. Re-login rotates only this device's keys and re-points existing agent configs.
+2. **Configure.** `setup` writes each installed agent's own telemetry config: an `env` block in `~/.claude/settings.json`, `[otel]` in `~/.codex/config.toml`, `telemetry` in `~/.gemini/settings.json`, and the `opencode-otel-plugin` in `~/.config/opencode/opencode.json` (atomic writes, backups first). Teams can instead push a managed-settings.json via MDM.
 3. **Capture.** Agents push OTLP (JSON or protobuf) to `/api/otel/v1/{logs,metrics,traces}`. The receiver authenticates the key by its SHA-256 hash, normalizes each event and writes `usage_events` rows. It deduplicates on `event_id`, so a replay is a no-op.
-4. **Attribute.** Each row carries org, project, key, user, model, tool, token breakdown and cost. Cost comes from a single pricing table that includes cache pricing ([`web/src/lib/mcp/pricing.ts`](./web/src/lib/mcp/pricing.ts), mirrored in [`backend/internal/pricing/pricing.go`](./backend/internal/pricing/pricing.go)).
+4. **Attribute.** Each row carries org, project, key, user, model, tool, token breakdown and cost. Cost comes from a single pricing table that includes cache pricing ([`web/src/lib/mcp/pricing.ts`](./web/src/lib/mcp/pricing.ts)), with per-org overrides.
 5. **Explore.** The dashboard, the alert engine and the MCP server read those tables. Row-Level Security scopes every read to the caller's org.
 
 ## Architecture
@@ -96,7 +96,7 @@ flowchart LR
         CX["Codex CLI"]
         GM["Gemini CLI"]
         OC["OpenCode"]
-        CLI["tokenfin CLI<br/>login / setup / status / doctor / remove"]
+        CLI["tokenfin CLI<br/>login / setup / status / doctor / budget / remove"]
     end
 
     subgraph Apps["Your services"]
@@ -118,26 +118,19 @@ flowchart LR
         UI["Dashboard (RSC)"]
     end
 
-    subgraph Go["backend/ · Go (optional, Railway)"]
-        GI["cmd/ingest :8001"]
-        R[("Redis")]
-        GW["cmd/worker :8002"]
-    end
-
     DB[("Supabase<br/>Postgres + Auth + RLS")]
     Mail["Resend / Slack / webhooks"]
 
     CLI -. writes config .-> CC & CX & GM & OC
-    CC & CX & GM & OC -- "OTLP/HTTP + Bearer tfk_…" --> OTLP
+    CC & CX & GM & OC -- "OTLP/HTTP + Bearer ingest key" --> OTLP
     SDK -- "POST + Bearer tfk_…" --> ING
-    MC -- "JSON-RPC + read-scoped key" --> MCP
+    MC -- "JSON-RPC + read key" --> MCP
+    CLI -- "read key: connections, me/budget" --> REST
     Browser --> UI
     Browser --> REST
 
     OTLP --> DB
     ING --> DB
-    ING -. "if INGEST_SERVICE_URL is set" .-> GI
-    GI --> R --> GW --> DB
     REST --> DB
     MCP --> DB
     UI --> DB
@@ -343,12 +336,11 @@ erDiagram
 | Telemetry intake | OTLP/HTTP (JSON and protobuf via `protobufjs`) | `web/src/lib/otlp/` |
 | MCP | Streamable HTTP, JSON-RPC 2.0 | `web/src/lib/mcp/` |
 | Validation | Zod | |
-| Optional ingest scale-out | Go 1.23, Redis 7 (`go-redis/v9`) | `backend/`, off by default |
 | Optional burst guard | Upstash Redis rate limiting | Only enforced when `TOKENFIN_ENFORCE_RATE_LIMITS=1` |
 | Email | Resend | Alert delivery. If no key is set, email delivery is skipped |
 | CLI | Node.js ≥ 16, CommonJS, no runtime deps | `cli/`, published as `tokenfin` |
 | SDKs | TypeScript (tsup), Python ≥ 3.9 (stdlib; `aiohttp` optional) | `sdk/`, `sdk/python/` |
-| Tests | Vitest (web), `go test`, pytest | See [Testing](#testing) |
+| Tests | Vitest (web), `node:test` (CLI), pytest | See [Testing](#testing) |
 | CI | GitHub Actions | `.github/workflows/ci.yml` |
 
 ## Design
@@ -368,7 +360,8 @@ erDiagram
 - **SDK ingest** (`/api/v1/ingest`): validates the key and its `write` scope, checks org-level monthly spend limits against metered month-to-date spend (the `org_spend_since` RPC; returns `403` at block, `429` with `Retry-After` at throttle), prices the event, writes `usage_events` + `usage_agg`, and captures prompt text when supplied.
 - **Alert engine** (`web/src/lib/alerts/engine.ts`): shared by the scheduled sweep (`GET /api/v1/cron/alerts`) and the "test fire" button.
 - **Data retention** (`/api/v1/data`, `GET /api/v1/cron/retention`): owner-only deletion and retention settings, plus a daily purge that calls the `purge_expired_data()` database function. Both cron routes fail closed: they return `401` unless `CRON_SECRET` is set and presented as a Bearer token.
-- **Optional Go services** (`backend/`): `cmd/ingest` serves `POST /v1/ingest` and `GET /health` on `:8001`, buffering through Redis. `cmd/worker` consumes the stream, writes to Supabase, syncs limits and reconciles counters. They only take traffic when the web app's `INGEST_SERVICE_URL` is set. CLI-agent capture never uses them.
+- **CLI login** (`/api/v1/cli/token`, `/cli/authorize`, device flow `/api/v1/cli/device/{start,poll,approve}` + `/cli/device`): mints per-device ingest + read keys and hands them over through single-use `key_reveals` tokens. The device flow is stateless until approval (HMAC-signed device codes); the approved reveal token is parked in `key_reveals` under a server-derived handle for 10 minutes.
+- **Rollout** (`/api/v1/setup/managed-settings`): owner/admin download of a Claude Code managed-settings.json carrying the org's ingest-only key; audited.
 
 ### Database
 
@@ -412,6 +405,7 @@ tokenfin/
 │   │   ├── api/mcp/             read-only MCP server endpoint
 │   │   ├── welcome/             first-run page: auto-creates the workspace
 │   │   ├── cli/authorize/       browser half of `tokenfin login`
+│   │   ├── cli/device/          approve a `tokenfin login --device` code
 │   │   └── keys/reveal/         one-time key reveal page
 │   ├── src/lib/
 │   │   ├── otlp/                auth · decode · proto · mapping · normalize · metrics · persist
@@ -424,13 +418,7 @@ tokenfin/
 │   ├── src/components/          dashboard widgets, layout, onboarding, ui primitives
 │   ├── vercel.json              cron schedules (alerts, retention)
 │   └── .env.local.example
-├── backend/                     Optional Go scale-out for SDK ingest
-│   ├── cmd/ingest/              POST /v1/ingest, GET /health (:8001)
-│   ├── cmd/worker/              Redis → Supabase writer, limit sync, alert publish (:8002)
-│   ├── cmd/loadtest/            ingest load generator
-│   ├── internal/                auth, config, db, ingest, models, pricing, redis, worker
-│   └── railway.toml             Railway deploy config (ingest)
-├── cli/                         npm package `tokenfin` (login, setup, status, doctor, remove)
+├── cli/                         npm package `tokenfin` (login, setup, status, doctor, budget, statusline, remove) + node:test suite
 ├── sdk/                         @tokenfin/sdk (TypeScript)
 │   └── python/                  `tokenfin` Python SDK (sync + async) and tests
 ├── db/
@@ -440,11 +428,11 @@ tokenfin/
 │   └── functions.sql            SQL helper functions
 ├── supabase/migrations/         timestamped incremental migrations for `supabase db push`
 ├── infra/
-│   ├── docker/                  Dockerfile.{web,ingest,worker}, docker-compose.yml
+│   ├── docker/                  Dockerfile.web, docker-compose.yml (web only)
 │   └── k8s/                     placeholder (README only)
 ├── scripts/                     regression and e2e scripts (Node .mjs)
-├── docs/                        architecture, data flow, alerts, setup, MCP
-├── .github/workflows/ci.yml     CI: web typecheck/lint/test, Go vet/build/test, Python SDK tests, SDK typecheck, Docker builds
+├── docs/                        architecture, data flow, alerts, setup, rollout, MCP
+├── .github/workflows/           ci.yml (web, SDKs, Docker web image), cron.yml, publish-cli.yml / publish-sdk.yml (manual)
 ├── Makefile                     common dev targets
 ├── CLAUDE.md                    quick reference for AI coding sessions
 └── MIGRATION.md                 what was deliberately removed (proxy, hooks, MCP writes) and why
@@ -455,19 +443,24 @@ tokenfin/
 You need a TokenFin account (sign up on your TokenFin deployment) and Node.js ≥ 16.
 
 ```bash
-npx tokenfin login     # opens a browser, approve, stores an ingest key in ~/.tokenfin/config.json
-npx tokenfin setup     # configures every installed agent and waits for the first real event
+npx tokenfin@latest setup     # sign in (browser), per-device keys, configure every installed agent, wait for the first event
 ```
 
 Then run one turn in Claude Code (or Codex, Gemini, OpenCode). `setup` exits when the event lands.
+No browser on the machine? `npx tokenfin@latest login --device` first. Always use `@latest` — npx
+otherwise reuses an old cached version (the CLI tells you when an update exists).
+
+**Prompt text is sent by default** (90-day retention, visible to workspace admins). Opt out with
+`npx tokenfin@latest setup --no-prompts`.
 
 | Command | Purpose |
 |---|---|
-| `npx tokenfin status` | Shows which agents are configured and whether events are flowing |
-| `npx tokenfin doctor` | Diagnoses silent data loss (config validity, protocol, temporality, recent events) |
-| `npx tokenfin remove` | Clean uninstall: strips every agent's TokenFin config (backed up first) and unregisters the MCP server |
+| `npx tokenfin@latest status` | Shows which agents are configured and whether events are flowing |
+| `npx tokenfin@latest doctor` | Diagnoses silent data loss: config validity, protocol, temporality, key drift, revoked keys, recent events |
+| `npx tokenfin@latest budget` | Today / month-to-date spend and your tightest budget (`setup --statusline` puts it in Claude Code's status bar) |
+| `npx tokenfin@latest remove` | Revokes this device's keys, strips every agent's TokenFin config (backed up first), unregisters MCP, deletes `~/.tokenfin` |
 
-Options: `--key <tfk_…>` (or `TOKENFIN_KEY`) skips browser login. `--app-url <url>` (or `TOKENFIN_APP_URL`) targets a self-hosted deployment. `--yes` runs non-interactively. See [`cli/README.md`](./cli/README.md) and [`docs/SETUP_HUB.md`](./docs/SETUP_HUB.md) for per-agent details.
+Options: `--key <tfk_…>` (or `TOKENFIN_KEY`) skips browser login. `--app-url <url>` (or `TOKENFIN_APP_URL`) targets a self-hosted deployment. `--yes` runs non-interactively. See [`cli/README.md`](./cli/README.md), [`docs/SETUP_HUB.md`](./docs/SETUP_HUB.md) and, for teams, [`docs/ROLLOUT.md`](./docs/ROLLOUT.md).
 
 ## Local development
 
@@ -475,7 +468,7 @@ Options: `--key <tfk_…>` (or `TOKENFIN_KEY`) skips browser login. `--app-url <
 
 - Node.js 20 (matches CI) and npm
 - A Supabase project, either hosted (free tier) or local through the [Supabase CLI](https://supabase.com/docs/guides/cli) and Docker
-- Optional: Go 1.23 and Redis 7 (only for the Go ingest path), Python ≥ 3.9 (Python SDK)
+- Optional: Python ≥ 3.9 (Python SDK)
 
 ### 1. Install
 
@@ -519,13 +512,12 @@ cp web/.env.local.example web/.env.local
 | `NEXT_PUBLIC_SUPABASE_URL` | **Required** | Supabase API URL (local: `http://127.0.0.1:54321`) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **Required** | Supabase anon key (browser-safe) |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Required** | Service-role key. Server-only, never expose to the client |
-| `KEY_ENCRYPTION_SECRET` | Required for key reveal/copy | Secret for AES-256-GCM encryption of one-time reveal links and copyable keys |
+| `KEY_ENCRYPTION_SECRET` | Required for CLI login, key reveal/copy | Secret for AES-256-GCM encryption of one-time reveal links and copyable keys, and for signing `login --device` codes |
 | `NEXT_PUBLIC_APP_URL` | Optional | Public origin used in invite links, setup commands and the MCP Origin check. Defaults to the hosted app URL, so set it when self-hosting |
 | `CAPTURE_PROMPTS` | Optional | Prompt text capture is on unless set to `0` |
 | `CRON_SECRET` | Required for scheduled jobs | Bearer secret for `/api/v1/cron/alerts` and `/api/v1/cron/retention`. Both fail closed (`401`) when it is unset. Vercel Cron sends it automatically |
 | `RESEND_API_KEY` | Optional | Enables alert email. If blank, email delivery is skipped |
 | `ALERT_EMAIL_FROM` | Optional | From-address for alert email |
-| `INGEST_SERVICE_URL` | Optional | Routes `/api/v1/ingest` through the Go ingest service (for example `http://localhost:8001`). Leave unset to write directly |
 | `TOKENFIN_ENFORCE_RATE_LIMITS` | Optional | `1` enables the per-key abuse guard (off by default; not a product cap) |
 | `TOKENFIN_RATE_LIMIT_PER_MIN` | Optional | Requests per minute allowed by the abuse guard (default `600`) |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Optional | Upstash Redis backing the abuse guard |
@@ -534,7 +526,7 @@ cp web/.env.local.example web/.env.local
 | `EVAL_JUDGE_KEY` / `ANTHROPIC_API_KEY` / `EVAL_JUDGE_MODEL` | Optional | Server-side LLM judge for the Evals feature only (used only when `EVAL_ALLOW_SERVER_KEY=1`). This is not a capture path; orgs normally bring their own key |
 | `NEXT_PUBLIC_BACKEND_URL` | Optional | Legacy backend base URL constant (`lib/constants.ts`) |
 
-Sample files: `web/.env.local.example` (local dev), `web/.env.production.example` (paste into Vercel) and `.env.example` at the repo root (docker compose and the Go services). Generate `KEY_ENCRYPTION_SECRET` and `CRON_SECRET` with `openssl rand -hex 32`.
+Sample files: `web/.env.local.example` (local dev), `web/.env.production.example` (paste into Vercel) and `.env.example` at the repo root (docker compose). Generate `KEY_ENCRYPTION_SECRET` and `CRON_SECRET` with `openssl rand -hex 32`.
 
 ### 4. Run
 
@@ -545,42 +537,33 @@ make dev                # = cd web && npm run dev → http://localhost:3001
 Sign up, create an org and project, then point the CLI at your local app:
 
 ```bash
-npx tokenfin login --app-url http://localhost:3001
-npx tokenfin setup --app-url http://localhost:3001
+node cli/bin/tokenfin.js setup --app-url http://localhost:3001   # the CLI from this checkout
 ```
 
-### Optional: Go ingest path
+To try the CLI without touching your real agent configs, give it a throwaway home:
+`HOME=$(mktemp -d) node cli/bin/tokenfin.js setup --app-url http://localhost:3001 --no-mcp`.
 
-```bash
-cp backend/.env.example backend/.env   # SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, REDIS_URL, ports
-make docker-redis                      # Redis 7 on :6379 via docker compose
-make go-ingest                         # :8001 (in one terminal)
-make go-worker                         # :8002 (in another)
-# then set INGEST_SERVICE_URL=http://localhost:8001 in web/.env.local
-```
-
-Other useful targets: `make typecheck`, `make lint`, `make go-vet`, `make go-build`, `make sdk-build`, `make sdk-py-test`, `make check` (Go vet + web typecheck + SDK typecheck + Python tests), `make db-migrate` (lists migration files in order), `make gen-types`.
+Other useful targets: `make typecheck`, `make lint`, `make sdk-build`, `make sdk-py-test`, `make check` (web typecheck + SDK typecheck + Python tests), `make db-migrate` (lists migration files in order), `make gen-types`.
 
 ## Docker
 
-These files exist in [`infra/docker/`](./infra/docker): `Dockerfile.ingest`, `Dockerfile.worker` (multi-stage builds to `scratch`), `Dockerfile.web` (Node 20 Alpine) and `docker-compose.yml` (services `redis`, `ingest`, `worker`, `web`). The Makefile wraps them:
+[`infra/docker/`](./infra/docker) holds `Dockerfile.web` (Node 20 Alpine) and `docker-compose.yml` with a single `web` service (Supabase stays external). The Makefile wraps them:
 
 ```bash
 cp .env.example .env     # root env file used by docker compose
-make docker-build        # build all images
-make docker-up           # redis + ingest + worker + web, detached
+make docker-build        # build the web image
+make docker-up           # web, detached
 make docker-logs         # follow logs
-make docker-down         # stop and remove containers + volumes
-make docker-redis        # only Redis, for local Go/Node development
+make docker-down         # stop and remove containers
 ```
 
-The web image builds a Next.js standalone server: `Dockerfile.web` sets `NEXT_OUTPUT_STANDALONE=1`, which makes `web/next.config.js` emit `output: 'standalone'` (Vercel builds leave it unset). The server listens on port **3001**. `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `NEXT_PUBLIC_APP_URL` are inlined into the client bundle at build time, so they are passed as **build args**. Compose reads them from the root `.env`, and `NEXT_PUBLIC_APP_URL` defaults to `http://localhost:3001`. Inside compose the web container routes SDK ingest through the Go service (`INGEST_SERVICE_URL=http://ingest:8001`).
+The web image builds a Next.js standalone server: `Dockerfile.web` sets `NEXT_OUTPUT_STANDALONE=1`, which makes `web/next.config.js` emit `output: 'standalone'` (Vercel builds leave it unset). The server listens on port **3001**. `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `NEXT_PUBLIC_APP_URL` are inlined into the client bundle at build time, so they are passed as **build args**. Compose reads them from the root `.env`, and `NEXT_PUBLIC_APP_URL` defaults to `http://localhost:3001`. SDK ingest and the OTLP receivers are served by the same web container.
 
 To run the full stack:
 
-1. Fill in the Supabase values in the root `.env` (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`). Add `NEXT_PUBLIC_APP_URL` if you serve it somewhere other than `http://localhost:3001`.
+1. Fill in the Supabase values in the root `.env` (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, plus `KEY_ENCRYPTION_SECRET` and `CRON_SECRET`). Add `NEXT_PUBLIC_APP_URL` if you serve it somewhere other than `http://localhost:3001`.
 2. Apply the database migrations (see [Database](#2-database)).
-3. Run `make docker-up`, then open http://localhost:3001. Ingest is on :8001 and the worker on :8002.
+3. Run `make docker-up`, then open http://localhost:3001.
 
 To build only the web image:
 
@@ -596,13 +579,13 @@ Server-only secrets (`SUPABASE_SERVICE_ROLE_KEY`, `KEY_ENCRYPTION_SECRET`, `CRON
 
 ## Deployment
 
-A production deployment has three parts. Only the first two are required.
+A production deployment has two parts: Supabase and the Next.js app on Vercel.
 
 | Component | Platform | How |
 |---|---|---|
 | **Database** | Supabase | Create a project and apply `db/migrations/001` → `006` in order (SQL Editor or `psql`). For later incremental changes on a linked project, use `supabase db push` with `supabase/migrations/` |
-| **Web app** | Vercel | Import the repo and set **Root Directory = `web`** (it has its own `web/vercel.json`). Framework preset: Next.js. Add the env vars from the table above. Set `NEXT_PUBLIC_APP_URL` to your production origin |
-| **Go ingest** *(optional)* | Railway | `backend/railway.toml` builds `infra/docker/Dockerfile.ingest` and starts `/ingest`. Set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `REDIS_URL`, and add a Redis service. Deploy the worker as a second service from `Dockerfile.worker`. Then set `INGEST_SERVICE_URL` on the web app |
+| **Web app** | Vercel | Import the repo and set **Root Directory = `web`** (it has its own `web/vercel.json`; functions run in region `icn1`). Framework preset: Next.js. Add the env vars from the table above. Set `NEXT_PUBLIC_APP_URL` to your production origin |
+| **CLI** *(npm)* | npm | Bump `cli/package.json`, then run GitHub → Actions → **Publish CLI** (`.github/workflows/publish-cli.yml`, manual; tests on Linux/macOS/Windows, then `npm publish --access public` with the `NPM_TOKEN` secret). Leave *dry run* ticked to only test + pack |
 
 **Scheduled jobs.** Two endpoints run on a schedule. Both require `Authorization: Bearer $CRON_SECRET` and return `401` without it.
 
@@ -631,22 +614,22 @@ The workflow skips itself until `TOKENFIN_URL` is set, and can be run by hand fr
 | Web unit tests | `cd web && npm test` | Vitest, Node environment, `src/**/*.test.ts` (OTLP decode/normalize, metric derivation, pagination) |
 | Web typecheck | `make typecheck` (= `cd web && npm run typecheck`) | `tsc --noEmit`, strict mode |
 | Web lint | `make lint` (= `cd web && npm run lint`) | `next lint` |
-| Go | `cd backend && go test ./...` | Also `make go-vet`, `make go-build` |
+| CLI | `cd cli && npm test` | `node:test`: hook stripping, atomic writes, `--no-prompts`, statusline, update check, and end-to-end runs against a mock server with a temp `HOME` |
 | TypeScript SDK | `make sdk-typecheck` | `cd sdk && npm run typecheck` |
 | Python SDK | `make sdk-py-install && make sdk-py-test` | pytest in `sdk/python/tests` |
-| Everything | `make check` | Go vet, web typecheck, SDK typecheck, Python tests |
+| Everything | `make check` | Web typecheck, SDK typecheck, Python tests |
 
-CI (`.github/workflows/ci.yml`) runs on pushes to `main`/`dev` and on pull requests to `main`. It runs web typecheck, lint and Vitest; Go vet, build (ingest + worker) and `go test`; Python SDK pytest; and TypeScript SDK typecheck. Docker image builds (ingest, worker, web) run on pushes only. The Node regression scripts in `scripts/` need a running deployment and real keys, so they are not part of CI.
+CI (`.github/workflows/ci.yml`) runs on pushes to `main`/`dev` and on pull requests to `main`. It runs web typecheck, lint and Vitest; Python SDK pytest; and TypeScript SDK typecheck. The Docker web image build runs on pushes only. The CLI suite runs in the manual Publish CLI workflow. The Node regression scripts in `scripts/` need a running deployment and real keys, so they are not part of CI.
 
 ## Security
 
 - **No provider keys, no proxy.** TokenFin only receives telemetry. It cannot see or reuse your Anthropic, OpenAI or Google credentials. See [`MIGRATION.md`](./MIGRATION.md).
-- **API keys are hashed.** Keys (`tfk_<env>_<segment>_<32 hex>`) are stored as a **SHA-256** `key_hash` plus a masked `key_prefix`. Authentication hashes the presented key and looks it up, then checks `is_active`, `expires_at` and scopes (`read` / `write`).
+- **API keys are hashed.** Keys (`tfk_<env>_<segment>_<32 hex>`) are stored as a **SHA-256** `key_hash` plus a masked `key_prefix`. Authentication hashes the presented key and looks it up, then checks `is_active`, `expires_at` and scopes. CLI logins mint **per-device** keys: an `ingest` key (telemetry only, cannot read) and a `read` key (status, budget, MCP).
 - **Encrypted reveal.** Bulk-provisioned keys are delivered through single-use, expiring **AES-256-GCM** reveal links. The ciphertext is nulled after the first reveal. Copy-anytime keys are encrypted at rest and decrypted only for org admins. Both need `KEY_ENCRYPTION_SECRET`.
 - **Row-Level Security** on every table: members read only their own org. Sensitive tables have no client policies at all. Migration `005_security_hardening` removes client-side writes to `members`, makes `SECURITY DEFINER` functions executable only by `service_role` (with a pinned `search_path`), switches the `orgs` view to `security_invoker`, and adds tenant-scoped keys to traces, spans and `ccr_store`.
 - **Service role stays on the server.** `createAdminClient()` is used only in server code (OTLP receiver, ingest, cron, admin-gated routes), which enforces org membership and role checks itself (`lib/api/auth.ts`, `lib/rbac.ts`).
-- **MCP is read-only.** MCP keys are created with `scopes: ['read']`, the server exposes no write tools, and requests are Origin-checked.
-- **Your data, your retention.** Settings → Data lets the org **owner** delete old monitoring data or all of it (the API requires `confirm: "DELETE"`) and set automatic retention. Prompt capture can be disabled per deployment with `CAPTURE_PROMPTS=0`.
+- **MCP needs a read key.** Ingest-only keys are refused. No tool captures or deletes usage; `compress` stores originals for `retrieve` and `evaluate` calls your configured judge model (see [`docs/MCP.md`](./docs/MCP.md)). Browser requests are checked against an Origin allow-list.
+- **Your data, your retention.** Settings → Data lets the org **owner** delete old monitoring data or all of it (the API requires `confirm: "DELETE"`) and set automatic retention. Prompt capture can be disabled per machine (`setup --no-prompts`), per workspace (org setting), or per deployment (`CAPTURE_PROMPTS=0`); prompt text expires after 90 days.
 - **Fail-closed cron.** `/api/v1/cron/*` returns `401` unless `CRON_SECRET` is configured and matches (constant-time comparison on the retention route).
 
 Found a vulnerability? Please **do not open a public issue**. Follow [`SECURITY.md`](./SECURITY.md).
@@ -663,7 +646,11 @@ All routes are under `web/src/app/api`. "Key" means `Authorization: Bearer tfk_�
 | `/api/otel/v1/traces` | POST | Key | OTLP traces: GenAI spans → traces/spans and usage |
 | `/api/mcp` | POST | Key (`read`) | Read-only MCP server (Streamable HTTP, JSON-RPC 2.0) |
 | `/api/v1/connections` | GET | Key or session | Per-source connection status (used by `setup`, `status`, `doctor`) |
-| `/api/v1/cli/token` | POST | Session | Mints the CLI key during `tokenfin login` and returns a single-use reveal token (never the raw key) |
+| `/api/v1/cli/token` | POST | Session | Mints this device's ingest + read keys during `tokenfin login` (rotating only that device's old ones) and returns a single-use reveal token (never a raw key) |
+| `/api/v1/cli/device/start`, `/api/v1/cli/device/poll` | POST | None (signed device code) | `tokenfin login --device`: issue a user code; poll until approved, then receive the single-use reveal token |
+| `/api/v1/cli/device/approve` | POST | Session | Approve a device code from `/cli/device` (mints keys via `/api/v1/cli/token`) |
+| `/api/v1/me/budget` | GET | Key (`read`) or session | Today / MTD spend (yours and the org's) and the tightest limit with % used — powers `tokenfin budget` and the statusline |
+| `/api/v1/setup/managed-settings` | GET | Session (owner/admin) | Claude Code managed-settings.json with the org ingest key, team tag and prompt policy (`?download=1`) |
 | `/api/v1/analytics`, `/api/v1/analytics/prompts` | GET | Session | Aggregated spend and prompt analytics |
 | `/api/v1/budget`, `/api/v1/models` | GET | Session | Budget vs. spend, model usage summary |
 | `/api/v1/keys` | GET, POST, PATCH, DELETE | Session (admin) | Manage API keys (raw key returned once on create) |
@@ -764,7 +751,8 @@ Derived from the verification status in [`docs/`](./docs) and [`MIGRATION.md`](.
 - [x] Free and unlimited: no plans, billing or usage caps
 - [x] Customer data controls: delete by age, delete all, automatic retention with a daily purge
 - [x] Pricing for Anthropic, OpenAI (GPT-5, GPT-4.1, o-series) and Gemini 2.5 / 3.x, with cache pricing
-- [x] CI runs web, Go and Python SDK tests
+- [x] CI runs web and Python SDK tests; CLI tests gate the npm publish workflow
+- [x] Per-device CLI keys (ingest + read), device-code login, managed-settings rollout kit
 - [ ] **Gemini CLI**: end-to-end verification with a real account (config matches official docs)
 - [ ] **OpenCode**: end-to-end session run (receiver path already verified with real payloads)
 - [ ] IDE extensions (Claude Code / Codex for VS Code and JetBrains): empirical verification
@@ -781,7 +769,8 @@ Derived from the verification status in [`docs/`](./docs) and [`MIGRATION.md`](.
 | [`docs/architecture.md`](./docs/architecture.md) | System map, monorepo layout, auth flow |
 | [`docs/data-flow.md`](./docs/data-flow.md) | Capture paths, metered vs. notional, OTLP metric derivation |
 | [`docs/alerts-and-limits.md`](./docs/alerts-and-limits.md) | What limits can enforce vs. warn about, how alerts fire |
-| [`docs/SETUP_HUB.md`](./docs/SETUP_HUB.md) | Per-agent connection details |
+| [`docs/SETUP_HUB.md`](./docs/SETUP_HUB.md) | Per-agent connection details, keys, prompt capture, statusline |
+| [`docs/ROLLOUT.md`](./docs/ROLLOUT.md) | Rolling out to a team: managed settings, rollout tracker, privacy, offboarding |
 | [`docs/MCP.md`](./docs/MCP.md) | The read-only MCP server and client configs |
 | [`cli/README.md`](./cli/README.md) | CLI command reference |
 | [`CLAUDE.md`](./CLAUDE.md) | Schema quick reference, route table, page → data-source map |

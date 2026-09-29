@@ -1,7 +1,10 @@
-import { createClient }      from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/server'
-import { daysAgoIST, tsNDaysAgo } from '@/lib/dates'
+import { daysAgoIn } from '@/lib/dates'
+import { requireOrgContext } from '@/lib/org-context'
+import { dashBreakdown } from '@/lib/rollups'
+import { can }                from '@/lib/rbac'
 import { ModelsClient }       from './_client'
+import { PriceFindings }      from '@/components/dashboard/price-findings'
 
 export const metadata = { title: 'Models — TokenFin' }
 
@@ -10,82 +13,77 @@ export interface EnabledModel {
   addedAt:       string
   tokensUsed30d: number
   costUsed30d:   number
+  /** measured mean latency over the last 30 days; null when not reported */
+  avgLatencyMs:  number | null
+}
+
+export interface CustomPrice {
+  model_prefix:      string
+  input_per_m:       number
+  output_per_m:      number
+  cache_read_per_m:  number | null
+  cache_write_per_m: number | null
+  updated_at:        string | null
 }
 
 export default async function ModelsPage() {
-  const supabase = createClient()
-  const admin    = createAdminClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: _mb } = await admin
-    .from('members')
-    .select('org_id')
-    .eq('user_id', user!.id)
-    .limit(1)
-
-  const orgId    = _mb?.[0]?.org_id ?? ''
-  const sinceDate = daysAgoIST(30)   // IST date for usage_agg.bucket
-  const sinceTs   = tsNDaysAgo(30)   // UTC ts for usage_events.created_at
+  const ctx   = await requireOrgContext()
+  const admin = createAdminClient()
+  const { orgId, role } = ctx
+  const to   = daysAgoIn(0, ctx.timezone)
+  const from = daysAgoIn(29, ctx.timezone)   // last 30 org-local days, today included
 
   const [
     { data: orgModels },
-    { data: aggRows },
-    { data: evtRows },
+    usage,
+    { data: priceRows },
   ] = await Promise.all([
     admin
       .from('org_models')
       .select('model, added_at')
       .eq('org_id', orgId)
       .order('added_at', { ascending: true }),
+    // Rollups carry metered + notional, so no usage_agg / raw-event fallback.
+    dashBreakdown(admin, orgId, from, to, 'model', undefined, 1000)
+      .catch(e => { console.error('[models] breakdown failed:', (e as Error)?.message ?? e); return null }),
     admin
-      .from('usage_agg')
-      .select('model, total_tokens, cost_usd')
+      .from('org_model_prices')
+      .select('model_prefix, input_per_m, output_per_m, cache_read_per_m, cache_write_per_m, updated_at')
       .eq('org_id', orgId)
-      .gte('bucket', sinceDate),
-    admin
-      .from('usage_events')
-      .select('model, total_tokens, cost_usd, cost_basis')
-      .eq('org_id', orgId)
-      .gte('created_at', sinceTs),
+      .order('model_prefix', { ascending: true }),
   ])
 
-  // usage_agg is written async and can lag or partially miss rows — fall back
-  // to raw usage_events (source of truth) when agg looks incomplete, same
-  // pattern used across the dashboard/analytics pages. usage_agg only ever
-  // holds METERED rows, so the completeness check compares against the
-  // metered subset of events too — otherwise orgs with subscription
-  // (notional) usage would always look "incomplete" and never use the fast
-  // path, even when usage_agg is perfectly complete for what it tracks.
-  const aggCostTotal  = (aggRows ?? []).reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const evtsCostTotal = (evtRows ?? []).filter(r => (r as Record<string,unknown>).cost_basis !== 'notional').reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
-  const aggIsComplete = aggCostTotal > 0 && aggCostTotal >= evtsCostTotal * 0.95
-  // usage_agg NEVER contains notional rows (by design) — top it up with
-  // notional rows read straight from raw events, or trusting agg silently
-  // drops subscription spend/tokens from the per-model breakdown below.
-  const notionalRows  = (evtRows ?? []).filter(r => (r as Record<string,unknown>).cost_basis === 'notional')
-  const usageRows      = aggIsComplete ? [...(aggRows ?? []), ...notionalRows] : (evtRows ?? [])
+  const customPrices: CustomPrice[] = (priceRows ?? []).map(r => ({
+    model_prefix:      r.model_prefix,
+    input_per_m:       Number(r.input_per_m),
+    output_per_m:      Number(r.output_per_m),
+    cache_read_per_m:  r.cache_read_per_m  == null ? null : Number(r.cache_read_per_m),
+    cache_write_per_m: r.cache_write_per_m == null ? null : Number(r.cache_write_per_m),
+    updated_at:        r.updated_at ?? null,
+  }))
 
-  // Aggregate usage per model
-  const usageMap = new Map<string, { tokens: number; cost: number }>()
-  for (const row of usageRows) {
-    const prev = usageMap.get(row.model) ?? { tokens: 0, cost: 0 }
-    usageMap.set(row.model, {
-      tokens: prev.tokens + (row.total_tokens ?? 0),
-      cost:   prev.cost   + Number(row.cost_usd ?? 0),
-    })
-  }
+  const usageMap = new Map((usage?.rows ?? []).map(r => [r.key, r]))
 
   const enabledModels: EnabledModel[] = (orgModels ?? []).map(m => {
-    const u = usageMap.get(m.model) ?? { tokens: 0, cost: 0 }
+    const u = usageMap.get(m.model)
     return {
       model:         m.model,
       addedAt:       m.added_at,
-      tokensUsed30d: u.tokens,
-      costUsed30d:   u.cost,
+      tokensUsed30d: u?.total_tokens ?? 0,
+      costUsed30d:   u?.cost_usd ?? 0,
+      avgLatencyMs:  u?.avg_latency_ms ?? null,
     }
   })
 
-  return <ModelsClient initialModels={enabledModels} orgId={orgId} />
+  return (
+    <div className="space-y-5">
+      <PriceFindings orgId={orgId} />
+      <ModelsClient
+        initialModels={enabledModels}
+        orgId={orgId}
+        initialPrices={customPrices}
+        canManagePrices={can(role, 'models:manage')}
+      />
+    </div>
+  )
 }

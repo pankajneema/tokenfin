@@ -1,60 +1,83 @@
 'use client'
 import { useState, useMemo } from 'react'
 import {
-  Search, ChevronDown, ChevronUp, Zap, Eye,
-  BarChart3, Check, Calculator, X,
-  TrendingDown, Star, AlertTriangle, Plus, Trash2,
-  Cpu,
+  Search, ChevronDown, ChevronUp, Eye,
+  Check, Calculator, X,
+  AlertTriangle, Plus, Trash2,
+  Cpu, Pencil, Tag,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { EnabledModel } from './page'
+import { priceFor } from '@/lib/mcp/pricing'
+import { matchOverride } from '@/lib/pricing-overrides'
+import type { EnabledModel, CustomPrice } from './page'
 
 /* ── Types ── */
 type Provider    = 'anthropic' | 'openai' | 'google'
-type Tier        = 'ultra' | 'balanced' | 'fast'
 type ModelStatus = 'ga' | 'beta' | 'new' | 'deprecated'
 type SortKey     = 'name' | 'input_price' | 'output_price' | 'context' | 'usage'
 
-interface CatalogModel {
+/** Identity + capability metadata only — prices come from lib/mcp/pricing.ts. */
+interface CatalogMeta {
   id: string; name: string; displayName: string; provider: Provider
-  tier: Tier; status: ModelStatus
+  status: ModelStatus
   contextK: number
-  inputPer1M: number; outputPer1M: number
   features: string[]
-  recommended?: boolean; notes?: string
+  notes?: string
+}
+
+type PriceSource = 'list' | 'override' | 'unknown'
+interface CatalogModel extends CatalogMeta {
+  inputPer1M: number; outputPer1M: number
+  priceSource: PriceSource
 }
 
 interface Model extends CatalogModel {
   addedAt:       string
   tokensUsed30d: number
   costUsed30d:   number
+  avgLatencyMs?: number | null
 }
 
-/* ── Full model catalog (pricing never changes, kept static) ── */
-const CATALOG: CatalogModel[] = [
-  { id: 'claude-opus-4-8',     name: 'claude-opus-4-8',         displayName: 'Claude Opus 4',      provider: 'anthropic', tier: 'ultra',    status: 'ga',   contextK: 200,  inputPer1M: 15.00, outputPer1M: 75.00, features: ['Multimodal','Function calling','Extended thinking','Streaming'] },
-  { id: 'claude-sonnet-4-6',   name: 'claude-sonnet-4-6',       displayName: 'Claude Sonnet 4',    provider: 'anthropic', tier: 'balanced', status: 'new',  contextK: 200,  inputPer1M: 3.00,  outputPer1M: 15.00, features: ['Multimodal','Function calling','Extended thinking','Streaming'], recommended: true, notes: 'Best cost-performance ratio' },
-  { id: 'claude-haiku-4-5',    name: 'claude-haiku-4-5-20251001', displayName: 'Claude Haiku 4',   provider: 'anthropic', tier: 'fast',     status: 'ga',   contextK: 200,  inputPer1M: 0.25,  outputPer1M: 1.25,  features: ['Multimodal','Function calling','Streaming'] },
-  { id: 'gpt-4o',              name: 'gpt-4o',                  displayName: 'GPT-4o',             provider: 'openai',    tier: 'balanced', status: 'ga',   contextK: 128,  inputPer1M: 2.50,  outputPer1M: 10.00, features: ['Multimodal','Function calling','Streaming','JSON mode'] },
-  { id: 'gpt-4o-mini',         name: 'gpt-4o-mini',             displayName: 'GPT-4o mini',        provider: 'openai',    tier: 'fast',     status: 'ga',   contextK: 128,  inputPer1M: 0.15,  outputPer1M: 0.60,  features: ['Multimodal','Function calling','Streaming','JSON mode'] },
-  { id: 'o3',                  name: 'o3',                      displayName: 'o3',                 provider: 'openai',    tier: 'ultra',    status: 'ga',   contextK: 200,  inputPer1M: 10.00, outputPer1M: 40.00, features: ['Extended reasoning','Function calling','Streaming'] },
-  { id: 'o4-mini',             name: 'o4-mini',                 displayName: 'o4-mini',            provider: 'openai',    tier: 'balanced', status: 'new',  contextK: 200,  inputPer1M: 1.10,  outputPer1M: 4.40,  features: ['Extended reasoning','Function calling','Streaming'] },
-  { id: 'gemini-2.5-pro',      name: 'gemini-2.5-pro',          displayName: 'Gemini 2.5 Pro',     provider: 'google',    tier: 'ultra',    status: 'ga',   contextK: 1000, inputPer1M: 1.25,  outputPer1M: 5.00,  features: ['Multimodal','Function calling','Long context','Streaming'], notes: '1M token context window' },
-  { id: 'gemini-2.5-flash',    name: 'gemini-2.5-flash',        displayName: 'Gemini 2.5 Flash',   provider: 'google',    tier: 'fast',     status: 'new',  contextK: 1000, inputPer1M: 0.075, outputPer1M: 0.30,  features: ['Multimodal','Function calling','Long context','Streaming'] },
-  { id: 'gemini-2.0-flash',    name: 'gemini-2.0-flash',        displayName: 'Gemini 2.0 Flash',   provider: 'google',    tier: 'fast',     status: 'ga',   contextK: 1000, inputPer1M: 0.10,  outputPer1M: 0.40,  features: ['Multimodal','Function calling','Long context'] },
+/* ── Model catalog (no prices here: one price source, see priced()) ── */
+const META: CatalogMeta[] = [
+  { id: 'claude-opus-4-8',     name: 'claude-opus-4-8',         displayName: 'Claude Opus 4',      provider: 'anthropic', status: 'ga',   contextK: 200,  features: ['Multimodal','Function calling','Extended thinking','Streaming'] },
+  { id: 'claude-sonnet-4-6',   name: 'claude-sonnet-4-6',       displayName: 'Claude Sonnet 4',    provider: 'anthropic', status: 'new',  contextK: 200,  features: ['Multimodal','Function calling','Extended thinking','Streaming'] },
+  { id: 'claude-haiku-4-5',    name: 'claude-haiku-4-5-20251001', displayName: 'Claude Haiku 4',   provider: 'anthropic', status: 'ga',   contextK: 200,  features: ['Multimodal','Function calling','Streaming'] },
+  { id: 'gpt-4o',              name: 'gpt-4o',                  displayName: 'GPT-4o',             provider: 'openai',    status: 'ga',   contextK: 128,  features: ['Multimodal','Function calling','Streaming','JSON mode'] },
+  { id: 'gpt-4o-mini',         name: 'gpt-4o-mini',             displayName: 'GPT-4o mini',        provider: 'openai',    status: 'ga',   contextK: 128,  features: ['Multimodal','Function calling','Streaming','JSON mode'] },
+  { id: 'o3',                  name: 'o3',                      displayName: 'o3',                 provider: 'openai',    status: 'ga',   contextK: 200,  features: ['Extended reasoning','Function calling','Streaming'] },
+  { id: 'o4-mini',             name: 'o4-mini',                 displayName: 'o4-mini',            provider: 'openai',    status: 'new',  contextK: 200,  features: ['Extended reasoning','Function calling','Streaming'] },
+  { id: 'gemini-2.5-pro',      name: 'gemini-2.5-pro',          displayName: 'Gemini 2.5 Pro',     provider: 'google',    status: 'ga',   contextK: 1000, features: ['Multimodal','Function calling','Long context','Streaming'], notes: '1M token context window' },
+  { id: 'gemini-2.5-flash',    name: 'gemini-2.5-flash',        displayName: 'Gemini 2.5 Flash',   provider: 'google',    status: 'new',  contextK: 1000, features: ['Multimodal','Function calling','Long context','Streaming'] },
+  { id: 'gemini-2.0-flash',    name: 'gemini-2.0-flash',        displayName: 'Gemini 2.0 Flash',   provider: 'google',    status: 'ga',   contextK: 1000, features: ['Multimodal','Function calling','Long context'] },
 ]
+
+/**
+ * Price a catalog model: the org's custom price (longest prefix) else the list
+ * price from lib/mcp/pricing.ts — the same rates ingest uses to cost events.
+ */
+function priced(m: CatalogMeta, overrides: CustomPrice[]): CatalogModel {
+  const o = matchOverride(overrides, m.name)
+  const l = priceFor(m.name)
+  return {
+    ...m,
+    inputPer1M:  o ? o.input_per_m  : l.in,
+    outputPer1M: o ? o.output_per_m : l.out,
+    priceSource: o ? 'override' : l.known ? 'list' : 'unknown',
+  }
+}
+
+const PRICE_SOURCE_META: Record<PriceSource, { label: string; cls: string }> = {
+  list:     { label: 'List price',   cls: 'bg-[var(--bg-secondary)] text-[var(--fg-secondary)]' },
+  override: { label: 'Custom price', cls: 'bg-[var(--blue-bg)] text-[var(--blue)]' },
+  unknown:  { label: 'Fallback',     cls: 'bg-[var(--amber-bg)] text-[var(--amber)]' },
+}
 
 /* ── Meta ── */
 const PROVIDER_META: Record<Provider, { label: string; color: string; bg: string; border: string; dot: string }> = {
   anthropic: { label: 'Anthropic', color: 'text-[#D97757]', bg: 'bg-[#FDF0EE]', border: 'border-[#D97757]/25', dot: '#D97757' },
   openai:    { label: 'OpenAI',    color: 'text-[#10A37F]', bg: 'bg-[#E6F7F3]', border: 'border-[#10A37F]/25', dot: '#10A37F' },
   google:    { label: 'Google',    color: 'text-[#4285F4]', bg: 'bg-[#EBF2FE]', border: 'border-[#4285F4]/25', dot: '#4285F4' },
-}
-
-const TIER_META: Record<Tier, { label: string; icon: React.ElementType; bg: string; text: string }> = {
-  ultra:    { label: 'Ultra',    icon: Zap,          bg: 'bg-[var(--red-bg)]',   text: 'text-[var(--red)]'   },
-  balanced: { label: 'Balanced', icon: BarChart3,    bg: 'bg-[var(--blue-bg)]',  text: 'text-[var(--blue)]'  },
-  fast:     { label: 'Fast',     icon: TrendingDown, bg: 'bg-[var(--green-bg)]', text: 'text-[var(--green)]' },
 }
 
 const STATUS_META: Record<ModelStatus, { label: string; cls: string }> = {
@@ -91,11 +114,13 @@ function ProviderBadge({ provider, size = 'md' }: { provider: Provider; size?: '
 ══════════════════════════════════════════════════════════════ */
 function AddModelModal({
   orgId,
+  catalog,
   alreadyAdded,
   onClose,
   onAdded,
 }: {
   orgId:        string
+  catalog:      CatalogModel[]
   alreadyAdded: Set<string>
   onClose:      () => void
   onAdded:      (model: CatalogModel) => void
@@ -105,7 +130,7 @@ function AddModelModal({
   const [error,   setError]   = useState<string | null>(null)
   const [provFil, setProvFil] = useState<Provider | 'all'>('all')
 
-  const available = CATALOG.filter(m => {
+  const available = catalog.filter(m => {
     if (alreadyAdded.has(m.name)) return false
     if (provFil !== 'all' && m.provider !== provFil) return false
     if (search.trim()) {
@@ -183,14 +208,12 @@ function AddModelModal({
             <div className="py-12 text-center">
               <Cpu size={28} className="text-[var(--fg-tertiary)] mx-auto mb-3" />
               <p className="text-[13px] text-[var(--fg-secondary)]">
-                {alreadyAdded.size === CATALOG.length ? 'All models added' : 'No models match your search'}
+                {alreadyAdded.size === catalog.length ? 'All models added' : 'No models match your search'}
               </p>
             </div>
           ) : available.map(m => {
             const pm      = PROVIDER_META[m.provider]
-            const tm      = TIER_META[m.tier]
             const sm      = STATUS_META[m.status]
-            const TierIcon = tm.icon
             const isAdding = adding === m.name
 
             return (
@@ -200,20 +223,11 @@ function AddModelModal({
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-[13px] font-semibold text-[var(--fg)]">{m.displayName}</p>
                     <span className={cn('px-1.5 py-0.5 rounded-full text-[9px] font-bold', sm.cls)}>{sm.label}</span>
-                    {m.recommended && (
-                      <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-coral/10 text-coral text-[9px] font-bold">
-                        <Star size={7} /> Recommended
-                      </span>
-                    )}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold', tm.text)}>
-                      <TierIcon size={9} />{tm.label}
-                    </span>
-                    <span className="text-[10px] text-[var(--fg-tertiary)]">·</span>
                     <span className="text-[10px] text-[var(--fg-tertiary)]">{fmtCtx(m.contextK)} ctx</span>
                     <span className="text-[10px] text-[var(--fg-tertiary)]">·</span>
-                    <span className="text-[10px] text-[var(--fg-tertiary)]">{fmtPrice(m.inputPer1M)} / {fmtPrice(m.outputPer1M)} per 1M</span>
+                    <span className="text-[10px] text-[var(--fg-tertiary)]">{fmtPrice(m.inputPer1M)} / {fmtPrice(m.outputPer1M)} per 1M{m.priceSource === 'override' ? ' (custom)' : ''}</span>
                   </div>
                 </div>
                 <button onClick={() => handleAdd(m)} disabled={!!adding}
@@ -372,9 +386,8 @@ function ModelRow({ model, usagePct, totalCost, expanded, onToggle, onRemove }: 
   onRemove:  (name: string) => void
 }) {
   const pm       = PROVIDER_META[model.provider]
-  const tm       = TIER_META[model.tier]
   const sm       = STATUS_META[model.status]
-  const TierIcon = tm.icon
+  const ps       = PRICE_SOURCE_META[model.priceSource]
   const hasUsage = model.costUsed30d > 0
 
   return (
@@ -387,21 +400,16 @@ function ModelRow({ model, usagePct, totalCost, expanded, onToggle, onRemove }: 
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-[13.5px] font-bold text-[var(--fg)]">{model.displayName}</p>
               <span className={cn('px-1.5 py-0.5 rounded-full text-[9.5px] font-bold', sm.cls)}>{sm.label}</span>
-              {model.recommended && (
-                <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-coral/10 text-coral text-[9.5px] font-bold">
-                  <Star size={8} /> Recommended
-                </span>
-              )}
             </div>
             <p className="text-[10.5px] font-mono text-[var(--fg-tertiary)] mt-0.5 truncate">{model.name}</p>
             {model.notes && <p className="text-[10.5px] text-teal mt-0.5">{model.notes}</p>}
           </div>
         </div>
 
-        {/* Tier */}
+        {/* Price source */}
         <div>
-          <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-semibold', tm.bg, tm.text)}>
-            <TierIcon size={10} /> {tm.label}
+          <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-semibold', ps.cls)}>
+            {ps.label}
           </span>
         </div>
 
@@ -434,7 +442,7 @@ function ModelRow({ model, usagePct, totalCost, expanded, onToggle, onRemove }: 
               <div className="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
                 <div className="h-full rounded-full transition-all duration-700" style={{ width: `${usagePct}%`, backgroundColor: pm.dot }} />
               </div>
-              <p className="text-[10.5px] text-[var(--fg-tertiary)] mt-0.5">{fmtTokens(model.tokensUsed30d)} tokens</p>
+              <p className="text-[10.5px] text-[var(--fg-tertiary)] mt-0.5">{fmtTokens(model.tokensUsed30d)} tokens · {model.avgLatencyMs != null ? `${Math.round(model.avgLatencyMs).toLocaleString()} ms avg` : 'latency not reported'}</p>
             </>
           ) : (
             <span className="text-[11px] text-[var(--fg-tertiary)]">No usage yet</span>
@@ -501,23 +509,192 @@ function ModelRow({ model, usagePct, totalCost, expanded, onToggle, onRemove }: 
 }
 
 /* ══════════════════════════════════════════════════════════════
+   CUSTOM PRICES (org_model_prices)
+══════════════════════════════════════════════════════════════ */
+interface PriceForm { prefix: string; input: string; output: string; cacheRead: string; cacheWrite: string }
+const EMPTY_FORM: PriceForm = { prefix: '', input: '', output: '', cacheRead: '', cacheWrite: '' }
+const PRICE_FIELDS: [keyof PriceForm, string, string][] = [
+  ['prefix',     'Model prefix',     'claude-opus-4'],
+  ['input',      'Input / 1M',       '3.00'],
+  ['output',     'Output / 1M',      '15.00'],
+  ['cacheRead',  'Cache read / 1M',  'default 0.1× input'],
+  ['cacheWrite', 'Cache write / 1M', 'default 1.25× input'],
+]
+
+function CustomPricesSection({ orgId, initialPrices, canManage }: {
+  orgId: string; initialPrices: CustomPrice[]; canManage: boolean
+}) {
+  const [prices,  setPrices]  = useState<CustomPrice[]>(initialPrices)
+  const [form,    setForm]    = useState<PriceForm | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)   // prefix being edited (locked)
+  const [saving,  setSaving]  = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  const fmt = (n: number | null) => n == null ? '—' : `$${n.toFixed(n > 0 && n < 0.1 ? 4 : 2)}`
+  const inputCls = 'w-full px-3 py-2 rounded-lg border border-[var(--border)] text-[12.5px] bg-[var(--bg)] text-[var(--fg)] focus:outline-none focus:border-coral focus:ring-2 focus:ring-coral/20 tabular-nums'
+
+  function startAdd() { setForm(EMPTY_FORM); setEditing(null); setError(null) }
+  function startEdit(p: CustomPrice) {
+    setForm({
+      prefix: p.model_prefix, input: String(p.input_per_m), output: String(p.output_per_m),
+      cacheRead:  p.cache_read_per_m  == null ? '' : String(p.cache_read_per_m),
+      cacheWrite: p.cache_write_per_m == null ? '' : String(p.cache_write_per_m),
+    })
+    setEditing(p.model_prefix); setError(null)
+  }
+  function cancel() { setForm(null); setEditing(null); setError(null) }
+
+  async function save() {
+    if (!form) return
+    const opt = (v: string) => v.trim() === '' ? null : Number(v)
+    const body = {
+      org_id: orgId,
+      model_prefix: form.prefix.trim().toLowerCase(),
+      input_per_m: Number(form.input), output_per_m: Number(form.output),
+      cache_read_per_m: opt(form.cacheRead), cache_write_per_m: opt(form.cacheWrite),
+    }
+    if (!body.model_prefix) { setError('Model prefix is required'); return }
+    const nums = [body.input_per_m, body.output_per_m, body.cache_read_per_m ?? 0, body.cache_write_per_m ?? 0]
+    if (form.input.trim() === '' || form.output.trim() === '' || nums.some(n => !Number.isFinite(n) || n < 0)) {
+      setError('Input and output prices are required, and every price must be a non-negative number'); return
+    }
+    setSaving(true); setError(null)
+    try {
+      const res  = await fetch('/api/v1/models', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(typeof json.error === 'string' && json.error !== 'Forbidden' ? json.error : (json.reason ?? 'Failed to save price'))
+      const saved: CustomPrice = {
+        model_prefix: json.model_prefix, input_per_m: Number(json.input_per_m), output_per_m: Number(json.output_per_m),
+        cache_read_per_m:  json.cache_read_per_m  == null ? null : Number(json.cache_read_per_m),
+        cache_write_per_m: json.cache_write_per_m == null ? null : Number(json.cache_write_per_m),
+        updated_at: json.updated_at ?? null,
+      }
+      setPrices(prev => [...prev.filter(p => p.model_prefix !== saved.model_prefix), saved]
+        .sort((a, b) => a.model_prefix.localeCompare(b.model_prefix)))
+      cancel()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save price')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function remove(prefix: string) {
+    if (!window.confirm(`Remove the custom price for "${prefix}"? New usage will be priced at list rates.`)) return
+    setError(null)
+    const res = await fetch(`/api/v1/models?org_id=${orgId}&price_prefix=${encodeURIComponent(prefix)}`, { method: 'DELETE' })
+    if (!res.ok) { setError('Failed to remove price'); return }
+    setPrices(prev => prev.filter(p => p.model_prefix !== prefix))
+  }
+
+  return (
+    <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
+      <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-[var(--border)] flex-wrap">
+        <div className="min-w-0">
+          <h2 className="text-[14px] font-bold text-[var(--fg)] flex items-center gap-2"><Tag size={14} className="text-coral" /> Custom prices</h2>
+          <p className="text-[12px] text-[var(--fg-secondary)] mt-0.5 max-w-[620px]">
+            Negotiated or private pricing in USD per 1M tokens. Applies to usage ingested from now on; the longest matching model prefix wins.
+          </p>
+        </div>
+        {canManage && !form && (
+          <button onClick={startAdd} className="btn-primary flex-shrink-0"><Plus size={14} /> Add price</button>
+        )}
+      </div>
+
+      {form && (
+        <div className="px-5 py-4 border-b border-[var(--border)] bg-[var(--bg-secondary)]/50 space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            {PRICE_FIELDS.map(([k, label, ph]) => (
+              <label key={k} className={cn('block', k === 'prefix' && 'col-span-2 sm:col-span-1')}>
+                <span className="text-[10.5px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider">{label}</span>
+                <input
+                  value={form[k]} placeholder={ph}
+                  disabled={k === 'prefix' && editing !== null}
+                  inputMode={k === 'prefix' ? 'text' : 'decimal'}
+                  onChange={e => { const v = e.target.value; setForm(f => f ? { ...f, [k]: v } : f) }}
+                  className={cn(inputCls, 'mt-1', k === 'prefix' && editing !== null && 'opacity-60')}
+                />
+              </label>
+            ))}
+          </div>
+          {error && <p className="text-[12px] text-[var(--red)]">{error}</p>}
+          <div className="flex items-center gap-2">
+            <button onClick={save} disabled={saving} className="btn-primary">
+              <Check size={14} /> {saving ? 'Saving…' : editing ? 'Save changes' : 'Add price'}
+            </button>
+            <button onClick={cancel} className="btn-secondary">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {!form && error && <p className="px-5 pt-3 text-[12px] text-[var(--red)]">{error}</p>}
+
+      {prices.length === 0 ? (
+        <div className="px-5 py-8 text-center">
+          <p className="text-[12.5px] text-[var(--fg-secondary)]">No custom prices. All usage is priced at public list rates.</p>
+          {!canManage && <p className="text-[11.5px] text-[var(--fg-tertiary)] mt-1">Owners and admins can add overrides.</p>}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12.5px]">
+            <thead>
+              <tr className="text-left text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider bg-[var(--bg-secondary)]/50">
+                <th className="px-5 py-2.5 font-semibold">Model prefix</th>
+                <th className="px-3 py-2.5 font-semibold text-right">Input</th>
+                <th className="px-3 py-2.5 font-semibold text-right">Output</th>
+                <th className="px-3 py-2.5 font-semibold text-right">Cache read</th>
+                <th className="px-3 py-2.5 font-semibold text-right">Cache write</th>
+                {canManage && <th className="px-5 py-2.5" />}
+              </tr>
+            </thead>
+            <tbody>
+              {prices.map(p => (
+                <tr key={p.model_prefix} className="border-t border-[var(--border)]">
+                  <td className="px-5 py-2.5 font-mono text-[12px] text-[var(--fg)]">{p.model_prefix}<span className="text-[var(--fg-tertiary)]">*</span></td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--fg)]">{fmt(p.input_per_m)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--fg)]">{fmt(p.output_per_m)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--fg-secondary)]">{fmt(p.cache_read_per_m)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--fg-secondary)]">{fmt(p.cache_write_per_m)}</td>
+                  {canManage && (
+                    <td className="px-5 py-2.5">
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={() => startEdit(p)} aria-label={`Edit ${p.model_prefix}`}
+                          className="p-1.5 rounded-lg text-[var(--fg-tertiary)] hover:text-[var(--fg)] hover:bg-[var(--bg-secondary)]"><Pencil size={13} /></button>
+                        <button onClick={() => remove(p.model_prefix)} aria-label={`Delete ${p.model_prefix}`}
+                          className="p-1.5 rounded-lg text-[var(--fg-tertiary)] hover:text-[var(--red)] hover:bg-[var(--red-bg)]"><Trash2 size={13} /></button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════
    MAIN CLIENT
 ══════════════════════════════════════════════════════════════ */
 interface Props {
-  initialModels: EnabledModel[]
-  orgId:         string
+  initialModels:   EnabledModel[]
+  orgId:           string
+  initialPrices:   CustomPrice[]
+  canManagePrices: boolean
 }
 
-export function ModelsClient({ initialModels, orgId }: Props) {
+export function ModelsClient({ initialModels, orgId, initialPrices, canManagePrices }: Props) {
+  const catalog = useMemo(() => META.map(m => priced(m, initialPrices)), [initialPrices])
   const [models,      setModels]      = useState<Model[]>(() =>
     initialModels.map(em => {
-      const cat = CATALOG.find(c => c.name === em.model || c.id === em.model)
+      const cat = catalog.find(c => c.name === em.model || c.id === em.model)
       if (!cat) return null
-      return { ...cat, addedAt: em.addedAt, tokensUsed30d: em.tokensUsed30d, costUsed30d: em.costUsed30d } as Model
+      return { ...cat, addedAt: em.addedAt, tokensUsed30d: em.tokensUsed30d, costUsed30d: em.costUsed30d, avgLatencyMs: em.avgLatencyMs } as Model
     }).filter(Boolean) as Model[]
   )
   const [provFilter,  setProvFilter]  = useState<Provider | 'all'>('all')
-  const [tierFilter,  setTierFilter]  = useState<Tier | 'all'>('all')
   const [search,      setSearch]      = useState('')
   const [sortBy,      setSortBy]      = useState<SortKey>('usage')
   const [sortDir,     setSortDir]     = useState<'asc' | 'desc'>('desc')
@@ -554,7 +731,6 @@ export function ModelsClient({ initialModels, orgId }: Props) {
   const filtered = useMemo(() => {
     let ms = models
     if (provFilter !== 'all') ms = ms.filter(m => m.provider === provFilter)
-    if (tierFilter !== 'all') ms = ms.filter(m => m.tier     === tierFilter)
     if (search.trim()) {
       const q = search.toLowerCase()
       ms = ms.filter(m => m.displayName.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
@@ -569,7 +745,7 @@ export function ModelsClient({ initialModels, orgId }: Props) {
       return sortDir === 'asc' ? diff : -diff
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [models, provFilter, tierFilter, search, sortBy, sortDir])
+  }, [models, provFilter, search, sortBy, sortDir])
 
   function SortBtn({ k, label }: { k: SortKey; label: string }) {
     const active = sortBy === k
@@ -586,15 +762,10 @@ export function ModelsClient({ initialModels, orgId }: Props) {
   }
 
   /* ── Empty state ── */
-  if (models.length === 0 && !search && provFilter === 'all' && tierFilter === 'all') {
+  if (models.length === 0 && !search && provFilter === 'all') {
     return (
       <div className="space-y-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Models</h1>
-            <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">LLM registry · pricing · your 30-day usage</p>
-          </div>
-        </div>
+        <p className="text-[13px] text-[var(--fg-secondary)]">LLM registry · pricing · your usage in the last 30 days</p>
 
         <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl py-20 flex flex-col items-center text-center px-8">
           <div className="w-16 h-16 rounded-2xl bg-coral/10 flex items-center justify-center mb-5">
@@ -607,9 +778,9 @@ export function ModelsClient({ initialModels, orgId }: Props) {
 
           {/* Quick-add recommended */}
           <div className="w-full max-w-[480px] mb-6">
-            <p className="text-[11px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider mb-3">Recommended to start</p>
+            <p className="text-[11px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider mb-3">Quick add</p>
             <div className="grid grid-cols-3 gap-2">
-              {CATALOG.filter(m => m.recommended || ['claude-haiku-4-5', 'gpt-4o', 'gemini-2.5-flash'].includes(m.id)).slice(0, 3).map(m => {
+              {catalog.filter(m => ['claude-sonnet-4-6', 'gpt-4o', 'gemini-2.5-flash'].includes(m.id)).map(m => {
                 const pm = PROVIDER_META[m.provider]
                 return (
                   <button key={m.name}
@@ -634,8 +805,10 @@ export function ModelsClient({ initialModels, orgId }: Props) {
           </button>
         </div>
 
+        <CustomPricesSection orgId={orgId} initialPrices={initialPrices} canManage={canManagePrices} />
+
         {showAdd && (
-          <AddModelModal orgId={orgId} alreadyAdded={alreadyAdded} onClose={() => setShowAdd(false)} onAdded={m => { handleAdded(m); setShowAdd(false) }} />
+          <AddModelModal orgId={orgId} catalog={catalog} alreadyAdded={alreadyAdded} onClose={() => setShowAdd(false)} onAdded={m => { handleAdded(m); setShowAdd(false) }} />
         )}
       </div>
     )
@@ -645,10 +818,7 @@ export function ModelsClient({ initialModels, orgId }: Props) {
     <div className="space-y-5">
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Models</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">LLM registry · pricing · your 30-day usage</p>
-        </div>
+        <p className="text-[13px] text-[var(--fg-secondary)]">LLM registry · pricing · your usage in the last 30 days</p>
         <div className="flex items-center gap-2">
           {models.length > 0 && (
             <button onClick={() => setShowCalc(true)} className="btn-secondary">
@@ -666,7 +836,7 @@ export function ModelsClient({ initialModels, orgId }: Props) {
         {[
           { label: 'Models tracked', value: `${models.length}`,                                     color: 'text-coral'          },
           { label: 'Providers',      value: `${new Set(models.map(m => m.provider)).size}`,          color: 'text-[var(--blue)]'  },
-          { label: 'Total cost 30d', value: TOTAL_COST > 0 ? `$${TOTAL_COST.toFixed(2)}` : '$0.00', color: 'text-[var(--amber)]' },
+          { label: 'Cost · Last 30 days', value: TOTAL_COST > 0 ? `$${TOTAL_COST.toFixed(2)}` : '$0.00', color: 'text-[var(--amber)]' },
           { label: 'Total tokens',   value: fmtTokens(TOTAL_TOKENS),                                 color: 'text-teal'           },
         ].map(s => (
           <div key={s.label} className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl px-4 py-3">
@@ -699,26 +869,6 @@ export function ModelsClient({ initialModels, orgId }: Props) {
           })}
         </div>
 
-        <div className="flex items-center gap-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl p-1">
-          <button onClick={() => setTierFilter('all')}
-            className={cn('px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold transition-all', tierFilter === 'all' ? 'bg-[var(--fg)] text-[var(--bg)]' : 'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-            All
-          </button>
-          {(['ultra', 'balanced', 'fast'] as Tier[]).map(t => {
-            const tm   = TIER_META[t]
-            const Icon = tm.icon
-            const cnt  = models.filter(m => m.tier === t).length
-            if (cnt === 0) return null
-            return (
-              <button key={t} onClick={() => setTierFilter(t)}
-                className={cn('flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold transition-all',
-                  tierFilter === t ? `${tm.bg} ${tm.text}` : 'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-                <Icon size={10} /> {tm.label}
-              </button>
-            )
-          })}
-        </div>
-
         <div className="relative flex-1 max-w-[260px]">
           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--fg-tertiary)]" />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search models…"
@@ -730,10 +880,10 @@ export function ModelsClient({ initialModels, orgId }: Props) {
       <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl overflow-hidden">
         <div className="grid grid-cols-[2.5fr_1fr_1.4fr_1.4fr_1.6fr_130px] gap-3 px-5 py-3 border-b border-[var(--border)] bg-[var(--bg-secondary)]/50">
           <SortBtn k="name"         label="Model"          />
-          <div className="text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider">Tier</div>
+          <div className="text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider">Price source</div>
           <SortBtn k="context"      label="Context"        />
           <SortBtn k="input_price"  label="Price"          />
-          <SortBtn k="usage"        label="Your usage 30d" />
+          <SortBtn k="usage"        label="Usage · 30 days" />
           <div />
         </div>
 
@@ -741,7 +891,7 @@ export function ModelsClient({ initialModels, orgId }: Props) {
           <div className="flex flex-col items-center justify-center py-16 gap-3">
             <AlertTriangle size={22} className="text-[var(--fg-tertiary)]" />
             <p className="text-[13px] text-[var(--fg-secondary)]">No models match your filters</p>
-            <button onClick={() => { setProvFilter('all'); setTierFilter('all'); setSearch('') }} className="text-[12.5px] text-coral hover:underline">
+            <button onClick={() => { setProvFilter('all'); setSearch('') }} className="text-[12.5px] text-coral hover:underline">
               Clear filters
             </button>
           </div>
@@ -758,18 +908,22 @@ export function ModelsClient({ initialModels, orgId }: Props) {
         )}
       </div>
 
+      <CustomPricesSection orgId={orgId} initialPrices={initialPrices} canManage={canManagePrices} />
+
       {/* Footnote */}
       <div className="flex items-start gap-2 px-4 py-3 bg-[var(--bg-secondary)] rounded-xl border border-[var(--border)]">
         <AlertTriangle size={12} className="text-[var(--amber)] flex-shrink-0 mt-0.5" />
         <p className="text-[11.5px] text-[var(--fg-tertiary)]">
-          Prices are updated periodically from provider APIs. Usage data reflects ingest events from the TokenFin SDK in the last 30 days.
-          Actual costs may differ based on cache hits, batch discounts, or special pricing agreements.
+          List prices come from TokenFin&apos;s pricing table — the same rates used to cost every ingested event. A custom price
+          (below) overrides the list price for new usage. Usage covers every source (SDK, OTLP agents) in the last 30 days;
+          cache reads/writes are priced at their own rates.
         </p>
       </div>
 
       {showAdd && (
         <AddModelModal
           orgId={orgId}
+          catalog={catalog}
           alreadyAdded={alreadyAdded}
           onClose={() => setShowAdd(false)}
           onAdded={m => { handleAdded(m); }}

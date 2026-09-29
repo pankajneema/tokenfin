@@ -15,7 +15,8 @@ import { NextResponse, type NextRequest } from 'next/server'
  */
 // Machine-to-machine endpoints authenticate with API keys / CRON_SECRET.
 // They never carry a session cookie, so skip the Supabase round-trip entirely.
-const KEY_AUTH_API = ['/api/v1/ingest', '/api/otel/', '/api/mcp', '/api/v1/cron/']
+// /.well-known/* is public discovery metadata — no session needed either.
+const KEY_AUTH_API = ['/api/v1/ingest', '/api/otel/', '/api/mcp', '/api/v1/cron/', '/.well-known/', '/api/health']
 
 export async function middleware(request: NextRequest) {
   if (KEY_AUTH_API.some(p => request.nextUrl.pathname.startsWith(p))) return NextResponse.next()
@@ -62,7 +63,8 @@ export async function middleware(request: NextRequest) {
   // API routes do their own auth and return 401 JSON; never redirect them.
   const isApi       = pathname.startsWith('/api/')
   const isLegal     = pathname.startsWith('/privacy') || pathname.startsWith('/terms')
-  const isPublic    = isAuthPage || isCallback || isReveal || isApi || isLegal
+  const isWellKnown = pathname.startsWith('/.well-known/')
+  const isPublic    = isAuthPage || isCallback || isReveal || isApi || isLegal || isWellKnown
 
   // ── Rule 1: unauthenticated → login ───────────────────────────────────────
   if (!user && !isPublic) {

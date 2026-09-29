@@ -1,5 +1,6 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plus, Copy, Check, Trash2, Key, MoreHorizontal,
   Search, Shield,
@@ -471,6 +472,16 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
   const [copiedId,   setCopiedId]   = useState<string | null>(null)
   const [toggling,   setToggling]   = useState<string | null>(null)
   const [deleting,   setDeleting]   = useState(false)
+  const router       = useRouter()
+  const searchParams = useSearchParams()
+
+  // ⌘K "Create API key" → /dashboard/keys?new=1
+  useEffect(() => {
+    if (searchParams?.get('new') === '1' && can(role, 'keys:create') && projects.length > 0) {
+      setShowCreate(true)
+      router.replace('/dashboard/keys', { scroll: false })
+    }
+  }, [searchParams, role, router, projects.length])
 
   const filtered = keys.filter(k => {
     if (filter === 'active'   && !k.isActive) return false
@@ -546,7 +557,7 @@ export function KeysClient({ initialKeys, projects, teams, members, orgId, userI
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">API Keys</h1>
+          <h2 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">API Keys</h2>
           <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Manage keys for SDK integration and cost attribution</p>
         </div>
         {can(role, 'keys:create') && (

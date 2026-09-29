@@ -10,7 +10,7 @@ function request(method, url, key, body, extraHeaders) {
     let u
     try { u = new URL(url) } catch { return resolve({ ok: false, status: 0, why: 'invalid URL: ' + url }) }
     const mod = u.protocol === 'http:' ? http : https
-    const headers = Object.assign({ Accept: 'application/json', Authorization: 'Bearer ' + key }, extraHeaders || {})
+    const headers = Object.assign({ Accept: 'application/json' }, key ? { Authorization: 'Bearer ' + key } : {}, extraHeaders || {})
     let data = null
     if (body) {
       data = JSON.stringify(body)
@@ -38,29 +38,62 @@ function request(method, url, key, body, extraHeaders) {
 }
 
 const base = (appUrl) => String(appUrl).replace(/\/$/, '')
+const REVOKED = 'key revoked or invalid (401) — run `npx tokenfin@latest login` to get a fresh key for this device'
+const INGEST_ONLY = 'this is an ingest-only key (403) — status/doctor/budget need the read key. Run `npx tokenfin@latest login` (stores both), or pass --read-key'
+const connWhy = (r) => r.status === 401 ? REVOKED : r.status === 403 ? INGEST_ONLY : (r.why || 'HTTP ' + r.status)
 
 async function getConnStatus(appUrl, key, source) {
   const r = await request('GET', base(appUrl) + '/api/v1/connections?source=' + encodeURIComponent(source), key)
-  if (!r.ok) return { ok: false, why: r.why || 'HTTP ' + r.status }
+  if (!r.ok) return { ok: false, status: r.status, why: connWhy(r) }
   return { ok: true, status: r.json }
 }
 
 async function getConnAll(appUrl, key) {
   const r = await request('GET', base(appUrl) + '/api/v1/connections', key)
-  if (!r.ok) return { ok: false, why: r.why || 'HTTP ' + r.status }
+  if (!r.ok) return { ok: false, status: r.status, why: connWhy(r) }
   return { ok: true, sources: (r.json && r.json.sources) || [] }
 }
 
-// Sanity-check a key against the read-only MCP get_spend tool (loud failure at
-// setup time instead of silently capturing nothing).
-async function verifyKey(appUrl, key) {
-  const r = await request('POST', base(appUrl) + '/api/mcp', key,
-    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_spend', arguments: { days: 1 } } },
-    { Accept: 'application/json, text/event-stream' })
-  if (r.status === 401) return { ok: false, why: 'the server rejected this key (401). Copy the full raw key from Dashboard → API Keys.' }
-  if (!r.ok && r.status >= 400) return { ok: false, why: 'server returned HTTP ' + r.status }
-  if (!r.ok) return { ok: false, why: r.why || 'request failed' }
+// Check an INGEST key the way an agent will use it: an empty OTLP/JSON metrics
+// export to the receiver (a no-op server-side). Works for write-only keys,
+// which /api/mcp and /api/v1/connections (read scope) would reject.
+async function verifyIngestKey(appUrl, key) {
+  const r = await request('POST', base(appUrl) + '/api/otel/v1/metrics', key, { resourceMetrics: [] })
+  if (r.status === 401) return { ok: false, status: 401, why: 'the server rejected this ingest key (401) — it was revoked, expired, is read-only, or belongs to another workspace. Run `npx tokenfin@latest login`, or pass a key with --key (Dashboard → API Keys).' }
+  if (!r.ok && r.status >= 400) return { ok: false, status: r.status, why: 'server returned HTTP ' + r.status }
+  if (!r.ok) return { ok: false, status: 0, why: r.why || 'request failed' }
   return { ok: true }
 }
 
-module.exports = { request, getConnStatus, getConnAll, verifyKey }
+// Back-compat name.
+const verifyKey = verifyIngestKey
+
+// Exchange a single-use reveal token for this device's keys. The server
+// returns { raw_key, kind, ingest_key, read_key } — a split per-device pair
+// (ingest + read), a single legacy read+write key (both fields = raw_key), or
+// for viewers a read key only (ingest_key null).
+async function revealKeys(appUrl, token) {
+  const r = await request('POST', base(appUrl) + '/api/v1/keys/reveal', null, { token })
+  if (!r.ok || !r.json || !r.json.raw_key) throw new Error((r.json && r.json.error) || r.why || 'could not retrieve the key (HTTP ' + r.status + ')')
+  const j = r.json
+  const hasSplit = 'ingest_key' in j || 'read_key' in j
+  return {
+    key: hasSplit ? (j.ingest_key || null) : j.raw_key,
+    read_key: hasSplit ? (j.read_key || j.raw_key) : j.raw_key,
+    kind: j.kind || 'legacy',
+  }
+}
+
+// Ask the server to revoke THIS device's key(s). Returns { ok, why }.
+// Uses DELETE /api/v1/cli/token (Bearer = the device's own key). Older servers
+// without that endpoint answer 404/405 → caller tells the user to revoke in
+// Dashboard → API Keys.
+async function revokeDeviceKey(appUrl, key, deviceId) {
+  const r = await request('DELETE', base(appUrl) + '/api/v1/cli/token', key, { device_id: deviceId || null })
+  if (r.ok) return { ok: true }
+  if (r.status === 404 || r.status === 405) return { ok: false, unsupported: true, why: 'this TokenFin server has no self-revoke endpoint' }
+  if (r.status === 401) return { ok: true, already: true }
+  return { ok: false, why: r.why || 'HTTP ' + r.status }
+}
+
+module.exports = { request, getConnStatus, getConnAll, verifyKey, verifyIngestKey, revealKeys, revokeDeviceKey, REVOKED, INGEST_ONLY }

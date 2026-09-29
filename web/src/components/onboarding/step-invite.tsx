@@ -27,7 +27,8 @@ export function StepInvite({
   onSkip,
 }: {
   saving: boolean
-  onNext: (emails: string[]) => void
+  /** Resolves to the emails that failed (kept in the box for a retry). */
+  onNext: (emails: string[]) => Promise<string[] | void> | void
   onSkip: () => void
 }) {
   const [emails,   setEmails]   = useState<string[]>([])
@@ -174,7 +175,10 @@ export function StepInvite({
       <div className="space-y-3">
         <button
           type="button"
-          onClick={() => onNext(emails)}
+          onClick={async () => {
+            const failed = await onNext(emails)
+            if (Array.isArray(failed)) setEmails(failed)
+          }}
           disabled={saving}
           className={cn(
             'w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-[13.5px] font-semibold transition-all duration-150',

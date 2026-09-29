@@ -12,11 +12,11 @@ export function ThemeToggle({ className }: { className?: string }) {
     <button
       onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
       className={`btn-ghost p-2 ${className ?? ''}`}
-      aria-label="Toggle theme"
+      aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
     >
       {theme === 'dark'
-        ? <Sun size={16} className="text-[var(--fg-secondary)]" />
-        : <Moon size={16} className="text-[var(--fg-secondary)]" />}
+        ? <Sun size={16} aria-hidden="true" className="text-[var(--fg-secondary)]" />
+        : <Moon size={16} aria-hidden="true" className="text-[var(--fg-secondary)]" />}
     </button>
   )
 }

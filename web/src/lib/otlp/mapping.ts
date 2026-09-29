@@ -9,7 +9,7 @@
  * MAPPING_VERSION lets `doctor` / logs report which revision is deployed.
  */
 
-export const MAPPING_VERSION = '2026-07-15'
+export const MAPPING_VERSION = '2026-09-29'
 
 export type TokenField =
   | 'input_tokens' | 'output_tokens'
@@ -55,9 +55,8 @@ export const KNOWN_NON_TOKEN_METRICS = new Set([
   'gen_ai.client.operation.duration',
   'opencode.session.request.count', 'opencode.session.compaction.count',
   'opencode.file.changes', 'opencode.tool.invocations', 'opencode.vcs.operations',
-  // Claude Code
-  'claude_code.session.count',
-  'claude_code.active_time.total',
+  // Claude Code — session.count / active_time.total are productivity metrics
+  // now (see PRODUCTIVITY_METRICS below), recognized through that map.
   // Codex CLI (0.147.0) — startup/runtime housekeeping, not usage
   'codex.process.start',
   'codex.sqlite.init.count', 'codex.sqlite.init.duration_ms',
@@ -85,6 +84,22 @@ export const KNOWN_NON_TOKEN_METRICS = new Set([
   'codex.responses_api_engine_iapi_tbt.duration_ms', 'codex.responses_api_engine_service_tbt.duration_ms',
 ])
 
+// Claude Code productivity metrics (code.claude.com/docs/en/monitoring-usage,
+// verified 2026-09-29) → productivity_daily columns. Derived per user·repo·IST
+// day by lib/otlp/metrics.ts deriveProductivity (delta or cumulative-diffed).
+// Never usage rows. `tool_decision` LOG events are deliberately NOT counted:
+// Claude Code emits the code_edit_tool.decision metric for the same Edit/Write/
+// NotebookEdit decisions, so counting both would double the numbers.
+export type ProductivityKind = 'lines' | 'commits' | 'pull_requests' | 'edit_decision' | 'active_time' | 'sessions'
+export const PRODUCTIVITY_METRICS: Record<string, ProductivityKind> = {
+  'claude_code.lines_of_code.count':      'lines',          // attr type = added | removed
+  'claude_code.commit.count':             'commits',
+  'claude_code.pull_request.count':       'pull_requests',
+  'claude_code.code_edit_tool.decision':  'edit_decision',  // attr decision = accept | reject
+  'claude_code.active_time.total':        'active_time',    // seconds; attr type = user | cli (summed)
+  'claude_code.session.count':            'sessions',
+}
+
 // Metrics we DERIVE per-turn usage rows from — sources that have NO per-turn
 // logs path (Codex, Gemini report tokens only as metrics). Claude Code is
 // deliberately EXCLUDED: its logs already produce the rows, and its metrics are
@@ -103,22 +118,38 @@ export function deriveSourceFor(metricName: string): string | null {
 
 export function isRecognizedMetric(name: string): boolean {
   return !!TOKEN_METRIC_SOURCE[name] || COST_METRIC_NAMES.has(name) || name.startsWith('gen_ai.')
-    || KNOWN_NON_TOKEN_METRICS.has(name)
+    || KNOWN_NON_TOKEN_METRICS.has(name) || !!PRODUCTIVITY_METRICS[name]
 }
 
 // Which agent produced this signal — from the resource service.name, with a
 // fallback hint (a metric or event name).
+// Known CLI agents by service.name PREFIX. Substring matching mislabelled any
+// app whose name merely contains "claude"/"gemini" as a subscription agent
+// (turning its metered API spend into notional).
+const AGENT_SERVICES: Array<[RegExp, string]> = [
+  [/^claude[-_ ]?code/, 'claude_code'],
+  [/^codex/, 'codex_cli'],              // codex, codex_cli_rs, codex-cli, codex_exec
+  [/^opencode/, 'opencode'],
+  [/^gemini([-_ ]?cli)?$|^gemini[-_ ]?cli/, 'gemini_cli'],
+]
+// Event / metric name prefixes the agents emit (used only when service.name is
+// absent or unrecognised). Model names are NOT a hint: a generic app calling
+// claude-* models is metered API usage, not Claude Code.
+const AGENT_EVENT_PREFIXES: Array<[string, string]> = [
+  ['claude_code.', 'claude_code'],
+  ['codex.', 'codex_cli'],
+  ['opencode.', 'opencode'],
+  ['gemini_cli.', 'gemini_cli'],
+]
+
 export function detectSource(resourceAttrs: Record<string, unknown>, hint?: string): string {
-  const s = String(resourceAttrs['service.name'] ?? '').toLowerCase()
-  if (s.includes('claude')) return 'claude_code'
-  if (s.includes('codex'))  return 'codex_cli'
-  if (s.includes('opencode')) return 'opencode'
-  if (s.includes('gemini') || s.includes('gen_ai')) return 'gemini_cli'
-  const h = (hint ?? '').toLowerCase()
-  if (h.includes('claude')) return 'claude_code'
-  if (h.includes('codex'))  return 'codex_cli'
-  if (h.includes('opencode')) return 'opencode'
-  if (h.startsWith('gen_ai') || h.includes('gemini')) return 'gemini_cli'
+  const s = String(resourceAttrs['service.name'] ?? '').trim().toLowerCase()
+  for (const [re, src] of AGENT_SERVICES) if (re.test(s)) return src
+  const h = (hint ?? '').trim().toLowerCase()
+  for (const [prefix, src] of AGENT_EVENT_PREFIXES) if (h.startsWith(prefix)) return src
+  // Gemini CLI reports tokens as gen_ai.* metrics; only trust that when the
+  // exporter didn't name itself (a named generic app stays 'otlp').
+  if (!s && h.startsWith('gen_ai')) return 'gemini_cli'
   return 'otlp'
 }
 

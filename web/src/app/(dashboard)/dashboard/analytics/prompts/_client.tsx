@@ -122,6 +122,12 @@ function modelColor(m: string) {
 interface Props {
   patterns:        PromptPattern[]
   orgId:           string
+  windowLabel:     string
+  /** set when the viewer only sees their own prompts */
+  scopeNote:       string | null
+  prompts:         number
+  meteredCost:     number
+  notionalCost:    number
   totalRequests:   number
   hashedRequests:  number
   totalCost:       number
@@ -129,7 +135,7 @@ interface Props {
 }
 
 export function PromptsClient({
-  patterns, totalRequests, hashedRequests, totalCost, avgLatencyMs,
+  patterns, windowLabel, scopeNote, prompts, meteredCost, notionalCost, totalRequests, hashedRequests, totalCost, avgLatencyMs,
 }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('total_cost_usd')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -163,8 +169,8 @@ export function PromptsClient({
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Prompt Analytics</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Cost and latency patterns across your AI calls</p>
+          <p className="text-[13px] text-[var(--fg-secondary)]">Cost and latency patterns across your AI calls · {windowLabel}</p>
+          {scopeNote && <p className="text-[12px] text-[var(--fg-tertiary)] mt-0.5">{scopeNote}</p>}
         </div>
         <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl py-20 flex flex-col items-center gap-4 text-center px-6">
           <div className="w-14 h-14 rounded-2xl bg-[var(--bg-secondary)] flex items-center justify-center">
@@ -174,8 +180,8 @@ export function PromptsClient({
             <p className="text-[15px] font-semibold text-[var(--fg)]">No prompt data yet</p>
             <p className="text-[13px] text-[var(--fg-secondary)] mt-1 max-w-sm">
               Patterns group events by conversation/session — captured automatically from
-              Claude Code, Codex, and Gemini. Nothing has landed for this org in the last 30
-              days yet; once requests come in, they&apos;ll show up here grouped by task.
+              Claude Code, Codex, and Gemini. No fingerprinted requests landed in this window
+              ({windowLabel.toLowerCase()}); once they do, they&apos;ll show up here grouped by task.
               For grouping by actual prompt text instead of session, route requests through{' '}
               <code className="font-mono text-[11.5px]">/api/v1/ingest</code>.
             </p>
@@ -194,10 +200,10 @@ export function PromptsClient({
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Prompt Analytics</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">
-            Cost and latency patterns · last 30 days · {patterns.length} unique patterns
+          <p className="text-[13px] text-[var(--fg-secondary)]">
+            Cost and latency patterns · {windowLabel} · {prompts.toLocaleString()} prompts · {patterns.length} unique patterns
           </p>
+          {scopeNote && <p className="text-[12px] text-[var(--fg-tertiary)] mt-0.5">{scopeNote}</p>}
         </div>
         {coverageP < 100 && (
           <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--amber-bg)] border border-[var(--amber)]/20 rounded-xl">
@@ -219,9 +225,9 @@ export function PromptsClient({
           color="var(--blue)"
         />
         <StatCard
-          label="Total cost (30d)"
+          label="Total cost"
           value={fmtUsd(totalCost)}
-          sub={`${fmtUsd(totalCost / Math.max(hashedRequests, 1))} avg per call`}
+          sub={`${fmtUsd(meteredCost)} metered · ${fmtUsd(notionalCost)} notional · ${fmtUsd(totalCost / Math.max(totalRequests, 1))}/call`}
           icon={DollarSign}
           color="var(--green)"
         />

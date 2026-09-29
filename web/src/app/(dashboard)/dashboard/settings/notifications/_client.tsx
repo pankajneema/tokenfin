@@ -5,7 +5,7 @@ import {
   AlertTriangle, TrendingUp, Users, Zap, Shield,
   Clock, ChevronDown,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, readApiError } from '@/lib/utils'
 import type { NotifPrefs } from './page'
 
 /* ── Toggle ── */
@@ -95,20 +95,28 @@ export function NotificationsClient({ initialPrefs, userEmail }: Props) {
   const [saving,    setSaving]    = useState(false)
   const [toast,     setToast]     = useState(false)
   const [quietOpen, setQuietOpen] = useState(false)
+  const [error,     setError]     = useState<string | null>(null)
 
   function set(key: keyof NotifPrefs, val: boolean) {
     setPrefs(prev => ({ ...prev, [key]: val }))
   }
 
   async function save() {
-    setSaving(true)
+    setSaving(true); setError(null)
     try {
-      await fetch('/api/v1/preferences', {
+      // Quiet hours are evaluated server-side, so store the browser's zone with them.
+      let timezone = prefs.timezone
+      try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || timezone } catch {}
+      const res = await fetch('/api/v1/preferences', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(prefs),
+        body: JSON.stringify({ ...prefs, timezone }),
       })
+      if (!res.ok) throw new Error(await readApiError(res))
+      setPrefs(await res.json())
       setToast(true); setTimeout(() => setToast(false), 2500)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save preferences')
     } finally {
       setSaving(false)
     }
@@ -162,8 +170,8 @@ export function NotificationsClient({ initialPrefs, userEmail }: Props) {
         />
         <NotifRow
           icon={Mail} iconColor="text-coral" iconBg="bg-coral/10"
-          label="Weekly digest" desc="Weekly summary of LLM costs, top models, and team breakdowns."
-          emailKey="weekly_digest_email" inAppKey="weekly_digest_inapp"
+          label="Weekly digest" desc="Monday summary of last week's LLM costs, top members, models and projects, biggest movers and budgets near their limit. In-app goes to owners/admins; Slack posts to the workspace channel if any admin turns it on."
+          emailKey="weekly_digest_email" inAppKey="weekly_digest_inapp" slackKey="weekly_digest_slack"
           prefs={prefs} onChange={set}
         />
         <NotifRow
@@ -214,14 +222,16 @@ export function NotificationsClient({ initialPrefs, userEmail }: Props) {
               ))}
             </div>
             <p className="text-[11.5px] text-[var(--fg-tertiary)] mt-3">
-              Budget breaches and critical alerts are always delivered immediately regardless of quiet hours.
+              Non-critical alert emails are skipped during quiet hours (in-app still arrives). A limit reaching its block level is always emailed immediately.
+              {prefs.timezone && <> Times are in {prefs.timezone}.</>}
             </p>
           </div>
         )}
       </div>
 
       {/* Save */}
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-3">
+        {error && <p className="text-[12px] text-[var(--red)]">{error}</p>}
         <button onClick={save} disabled={saving} className="btn-primary disabled:opacity-50">
           {saving
             ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" /> Saving…</>

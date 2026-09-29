@@ -11,28 +11,33 @@ import { cn } from '@/lib/utils'
    TYPES
 ═══════════════════════════════════════════════════════════ */
 export interface DailyRow {
+  day:      string   // YYYY-MM-DD (org time zone)
   date:     string
   dow:      string
   cost:     number
+  metered:  number   // real bill
+  notional: number   // subscription usage priced at API rates — not a bill
   prev:     number
   tokens:   number  // millions
   calls:    number
+  prompts:  number
   topModel: string
   topProj:  string
   spike:    boolean
 }
 
-interface Props { rows: DailyRow[]; days: number }
+export interface CostTotals { cost: number; metered: number; notional: number; prevCost: number; prompts: number }
+interface Props { rows: DailyRow[]; days: number; windowLabel: string; orgId: string; totals: CostTotals }
 
 /* ═══════════════════════════════════════════════════════════
    CSV EXPORT
 ═══════════════════════════════════════════════════════════ */
 function downloadCSV(rows: DailyRow[]) {
-  const headers = ['Date','Day','Cost (USD)','vs Prior Period','Tokens (M)','LLM Calls','Top Model','Top Project','Anomaly']
+  const headers = ['Date','Day','Cost (USD)','Metered (USD)','Notional (USD)','vs Prior Period','Tokens (M)','Prompts','LLM Calls','Top Model','Top Project','Anomaly']
   const lines = rows.map(r => [
-    r.date, r.dow, r.cost.toFixed(2),
+    r.day, r.dow, r.cost.toFixed(2), r.metered.toFixed(2), r.notional.toFixed(2),
     r.prev > 0 ? ((r.cost - r.prev) / r.prev * 100).toFixed(1) + '%' : 'N/A',
-    r.tokens.toFixed(1), r.calls, r.topModel, r.topProj, r.spike ? 'Yes' : 'No',
+    r.tokens.toFixed(1), r.prompts, r.calls, r.topModel, r.topProj, r.spike ? 'Yes' : 'No',
   ])
   const csv = [headers, ...lines].map(r => r.join(',')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv' })
@@ -46,7 +51,10 @@ function downloadCSV(rows: DailyRow[]) {
 ═══════════════════════════════════════════════════════════ */
 const DAY_OPTIONS = [{ label:'7D', value:7 }, { label:'30D', value:30 }, { label:'90D', value:90 }]
 
-export function CostsClient({ rows: initialRows, days }: Props) {
+export function CostsClient({ rows: initialRows, days, windowLabel, orgId, totals }: Props) {
+  const [cbMonth, setCbMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [cbGroup, setCbGroup] = useState<'team' | 'project' | 'member'>('team')
+  const chargebackHref = `/api/v1/export/chargeback?org_id=${orgId}&month=${cbMonth}&group=${cbGroup}`
   const router   = useRouter()
   const pathname = usePathname()
   const [showSched, setShowSched] = useState(false)
@@ -57,13 +65,14 @@ export function CostsClient({ rows: initialRows, days }: Props) {
 
   const rows = useMemo(() => sortAsc ? [...initialRows] : [...initialRows].reverse(), [initialRows, sortAsc])
 
-  const total     = initialRows.reduce((s, r) => s + r.cost, 0)
-  const totalPrev = initialRows.reduce((s, r) => s + r.prev, 0)
+  const total     = totals.cost
+  const totalPrev = totals.prevCost
   const totalTok  = initialRows.reduce((s, r) => s + r.tokens, 0)
   const totalCall = initialRows.reduce((s, r) => s + r.calls, 0)
-  const delta     = totalPrev > 0 ? ((total - totalPrev) / totalPrev) * 100 : 0
-  const projected = initialRows.length > 0 ? (total / initialRows.length) * 30 : 0
-  const avgDay    = initialRows.length > 0 ? total / initialRows.length : 0
+  const delta     = totalPrev > 0 ? ((total - totalPrev) / totalPrev) * 100 : null
+  // Per calendar day of the window (quiet days count as $0).
+  const avgDay    = days > 0 ? total / days : 0
+  const projected = avgDay * 30
   const maxDay    = initialRows.length > 0 ? Math.max(...initialRows.map(r => r.cost)) : 1
   const spikeRow  = initialRows.find(r => r.spike)
 
@@ -76,7 +85,7 @@ export function CostsClient({ rows: initialRows, days }: Props) {
   if (initialRows.length === 0) {
     return (
       <div className="space-y-5">
-        <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Cost Reports</h1>
+        <p className="text-[13px] text-[var(--fg-secondary)]">Daily spend breakdown · {windowLabel}</p>
         <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-10 text-center">
           <DollarSign size={32} className="mx-auto mb-3 text-[var(--fg-tertiary)]" />
           <p className="text-[14px] font-semibold text-[var(--fg)]">No cost data yet</p>
@@ -91,10 +100,7 @@ export function CostsClient({ rows: initialRows, days }: Props) {
 
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Cost Reports</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Daily spend breakdown · last {days} days</p>
-        </div>
+        <p className="text-[13px] text-[var(--fg-secondary)]">Daily spend breakdown · {windowLabel}</p>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1 p-1 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl">
             {DAY_OPTIONS.map(opt => (
@@ -121,9 +127,9 @@ export function CostsClient({ rows: initialRows, days }: Props) {
       {/* ── Summary KPIs ── */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         {[
-          { label:'Period spend',    value:`$${total.toFixed(2)}`,    sub:`${delta>=0?'+':''}${delta.toFixed(1)}% vs prior`, color:'#D97757', icon:DollarSign    },
+          { label:`Spend · ${windowLabel}`, value:`$${total.toFixed(2)}`, sub:`$${totals.metered.toFixed(2)} metered · $${totals.notional.toFixed(2)} notional${delta == null ? '' : ` · ${delta>=0?'+':''}${delta.toFixed(1)}% vs prior`}`, color:'#D97757', icon:DollarSign },
           { label:'Daily average',   value:`$${avgDay.toFixed(2)}`,   sub:'per calendar day',                                color:'#4285F4', icon:BarChart3     },
-          { label:'Projected EOM',   value:`$${projected.toFixed(0)}`,sub:'at current pace',                                 color:'#F59E0B', icon:TrendingUp    },
+          { label:'Projected 30 days', value:`$${projected.toFixed(0)}`,sub:'at current pace',                                 color:'#F59E0B', icon:TrendingUp    },
           { label:'Tokens',          value:`${totalTok.toFixed(1)}M`, sub:`${(totalTok/Math.max(initialRows.length,1)).toFixed(1)}M/day`, color:'#20B2AA', icon:Zap },
           { label:'Highest day',     value:`$${maxDay.toFixed(2)}`,   sub: spikeRow ? `${spikeRow.date} · anomaly spike` : 'no anomaly', color:'#EF4444', icon:AlertTriangle },
         ].map(s => {
@@ -143,18 +149,16 @@ export function CostsClient({ rows: initialRows, days }: Props) {
         })}
       </div>
 
-      {/* ── Scheduled reports panel ── */}
+      {/* ── Scheduled reports ── */}
       {showSched && (
-        <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-[13px] font-bold text-[var(--fg)]">Scheduled reports</p>
-            <button className="btn-primary text-[12px]"><Clock size={12} /> New schedule</button>
-          </div>
-          <p className="text-[12px] text-[var(--fg-tertiary)]">
-            Scheduled reports are not yet configured. Connect Slack or email via{' '}
-            <a href="/dashboard/integrations" className="text-coral underline">Integrations</a> to set them up.
+        <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-5 space-y-2">
+          <p className="text-[13px] font-bold text-[var(--fg)]">Scheduled reports</p>
+          <p className="text-[12px] text-[var(--fg-secondary)]">
+            TokenFin sends a weekly spend digest (cost, prompts, top members, models and projects, budgets at risk)
+            every Monday by email, in-app and to your Slack or webhook integration.
+            Turn it on or off per person in{' '}
+            <a href="/dashboard/settings/notifications" className="text-coral underline">Settings → Notifications</a>.
           </p>
-          <p className="text-[11px] text-[var(--fg-tertiary)]">Reports will be delivered as PDF / CSV attachments or inline email summaries.</p>
         </div>
       )}
 
@@ -170,7 +174,7 @@ export function CostsClient({ rows: initialRows, days }: Props) {
 
         {/* Col headers */}
         <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr_1fr] gap-3 px-5 py-2.5 border-b border-[var(--border)] bg-[var(--bg-secondary)]">
-          {['Date','Cost','vs Prior','Tokens','Calls','Top model','Top project'].map(h => (
+          {['Date','Cost','vs Prior','Tokens','Prompts / Calls','Top model','Top project'].map(h => (
             <p key={h} className="text-[10.5px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider">{h}</p>
           ))}
         </div>
@@ -197,6 +201,7 @@ export function CostsClient({ rows: initialRows, days }: Props) {
                 {/* Cost with mini bar */}
                 <div className="space-y-1">
                   <p className="text-[13px] font-bold text-[var(--fg)] tabular-nums">${r.cost.toFixed(2)}</p>
+                  {r.notional > 0 && <p className="text-[10px] text-[var(--fg-tertiary)] tabular-nums">${r.metered.toFixed(2)} metered · ${r.notional.toFixed(2)} notional</p>}
                   <div className="h-1 bg-[var(--bg-secondary)] rounded-full overflow-hidden w-[70px]">
                     <div className="h-full rounded-full bg-coral" style={{ width:`${barW}%` }} />
                   </div>
@@ -213,7 +218,10 @@ export function CostsClient({ rows: initialRows, days }: Props) {
                 <p className="text-[12.5px] text-[var(--fg)] tabular-nums">{r.tokens.toFixed(2)}M</p>
 
                 {/* Calls */}
-                <p className="text-[12.5px] text-[var(--fg)] tabular-nums">{r.calls.toLocaleString()}</p>
+                <div>
+                  <p className="text-[12.5px] text-[var(--fg)] tabular-nums">{r.prompts.toLocaleString()}</p>
+                  <p className="text-[10.5px] text-[var(--fg-tertiary)] tabular-nums">{r.calls.toLocaleString()} calls</p>
+                </div>
 
                 {/* Top model */}
                 <p className="text-[11.5px] text-[var(--fg-secondary)] truncate">{r.topModel || '—'}</p>
@@ -229,11 +237,14 @@ export function CostsClient({ rows: initialRows, days }: Props) {
         <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr_1fr] gap-3 px-5 py-4 border-t border-[var(--border)] bg-[var(--bg-secondary)]">
           <p className="text-[11px] font-bold text-[var(--fg-secondary)] uppercase tracking-wider">TOTAL</p>
           <p className="text-[13px] font-bold text-[var(--fg)] tabular-nums">${total.toFixed(2)}</p>
-          <p className={cn('text-[12px] font-bold', delta>0?'text-[var(--red)]':'text-teal')}>
-            {delta>0?'+':''}{delta.toFixed(1)}%
+          <p className={cn('text-[12px] font-bold', delta == null ? 'text-[var(--fg-tertiary)]' : delta>0?'text-[var(--red)]':'text-teal')}>
+            {delta == null ? '—' : `${delta>0?'+':''}${delta.toFixed(1)}%`}
           </p>
           <p className="text-[12.5px] font-bold text-[var(--fg)] tabular-nums">{totalTok.toFixed(2)}M</p>
-          <p className="text-[12.5px] font-bold text-[var(--fg)] tabular-nums">{totalCall.toLocaleString()}</p>
+          <div>
+            <p className="text-[12.5px] font-bold text-[var(--fg)] tabular-nums">{totals.prompts.toLocaleString()}</p>
+            <p className="text-[10.5px] text-[var(--fg-tertiary)] tabular-nums">{totalCall.toLocaleString()} calls</p>
+          </div>
           <span />
           <span />
         </div>
@@ -241,28 +252,41 @@ export function CostsClient({ rows: initialRows, days }: Props) {
 
       {/* ── Export options ── */}
       <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-5">
-        <p className="text-[13px] font-bold text-[var(--fg)] mb-4">Export options</p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {[
-            { label:'Export CSV',     desc:'Daily rows · all fields · UTF-8',        icon:Download, color:'#20B2AA', action:handleExport },
-            { label:'Export PDF',     desc:'Formatted report with charts & summary',  icon:FileText, color:'#D97757', action:()=>{}       },
-            { label:'Send to email',  desc:'Email this report to your inbox now',     icon:Mail,     color:'#4285F4', action:()=>{}       },
-          ].map(o => {
-            const Icon = o.icon
-            return (
-              <button key={o.label} onClick={o.action}
-                className="flex items-center gap-3 p-4 border border-[var(--border)] rounded-2xl hover:border-coral/40 hover:bg-coral/5 transition-all group text-left">
-                <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-coral/10 transition-colors"
-                  style={{ background:`${o.color}18` }}>
-                  <Icon size={16} style={{ color: o.color }} />
-                </div>
-                <div>
-                  <p className="text-[12.5px] font-semibold text-[var(--fg)] group-hover:text-coral transition-colors">{o.label}</p>
-                  <p className="text-[10.5px] text-[var(--fg-tertiary)]">{o.desc}</p>
-                </div>
-              </button>
-            )
-          })}
+        <p className="text-[13px] font-bold text-[var(--fg)] mb-4">Export</p>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <button onClick={handleExport}
+            className="flex items-center gap-3 p-4 border border-[var(--border)] rounded-2xl hover:border-coral/40 hover:bg-coral/5 transition-all group text-left">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background:'#20B2AA18' }}>
+              <Download size={16} style={{ color: '#20B2AA' }} />
+            </div>
+            <div>
+              <p className="text-[12.5px] font-semibold text-[var(--fg)] group-hover:text-coral transition-colors">Daily breakdown CSV</p>
+              <p className="text-[10.5px] text-[var(--fg-tertiary)]">The rows above · cost, prompts, calls, tokens, top model and project</p>
+            </div>
+          </button>
+
+          <div className="p-4 border border-[var(--border)] rounded-2xl space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background:'#D9775718' }}>
+                <FileText size={16} style={{ color: '#D97757' }} />
+              </div>
+              <div>
+                <p className="text-[12.5px] font-semibold text-[var(--fg)]">Monthly chargeback CSV</p>
+                <p className="text-[10.5px] text-[var(--fg-tertiary)]">Metered and subscription cost kept separate · share of bill · prompts · calls</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input id="chargeback-month" type="month" value={cbMonth} onChange={e => setCbMonth(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-[12px] text-[var(--fg)]" />
+              <select id="chargeback-group" value={cbGroup} onChange={e => setCbGroup(e.target.value as 'team' | 'project' | 'member')}
+                className="px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-[12px] text-[var(--fg)]">
+                <option value="team">By team</option>
+                <option value="project">By project</option>
+                <option value="member">By member</option>
+              </select>
+              <a href={chargebackHref} className="btn-primary text-[12px]"><Download size={12} /> Download</a>
+            </div>
+          </div>
         </div>
       </div>
     </div>

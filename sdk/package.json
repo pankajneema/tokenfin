@@ -1,13 +1,13 @@
 {
   "name": "@tokenfin/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Official TypeScript SDK for the TokenFin LLM Cost Attribution API",
   "license": "MIT",
   "author": "TokenFin",
-  "homepage": "https://tokenfin.io",
+  "homepage": "https://github.com/pankajneema/tokenfin/tree/main/sdk#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tokenfin/tokenfin",
+    "url": "git+https://github.com/pankajneema/tokenfin.git",
     "directory": "sdk"
   },
   "keywords": [
@@ -17,16 +17,18 @@
     "cost",
     "tokens",
     "attribution",
-    "finops"
+    "finops",
+    "claude",
+    "instrumentation"
   ],
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "files": [
@@ -36,7 +38,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test": "tsx --test test/*.test.ts",
     "test:real": "tsx --tsconfig scripts/tsconfig.json scripts/test.ts",
     "prepublishOnly": "npm run typecheck && npm run build"
   },
@@ -48,5 +50,24 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "bugs": {
+    "url": "https://github.com/pankajneema/tokenfin/issues"
+  },
+  "sideEffects": false,
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.20.0",
+    "openai": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

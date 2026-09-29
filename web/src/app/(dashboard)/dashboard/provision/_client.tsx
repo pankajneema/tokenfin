@@ -52,7 +52,7 @@ export function ProvisionClient({ orgId, projects, teams }: { orgId: string; pro
       <div className="mb-6 flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--green-bg)]"><Users size={20} className="text-teal" /></div>
         <div>
-          <h1 className="text-[19px] font-bold text-[var(--fg)]">Provision team</h1>
+          <h2 className="text-[19px] font-bold text-[var(--fg)]">Provision team</h2>
           <p className="text-[13px] text-[var(--fg-secondary)]">Invite many members and auto-generate a key for each — no logins or manual tokens.</p>
         </div>
       </div>

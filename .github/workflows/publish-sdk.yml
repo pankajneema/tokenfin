@@ -1,0 +1,72 @@
+name: Publish SDKs
+
+# Manual only. Run from Actions → "Publish SDKs" → Run workflow.
+# Requires repository secrets NPM_TOKEN (npm automation token with publish
+# rights on @tokenfin) and PYPI_TOKEN (PyPI API token for `tokenfin`).
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which SDK(s) to publish
+        type: choice
+        options: [both, npm, pypi]
+        default: both
+      dry_run:
+        description: Build + test only, do not upload
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    if: inputs.target == 'both' || inputs.target == 'npm'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Check version is not already published
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "@tokenfin/sdk@$V" version >/dev/null 2>&1; then
+            echo "::error::@tokenfin/sdk@$V is already on npm — bump sdk/package.json"; exit 1
+          fi
+      - run: npm pack --dry-run
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  pypi:
+    if: inputs.target == 'both' || inputs.target == 'pypi'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest build twine
+      - run: python -m pytest tests/ -q
+      - run: python -m build
+      - run: twine check dist/*
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        run: twine upload --non-interactive dist/*
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}

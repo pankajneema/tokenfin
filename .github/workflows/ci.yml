@@ -28,32 +28,108 @@ jobs:
       - run: npm run lint
       - run: npm test
 
-  # ── Go backend ──────────────────────────────────────────────────────────────
-  go:
-    name: "Go — vet + build + test"
+  # ── Migration copies (fast, no DB) ──────────────────────────────────────────
+  migration-copies:
+    name: "DB — migration copies identical"
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/ci-db-check.sh --copies-only
+
+  # ── Database: migrations x2 + RLS + web tests + Playwright smoke ────────────
+  # A throwaway local Supabase (Postgres + PostgREST + GoTrue, nothing else).
+  # Every db/migrations/*.sql is applied in order twice (idempotency), then
+  # scripts/rls-check.sql proves anon/authenticated can't read or write.
+  db:
+    name: "DB — migrations x2 + RLS + web tests + e2e smoke"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: supabase/setup-cli@v1
         with:
-          go-version: "1.23"
-          cache-dependency-path: backend/go.sum
+          version: latest
 
-      - name: go vet
-        run: go vet ./...
+      - name: Start local Supabase (empty project — migrations applied by us)
+        run: |
+          mkdir -p "$RUNNER_TEMP/sb" && cd "$RUNNER_TEMP/sb"
+          supabase init --yes >/dev/null
+          supabase start -x studio,imgproxy,realtime,storage-api,edge-runtime,logflare,vector,supavisor,mailpit,postgres-meta
+          supabase status -o env \
+            --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
+            --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY \
+            | grep -E '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY)=' \
+            | sed 's/"//g' >> "$GITHUB_ENV"
 
-      - name: build ingest
-        run: go build -o /dev/null ./cmd/ingest
+      - name: Apply all migrations twice + RLS check
+        run: scripts/ci-db-check.sh
 
-      - name: build worker
-        run: go build -o /dev/null ./cmd/worker
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: go test
-        run: go test ./...
+      - name: Web unit + route tests
+        working-directory: web
+        run: |
+          npm ci
+          npm test
+
+      - name: Build and Playwright smoke (unauthenticated)
+        working-directory: web
+        env:
+          NEXT_PUBLIC_APP_URL: http://localhost:3002
+          CRON_SECRET: ci-cron-secret
+          KEY_ENCRYPTION_SECRET: ci-only-key-encryption-secret-0123456789
+          E2E_START_SERVER: "1"
+          E2E_BASE_URL: http://localhost:3002
+        run: |
+          npm run build
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+
+      - name: Cron routes record job_runs
+        working-directory: web
+        env:
+          CRON_SECRET: ci-cron-secret
+          KEY_ENCRYPTION_SECRET: ci-only-key-encryption-secret-0123456789
+        run: |
+          npx next start -p 3002 & echo $! > /tmp/next.pid
+          for i in $(seq 1 60); do curl -fsS http://localhost:3002/api/health >/dev/null && break; sleep 1; done
+          curl -fsS http://localhost:3002/api/health
+          for job in retention alerts digest; do
+            curl -fsS -H "Authorization: Bearer $CRON_SECRET" "http://localhost:3002/api/v1/cron/$job" >/dev/null
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3002/api/v1/cron/retention)" = 401
+          n=$(psql "$DATABASE_URL" -Atc "select count(*) from job_runs where ok and job in ('retention','alerts','digest')")
+          echo "job_runs ok rows: $n"; test "$n" -ge 3
+          kill "$(cat /tmp/next.pid)"
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/test-results
+          if-no-files-found: ignore
+
+  # ── CLI ─────────────────────────────────────────────────────────────────────
+  cli:
+    name: "CLI — tests"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
 
   # ── Python SDK ──────────────────────────────────────────────────────────────
   sdk-python:
@@ -82,24 +158,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build ingest image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.ingest
-          push: false
-          cache-from: type=gha,scope=ingest
-          cache-to:   type=gha,scope=ingest,mode=max
-
-      - name: Build worker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.worker
-          push: false
-          cache-from: type=gha,scope=worker
-          cache-to:   type=gha,scope=worker,mode=max
-
       - name: Build web image
         uses: docker/build-push-action@v5
         with:
@@ -111,7 +169,7 @@ jobs:
 
   # ── SDK typecheck ───────────────────────────────────────────────────────────
   sdk:
-    name: "SDK — typecheck"
+    name: "SDK — typecheck + tests"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -125,3 +183,4 @@ jobs:
 
       - run: npm install
       - run: npm run typecheck
+      - run: npm test

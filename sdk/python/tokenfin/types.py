@@ -3,8 +3,9 @@ Shared types for the TokenFin Python SDK.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, Optional, Union
 
 
 @dataclass
@@ -12,54 +13,61 @@ class TokenFinConfig:
     """Configuration for the TokenFin client."""
 
     api_key: str
-    """API key — must start with 'tfk_'. Required."""
+    """API key — starts with 'tfk_'. Required."""
 
     base_url: str = "https://tokenfin.curiousdevs.com"
     """Base URL of your TokenFin instance. Override for self-hosted deployments."""
 
-    timeout: float = 3.0
+    timeout: float = 5.0
     """Per-request HTTP timeout in seconds."""
 
     flush_interval: float = 1.0
-    """Auto-flush interval in seconds. Set to 0 to disable background flushing."""
+    """Auto-flush interval in seconds. 0 disables background flushing."""
 
-    batch_size: int = 50
-    """Maximum events sent in a single HTTP request."""
+    batch_size: int = 100
+    """Maximum events per HTTP request (server cap: 500)."""
 
-    max_queue_size: int = 1_000
-    """Maximum events held in memory. Oldest event is dropped when exceeded."""
+    max_queue_size: int = 10_000
+    """Maximum events held in memory. The OLDEST event is dropped (and counted) when full."""
 
     max_retries: int = 3
-    """Maximum retry attempts per batch on retryable errors."""
+    """Retries per request for 408/429/5xx/network errors."""
+
+    max_retry_after: float = 30.0
+    """Upper bound (seconds) for honouring a Retry-After header."""
+
+    flush_on_exit: bool = True
+    """Drain the queue from an ``atexit`` hook. No signal handlers are ever installed."""
 
     debug: bool = False
-    """Emit debug logs to stderr."""
+    """Emit debug logs via the ``tokenfin`` logger."""
 
 
 @dataclass
 class TrackEvent:
-    """A single LLM usage event to be tracked."""
+    """A single LLM usage event."""
 
     model: str
-    """Model identifier, e.g. 'gpt-4o', 'claude-sonnet-4-6'."""
-
-    input_tokens: int
-    """Number of input/prompt tokens consumed."""
-
-    output_tokens: int
-    """Number of output/completion tokens produced."""
-
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cache_read_tokens: Optional[int] = None
+    cache_write_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    project_id: Optional[str] = None
+    user_email: Optional[str] = None
+    session_id: Optional[str] = None
+    latency_ms: Optional[float] = None
+    timestamp: Optional[Union[datetime, str]] = None
+    provider: Optional[str] = None
+    source: Optional[str] = None
+    tool: Optional[str] = None
+    prompt_text: Optional[str] = None
+    """Only send when you have opted in to prompt capture."""
+    prompt_hash: Optional[str] = None
     idempotency_key: Optional[str] = None
-    """
-    Optional deduplication key. Duplicate events with the same key are
-    silently discarded within a 24-hour window. Auto-generated if omitted.
-    """
-
+    """Deduplication key; auto-generated (UUID v4) when omitted."""
     tags: Optional[Dict[str, str]] = None
-    """Free-form string labels — filterable in the dashboard."""
-
     metadata: Optional[Dict[str, Any]] = None
-    """Arbitrary JSON payload — stored but not indexed."""
 
 
 @dataclass
@@ -67,7 +75,7 @@ class FlushResult:
     """Outcome of a flush call."""
 
     sent: int = 0
-    """Events successfully accepted by the server."""
+    """Events accepted by the server (incl. idempotent duplicates)."""
 
     dropped: int = 0
-    """Events that failed after all retries and were discarded."""
+    """Events rejected (non-retryable 4xx) or failed after all retries."""

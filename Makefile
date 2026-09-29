@@ -1,8 +1,7 @@
 .PHONY: install dev lint typecheck \
-        go-tidy go-vet go-build go-ingest go-worker \
         sdk-install sdk-typecheck sdk-build \
         sdk-py-install sdk-py-test sdk-py-build \
-        docker-build docker-up docker-down docker-logs \
+        docker-build docker-up docker-up-fg docker-down docker-logs \
         db-migrate gen-types
 
 # ── Web (Next.js) ──────────────────────────────────────────────────────────────
@@ -17,27 +16,6 @@ lint:
 
 typecheck:
 	cd web && npm run typecheck
-
-# ── Go backend ─────────────────────────────────────────────────────────────────
-go-tidy:
-	cd backend && go mod tidy
-
-go-vet:
-	cd backend && go vet ./...
-
-go-build:
-	cd backend && go build -o bin/ingest ./cmd/ingest && go build -o bin/worker ./cmd/worker
-
-go-ingest:
-	cd backend && go run ./cmd/ingest
-
-go-worker:
-	cd backend && go run ./cmd/worker
-
-# Run both Go services in background (local dev — requires Redis running)
-go-dev: go-build
-	@echo "Starting ingest on :8001 and worker on :8002"
-	@./backend/bin/ingest & ./backend/bin/worker
 
 # ── SDK (@tokenfin/sdk) ────────────────────────────────────────────────────────
 sdk-install:
@@ -64,7 +42,7 @@ sdk-py-build:
 docker-build:
 	docker compose -f infra/docker/docker-compose.yml build
 
-# Start all services (redis + ingest + worker + web)
+# Start the web service
 docker-up:
 	docker compose -f infra/docker/docker-compose.yml --env-file .env up --build -d
 
@@ -80,10 +58,6 @@ docker-down:
 docker-logs:
 	docker compose -f infra/docker/docker-compose.yml logs -f
 
-# Start only infrastructure (redis) for local Go/Node dev
-docker-redis:
-	docker compose -f infra/docker/docker-compose.yml up redis -d
-
 # ── Database ───────────────────────────────────────────────────────────────────
 db-migrate:
 	@echo "Run migrations in order via Supabase SQL Editor or CLI:"
@@ -97,5 +71,5 @@ gen-types:
 	@echo "✓ web/src/types/db.ts updated"
 
 # ── Verify everything builds cleanly ─────────────────────────────────────────
-check: go-vet typecheck sdk-typecheck sdk-py-test
+check: typecheck sdk-typecheck sdk-py-test
 	@echo "✓ All checks passed"

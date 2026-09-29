@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/lib/api/auth'
 import { openKey } from '@/lib/crypto/key-reveal'
 import { z } from 'zod'
+import { audit } from '@/lib/audit'
 
 /**
  * POST /api/v1/keys/reveal-full  { id }
@@ -32,6 +33,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const raw = openKey({ ciphertext: key.key_enc_cipher, iv: key.key_enc_iv, authTag: key.key_enc_tag })
+    await audit({ orgId: key.org_id as string, actorUserId: guard.userId, action: 'key.reveal', targetType: 'api_key', targetId: parsed.data.id, details: { via: 'copy_anytime' } })
     return NextResponse.json({ key: raw })
   } catch {
     return NextResponse.json({ error: 'Unable to decrypt key' }, { status: 500 })

@@ -1,10 +1,9 @@
 """
 Async TokenFin client (asyncio).
 
-Requires Python 3.9+ and aiohttp::
-
-    pip install tokenfin[async]
-
+Uses aiohttp when installed (``pip install "tokenfin[async]"``); otherwise it
+falls back to the stdlib transport in a worker thread, so it works with zero
+dependencies.
 """
 from __future__ import annotations
 
@@ -12,226 +11,234 @@ import asyncio
 import json
 import logging
 import time
-from typing import List, Optional
+from collections import deque
+from typing import Any, Deque, Dict, List, Optional
 
-from .types import TokenFinConfig, TrackEvent, FlushResult
-from .utils import backoff_seconds, event_to_payload, RETRYABLE_STATUSES
+from .client import post_urllib, _json
+from .types import FlushResult, TokenFinConfig, TrackEvent
+from .utils import (
+    SERVER_BATCH_CAP, HttpResult, SendOutcome, backoff_seconds, event_to_payload,
+    headers_for, interpret_batch, interpret_single, parse_retry_after,
+)
 
 logger = logging.getLogger("tokenfin.async")
 
 _CB_THRESHOLD = 5
-_CB_COOLDOWN  = 60.0
+_CB_COOLDOWN = 60.0
+_SINGLE_CONCURRENCY = 8
 
 
 class AsyncTokenFinClient:
     """
-    Async TokenFin client for asyncio applications (FastAPI, Django ASGI, etc.).
+    Async TokenFin client for asyncio apps (FastAPI, ASGI workers, …).
 
     Example::
 
-        import asyncio
-        from tokenfin import AsyncTokenFinClient
-
         tf = AsyncTokenFinClient(api_key="tfk_prod_...")
+        tf.track(model="gpt-4o", input_tokens=800, output_tokens=120)   # sync, non-blocking
+        await tf.shutdown()                                             # drain on app shutdown
 
-        async def call_llm():
-            response = await openai_client.chat.completions.create(...)
-            await tf.track(
-                model="gpt-4o",
-                input_tokens=response.usage.prompt_tokens,
-                output_tokens=response.usage.completion_tokens,
-            )
-
-        async def shutdown():
-            await tf.flush()
-
+    ``track()`` is a plain (non-async) method; ``await tf.track(...)`` also
+    works for backwards compatibility.
     """
 
-    def __init__(self, api_key: Optional[str] = None, **kwargs):
-        """
-        Create an async TokenFin client.
-
-        Args:
-            api_key: API key starting with ``tfk_``. Required.
-            **kwargs: Any field from :class:`TokenFinConfig`.
-        """
+    def __init__(self, api_key: Optional[str] = None, **kwargs: Any) -> None:
         if api_key is not None:
             kwargs["api_key"] = api_key
         self._cfg = TokenFinConfig(**kwargs)
-        self._ingest_url = self._cfg.base_url.rstrip("/") + "/api/v1/ingest"
-
+        self._base = self._cfg.base_url.rstrip("/")
+        self._batch_size = max(1, min(self._cfg.batch_size, SERVER_BATCH_CAP))
         if self._cfg.debug:
-            logging.basicConfig(level=logging.DEBUG)
-
-        self._queue: List[dict] = []
-        self._lock  = asyncio.Lock()
-
-        # Circuit breaker
-        self._cb_failures  = 0
-        self._cb_open_until: float = 0.0
-
-        # Background flush task (started lazily on first track() call)
-        self._flush_task: Optional[asyncio.Task] = None
-        self._stop = False
+            logger.setLevel(logging.DEBUG)
+        self._queue: Deque[dict] = deque()
+        self._drain_lock: Optional[asyncio.Lock] = None
+        self._task: Optional[asyncio.Task] = None
+        self._stopped = False
+        self._closed = False
+        self._batch_supported: Optional[bool] = None
+        self._sent_total = 0
+        self._dropped_total = 0
+        self._cb_failures = 0
+        self._cb_open_until = 0.0
+        self._session: Any = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    async def track(
-        self,
-        model: str,
-        input_tokens: int,
-        output_tokens: int,
-        *,
-        idempotency_key: Optional[str] = None,
-        tags: Optional[dict] = None,
-        metadata: Optional[dict] = None,
-    ) -> None:
-        """
-        Enqueue a usage event. Returns immediately — never raises.
+    def track(self, model: str, input_tokens: Optional[int] = None,
+              output_tokens: Optional[int] = None, **fields: Any) -> "_Done":
+        """Enqueue a usage event. Never raises. Awaiting the return value is optional."""
+        try:
+            if model:
+                self._enqueue(event_to_payload(TrackEvent(
+                    model=model, input_tokens=input_tokens, output_tokens=output_tokens, **fields)))
+        except Exception as e:
+            logger.debug("track() failed: %s", e)
+        return _DONE
 
-        Starts the background flush task on first call.
-        """
-        event = TrackEvent(
-            model=model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            idempotency_key=idempotency_key,
-            tags=tags,
-            metadata=metadata,
-        )
-        payload = event_to_payload(event)
-
-        async with self._lock:
-            if len(self._queue) >= self._cfg.max_queue_size:
-                self._queue.pop(0)
-                logger.debug("queue full — dropped oldest event")
-            self._queue.append(payload)
-            queue_len = len(self._queue)
-
-        logger.debug("queued event (queue=%d)", queue_len)
-
-        # Start background flusher lazily
-        if self._flush_task is None and self._cfg.flush_interval > 0:
-            self._flush_task = asyncio.create_task(self._flush_loop())
-
-        # Trigger immediate flush if batch threshold reached
-        if queue_len >= self._cfg.batch_size:
-            await self._flush_once()
+    def track_event(self, event: TrackEvent) -> "_Done":
+        try:
+            self._enqueue(event_to_payload(event))
+        except Exception as e:
+            logger.debug("track_event() failed: %s", e)
+        return _DONE
 
     async def flush(self) -> FlushResult:
-        """
-        Drain the queue and wait for all batches to complete.
+        """Send everything queued so far and wait for it. Never raises."""
+        try:
+            return await self._drain()
+        except Exception as e:
+            logger.debug("flush() failed: %s", e)
+            return FlushResult()
 
-        Call this in your app shutdown handler before the event loop closes.
-        """
-        self._stop = True
-        if self._flush_task and not self._flush_task.done():
-            self._flush_task.cancel()
+    async def shutdown(self) -> FlushResult:
+        """Cancel the background task, drain the queue and close the HTTP session."""
+        self._stopped = True
+        if self._task and not self._task.done():
+            self._task.cancel()
             try:
-                await self._flush_task
-            except asyncio.CancelledError:
+                await self._task
+            except (asyncio.CancelledError, Exception):
                 pass
-        return await self._flush_once()
+        result = await self.flush()
+        self._closed = True
+        if self._session is not None:
+            try:
+                await self._session.close()
+            except Exception:
+                pass
+            self._session = None
+        return result
+
+    aclose = shutdown
 
     async def destroy(self) -> None:
-        """Cancel the flush task and discard all queued events."""
-        self._stop = True
-        if self._flush_task and not self._flush_task.done():
-            self._flush_task.cancel()
-        async with self._lock:
-            dropped = len(self._queue)
-            self._queue.clear()
-        logger.debug("destroyed — dropped %d events", dropped)
+        """Cancel the background task and discard queued events (counted as dropped)."""
+        self._stopped = True
+        if self._task and not self._task.done():
+            self._task.cancel()
+        self._dropped_total += len(self._queue)
+        self._queue.clear()
+        self._closed = True
+
+    def stats(self) -> Dict[str, int]:
+        return {"sent": self._sent_total, "dropped": self._dropped_total, "queued": len(self._queue)}
+
+    async def __aenter__(self) -> "AsyncTokenFinClient":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.shutdown()
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    async def _flush_loop(self) -> None:
-        while not self._stop:
+    def _enqueue(self, payload: dict) -> None:
+        if self._closed:
+            self._dropped_total += 1
+            return
+        if len(self._queue) >= self._cfg.max_queue_size:
+            self._queue.popleft()
+            self._dropped_total += 1
+        self._queue.append(payload)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no loop yet: events wait for flush()/shutdown()
+        if self._task is None and self._cfg.flush_interval > 0 and not self._stopped:
+            self._task = loop.create_task(self._loop())
+        if len(self._queue) >= self._batch_size:
+            loop.create_task(self.flush())
+
+    async def _loop(self) -> None:
+        while not self._stopped:
             await asyncio.sleep(self._cfg.flush_interval)
-            async with self._lock:
-                has_work = bool(self._queue)
-            if has_work:
-                await self._flush_once()
+            if self._queue:
+                await self.flush()
 
-    async def _flush_once(self) -> FlushResult:
+    async def _drain(self) -> FlushResult:
+        if self._drain_lock is None:
+            self._drain_lock = asyncio.Lock()
         result = FlushResult()
-        while True:
-            async with self._lock:
-                if not self._queue:
-                    break
+        async with self._drain_lock:
+            while self._queue:
                 if time.monotonic() < self._cb_open_until:
-                    dropped = len(self._queue)
+                    result.dropped += len(self._queue)
                     self._queue.clear()
-                    result.dropped += dropped
-                    logger.debug("circuit open — dropped %d events", dropped)
                     break
-                batch = self._queue[: self._cfg.batch_size]
-                del self._queue[: self._cfg.batch_size]
-
-            ok = await self._send_batch(batch)
-            if ok:
-                result.sent += len(batch)
+                batch = [self._queue.popleft() for _ in range(min(self._batch_size, len(self._queue)))]
+                sent, dropped, failed_hard = await self._send_with_retry(batch)
+                result.sent += sent
+                result.dropped += dropped
+                if failed_hard:
+                    self._cb_failures += 1
+                    if self._cb_failures >= _CB_THRESHOLD:
+                        self._cb_open_until = time.monotonic() + _CB_COOLDOWN
+                        logger.warning("tokenfin: circuit breaker opened for %.0fs", _CB_COOLDOWN)
+                    break
                 self._cb_failures = 0
-            else:
-                result.dropped += len(batch)
-                break
+        self._sent_total += result.sent
+        self._dropped_total += result.dropped
         return result
 
-    async def _send_batch(self, batch: List[dict]) -> bool:
-        """Send all events in the batch concurrently."""
+    async def _send_with_retry(self, batch: List[dict]):
+        sent = dropped = 0
+        pending = batch
+        for attempt in range(self._cfg.max_retries + 1):
+            out = await self._send(pending)
+            sent += out.sent
+            dropped += out.dropped
+            pending = out.retry
+            if not pending or attempt == self._cfg.max_retries:
+                break
+            wait = (min(out.retry_after, self._cfg.max_retry_after)
+                    if out.retry_after is not None else backoff_seconds(attempt))
+            await asyncio.sleep(wait)
+        return sent, dropped + len(pending), bool(pending) and sent == 0
+
+    async def _send(self, events: List[dict]) -> SendOutcome:
+        if self._batch_supported is not False:
+            r = await self._post("/api/v1/ingest/batch", {"events": events}, None)
+            if r.status in (404, 405):
+                self._batch_supported = False
+            else:
+                if r.status is not None and r.status < 300:
+                    self._batch_supported = True
+                return interpret_batch(r, events)
+        sem = asyncio.Semaphore(_SINGLE_CONCURRENCY)
+
+        async def one(e: dict) -> HttpResult:
+            async with sem:
+                return await self._post("/api/v1/ingest", e, e.get("idempotency_key"))
+
+        results = await asyncio.gather(*(one(e) for e in events))
+        return interpret_single(list(results), events)
+
+    async def _post(self, path: str, body: Any, idem: Optional[str]) -> HttpResult:
         try:
-            import aiohttp
+            import aiohttp  # type: ignore
         except ImportError:
-            raise ImportError(
-                "aiohttp is required for AsyncTokenFinClient.\n"
-                "Install it with: pip install tokenfin[async]"
-            ) from None
+            return await asyncio.to_thread(
+                post_urllib, self._base + path, body, self._cfg.api_key, idem, self._cfg.timeout)
+        try:
+            if self._session is None or self._session.closed:
+                self._session = aiohttp.ClientSession()
+            async with self._session.post(
+                self._base + path, data=json.dumps(body), headers=headers_for(self._cfg.api_key, idem),
+                timeout=aiohttp.ClientTimeout(total=self._cfg.timeout),
+            ) as resp:
+                raw = await resp.read()
+                return HttpResult(resp.status, parse_retry_after(resp.headers.get("Retry-After")), _json(raw))
+        except Exception as e:
+            logger.debug("request to %s failed: %s", path, type(e).__name__)
+            return HttpResult(None)
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self._cfg.api_key}",
-        }
 
-        async def send_one(session: aiohttp.ClientSession, payload: dict) -> bool:
-            body = json.dumps(payload)
-            for attempt in range(self._cfg.max_retries):
-                if attempt > 0:
-                    await asyncio.sleep(backoff_seconds(attempt - 1))
-                try:
-                    async with session.post(
-                        self._ingest_url,
-                        data=body,
-                        headers=headers,
-                        timeout=aiohttp.ClientTimeout(total=self._cfg.timeout),
-                    ) as resp:
-                        if resp.status < 300:
-                            return True
-                        if resp.status not in RETRYABLE_STATUSES:
-                            logger.debug("non-retryable %d — dropping", resp.status)
-                            return False
-                        logger.debug("retryable %d (attempt %d)", resp.status, attempt + 1)
-                except Exception as e:
-                    logger.debug("send error (attempt %d): %s", attempt + 1, str(e))
-            return False
+class _Done:
+    """Awaitable no-op so legacy ``await tf.track(...)`` keeps working."""
 
-        timeout = aiohttp.ClientTimeout(total=self._cfg.timeout * self._cfg.max_retries + 5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            results = await asyncio.gather(
-                *[send_one(session, p) for p in batch], return_exceptions=False
-            )
+    def __await__(self):
+        if False:  # pragma: no cover
+            yield
+        return None
 
-        failures = results.count(False)
-        if failures == 0:
-            logger.debug("batch sent ok (%d events)", len(batch))
-            return True
 
-        self._open_circuit()
-        return False
-
-    def _open_circuit(self) -> None:
-        self._cb_failures += 1
-        if self._cb_failures >= _CB_THRESHOLD:
-            self._cb_open_until = time.monotonic() + _CB_COOLDOWN
-            logger.warning(
-                "tokenfin: circuit breaker opened — will retry after %.0fs", _CB_COOLDOWN
-            )
+_DONE = _Done()

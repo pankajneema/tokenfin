@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation'
 import {
   TrendingUp, Download, BarChart3, Zap, Activity, DollarSign,
   AlertTriangle, Lightbulb, ArrowUpRight, ArrowDownRight, Minus,
-  ChevronRight, Cpu, Layers, Terminal, Globe, Code2, RefreshCw,
-} from 'lucide-react'
-import { cn } from '@/lib/utils'
+  ChevronRight, Cpu, Layers, Terminal, Globe, Code2, RefreshCw, MessageSquare } from 'lucide-react'
+import { cn, formatTokens } from '@/lib/utils'
 import type { AnalyticsData, DayData } from './_types'
+import { CacheEfficiency } from '@/components/dashboard/cache-efficiency'
 
 /* ═══════════════════════════════════════════════════════════
    TYPES
@@ -230,7 +230,10 @@ interface Props { initialData: AnalyticsData }
 export function AnalyticsClient({ initialData }: Props) {
   const router                      = useRouter()
   const [isPending, startTransition] = useTransition()
-  const [range,   setRange]   = useState<Range>(initialData.rangeDays <= 7 ? '7D' : initialData.rangeDays <= 30 ? '30D' : initialData.rangeDays <= 365 ? '1Y' : 'ALL')
+  const RANGE_DAYS: Record<Range, number> = { '7D': 7, '30D': 30, '1Y': 365, 'ALL': 1095 }
+  const initialRange = initialData.customRange ? null
+    : (Object.entries(RANGE_DAYS).find(([, d]) => d === initialData.rangeDays)?.[0] as Range | undefined) ?? null
+  const [range,   setRange]   = useState<Range | null>(initialRange)
   const [metric,  setMetric]  = useState<Metric>('cost')
   const [compare, setCompare] = useState(true)
   const [hovIdx,  setHovIdx]  = useState<number | null>(null)
@@ -239,8 +242,7 @@ export function AnalyticsClient({ initialData }: Props) {
 
   function chooseRange(next: Range) {
     setRange(next)
-    const days = next === '7D' ? 7 : next === '30D' ? 30 : next === '1Y' ? 365 : 3650
-    router.push(`/dashboard/analytics?days=${days}`)
+    router.push(`/dashboard/analytics?days=${RANGE_DAYS[next]}`)
   }
 
   function applyCustomRange() {
@@ -252,9 +254,8 @@ export function AnalyticsClient({ initialData }: Props) {
     startTransition(() => { router.refresh() })
   }
 
-  const data = useMemo(() =>
-    range === '7D' ? initialData.daily.slice(-7) : range === '30D' ? initialData.daily.slice(-30) : initialData.daily,
-    [range, initialData.daily])
+  // The server already fetched exactly the selected window.
+  const data = initialData.daily
 
   const totCost      = useMemo(() => data.reduce((s, d) => s + d.cost,  0), [data])
   const totPrev      = useMemo(() => data.reduce((s, d) => s + d.prev,  0), [data])
@@ -262,6 +263,8 @@ export function AnalyticsClient({ initialData }: Props) {
   const totCalls     = useMemo(() => data.reduce((s, d) => s + d.calls, 0), [data])
   const totPrevTok   = useMemo(() => data.reduce((s, d) => s + d.prevTok,   0), [data])
   const totPrevCalls = useMemo(() => data.reduce((s, d) => s + d.prevCalls, 0), [data])
+  const totPrompts     = initialData.prompts
+  const totPrevPrompts = initialData.prevPrompts
 
   const projected = data.length > 0 ? (totCost / data.length) * 30 : 0
   const budget    = initialData.orgBudget   // null = no budget set
@@ -281,19 +284,16 @@ export function AnalyticsClient({ initialData }: Props) {
   // Resolve model colors (server passes color in each ModelSlice)
   const models = initialData.byModel.map((m, i) => ({ ...m, color: m.color || MODEL_COLORS[i % MODEL_COLORS.length] }))
 
-  const dateLabel = data.length > 0
-    ? `${data[0].d} – ${data[data.length - 1].d} · ${data.length} days`
-    : 'No data'
+  const dateLabel = data.length > 0 && !initialData.customRange
+    ? `${initialData.windowLabel} · ${data[0].d} – ${data[data.length - 1].d}`
+    : initialData.windowLabel
 
   return (
     <div className="space-y-5">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Analytics</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">{dateLabel} · Full cost & usage intelligence</p>
-        </div>
+        <p className="text-[13px] text-[var(--fg-secondary)]">{dateLabel} · cost &amp; usage across every source</p>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setCompare(v => !v)}
             className={cn('flex items-center gap-1.5 px-3 py-2 rounded-xl border text-[12px] font-semibold transition-all',
@@ -305,7 +305,7 @@ export function AnalyticsClient({ initialData }: Props) {
               <button key={r} onClick={() => chooseRange(r)}
                 className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all',
                   range === r ? 'bg-[var(--fg)] text-[var(--bg)]' : 'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-                {r === '1Y' ? '1 year' : r === 'ALL' ? 'All' : r}
+                {r === '1Y' ? '1 year' : r === 'ALL' ? '3 years' : r}
               </button>
             ))}
           </div>
@@ -323,19 +323,21 @@ export function AnalyticsClient({ initialData }: Props) {
             <RefreshCw size={13} className={isPending ? 'animate-spin' : ''} />
             {isPending ? 'Refreshing…' : 'Refresh'}
           </button>
-          <button className="btn-secondary"><Download size={13} /> Export</button>
+          <Link href="/dashboard/analytics/costs" className="btn-secondary"><Download size={13} /> Export</Link>
         </div>
       </div>
 
       {/* ── KPI Strip ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-        <KpiCard label="Spend MTD" value={hasData ? `$${totCost.toFixed(2)}` : '$0.00'}
-          sub={hasData ? `$${(totCost/data.length).toFixed(2)}/day avg` : 'No usage yet'}
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+        <KpiCard label="Spend" value={hasData ? `$${totCost.toFixed(2)}` : '$0.00'}
+          sub={hasData
+            ? `$${initialData.meteredCost.toFixed(2)} metered · $${initialData.notionalCost.toFixed(2)} notional`
+            : 'No usage yet'}
           delta={totPrev > 0 ? costDelta : undefined} deltaLabel="vs prior period"
           iconColor="#D97757">
           <DollarSign size={15} />
         </KpiCard>
-        <KpiCard label="Projected EOM" value={`$${projected.toFixed(2)}`}
+        <KpiCard label="Projected 30 days" value={`$${projected.toFixed(2)}`}
           sub={budget ? `of $${budget.toLocaleString()} budget` : 'No org budget set — add in Limits'}
           delta={budget && budgetPct > 0 ? budgetPct - 100 : undefined} deltaLabel="over/under pace"
           iconColor={budget && budgetPct > 90 ? '#EF4444' : '#F59E0B'} warning={!!(budget && budgetPct > 80)}>
@@ -346,20 +348,22 @@ export function AnalyticsClient({ initialData }: Props) {
           iconColor={budget && budgetPct > 90 ? '#EF4444' : '#F59E0B'} warning={!!(budget && budgetPct > 80)}>
           <Activity size={15} />
         </KpiCard>
-        <KpiCard label="Tokens MTD" value={`${totTok.toFixed(1)}M`}
-          sub={(() => {
-            const inM  = (initialData.inputTokens  / 1_000_000).toFixed(1)
-            const outM = (initialData.outputTokens / 1_000_000).toFixed(1)
-            return initialData.inputTokens > 0
-              ? `↑${inM}M in · ↓${outM}M out`
-              : `${(totTok/Math.max(data.length,1)).toFixed(1)}M/day avg`
-          })()}
+        <KpiCard label="Tokens" value={formatTokens(initialData.tokensUsed)}
+          sub={initialData.inputTokens > 0
+            ? `↑${formatTokens(initialData.inputTokens)} in · ↓${formatTokens(initialData.outputTokens)} out`
+            : `${formatTokens(initialData.tokensUsed / Math.max(data.length, 1))}/day avg`}
           delta={totPrevTok > 0 ? ((totTok/totPrevTok)-1)*100 : undefined} deltaLabel="vs prior period"
           iconColor="#20B2AA">
           <Zap size={15} />
         </KpiCard>
+        <KpiCard label="Prompts" value={totPrompts.toLocaleString()}
+          sub={totPrompts > 0 ? `$${(totCost/totPrompts).toFixed(3)} per prompt` : 'No prompts yet'}
+          delta={totPrevPrompts > 0 ? ((totPrompts/totPrevPrompts)-1)*100 : undefined} deltaLabel="vs prior period"
+          iconColor="#F59E0B">
+          <MessageSquare size={15} />
+        </KpiCard>
         <KpiCard label="LLM Calls" value={totCalls.toLocaleString()}
-          sub={`${Math.round(totCalls/Math.max(data.length,1)).toLocaleString()}/day avg`}
+          sub={totPrompts > 0 ? `${(totCalls/totPrompts).toFixed(1)} calls per prompt` : `${Math.round(totCalls/Math.max(data.length,1)).toLocaleString()}/day avg`}
           delta={totPrevCalls > 0 ? ((totCalls/totPrevCalls)-1)*100 : undefined} deltaLabel="vs prior period"
           iconColor="#4285F4">
           <BarChart3 size={15} />
@@ -471,7 +475,7 @@ export function AnalyticsClient({ initialData }: Props) {
                     <div className="h-1 bg-[var(--bg-secondary)] rounded-full overflow-hidden">
                       <div className="h-full bg-coral/70 rounded-full" style={{ width:`${p.pct}%` }} />
                     </div>
-                    <p className="text-[10px] text-[var(--fg-tertiary)] mt-0.5">{p.calls.toLocaleString()} calls</p>
+                    <p className="text-[10px] text-[var(--fg-tertiary)] mt-0.5">{p.prompts.toLocaleString()} prompts · {p.calls.toLocaleString()} calls</p>
                   </div>
                 </div>
               ))}
@@ -528,7 +532,7 @@ export function AnalyticsClient({ initialData }: Props) {
                         <span className="text-[12px] font-semibold text-[var(--fg)]">{s.platform}</span>
                       </div>
                       <div className="flex items-center gap-2.5">
-                        <span className="text-[10.5px] text-[var(--fg-tertiary)] tabular-nums">{s.calls.toLocaleString()} calls</span>
+                        <span className="text-[10.5px] text-[var(--fg-tertiary)] tabular-nums">{s.prompts.toLocaleString()} prompts · {s.calls.toLocaleString()} calls</span>
                         <span className="text-[11.5px] font-bold text-[var(--fg)] tabular-nums">
                           {s.pct.toFixed(1)}%
                         </span>
@@ -549,6 +553,9 @@ export function AnalyticsClient({ initialData }: Props) {
           )}
         </div>
       </div>
+
+      {/* ── Cache efficiency ── */}
+      <CacheEfficiency stats={initialData.cache} showModels />
 
       {/* ── Anomaly + Insights ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

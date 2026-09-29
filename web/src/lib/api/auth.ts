@@ -6,7 +6,7 @@ import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { NextResponse }                     from 'next/server'
 import type { NextRequest }                 from 'next/server'
 import type { User }                        from '@supabase/supabase-js'
-import { can, type Role, type Permission }  from '@/lib/rbac'
+import { can, keyCanRead, promptScope, type Role, type Permission } from '@/lib/rbac'
 import crypto                               from 'crypto'
 
 export interface AuthResult {
@@ -194,60 +194,144 @@ export interface ApiKeyContext {
   projectId: string | null
   keyId:     string
   scopes:    string[]
+  /** The key's owner: api_keys.user_id, or created_by for org-level keys. */
+  userId:    string | null
+  /** True when the key is assigned to a specific member (api_keys.user_id set). */
+  personal:  boolean
+  /** The owner's role in the org — key-authenticated reads honour it. */
+  role:      Role
+}
+
+export type ApiKeyLookup =
+  | { status: 'none' }                 // no Bearer header
+  | { status: 'invalid' }              // header present, key unknown/inactive/expired/owner left
+  | { status: 'ok'; key: ApiKeyContext }
+
+/** Extracts a Bearer token from the Authorization header ('' when absent). */
+export function bearerFrom(req: NextRequest): string {
+  const auth = req.headers.get('authorization') ?? ''
+  return auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
+}
+
+/**
+ * Looks up a Bearer API key WITHOUT checking scopes. The owner's role is
+ * resolved from members: a personal key whose owner is no longer a member is
+ * treated as invalid; an org-level key (user_id NULL) inherits its creator's
+ * role, or 'member' if the creator has left.
+ */
+export async function lookupApiKey(req: NextRequest): Promise<ApiKeyLookup> {
+  const raw = bearerFrom(req)
+  if (!raw) return { status: 'none' }
+
+  const admin   = createAdminClient()
+  const keyHash = crypto.createHash('sha256').update(raw).digest('hex')
+  const { data: keyRow } = await admin
+    .from('api_keys')
+    .select('id, org_id, project_id, user_id, created_by, is_active, expires_at, scopes')
+    .eq('key_hash', keyHash)
+    .maybeSingle()
+
+  if (!keyRow || !keyRow.is_active) return { status: 'invalid' }
+  if (keyRow.expires_at && new Date(keyRow.expires_at) < new Date()) return { status: 'invalid' }
+
+  const personal = !!keyRow.user_id
+  const ownerId  = (keyRow.user_id ?? keyRow.created_by ?? null) as string | null
+  let role: Role = 'member'
+  if (ownerId) {
+    const { data: m } = await admin.from('members').select('role')
+      .eq('org_id', keyRow.org_id).eq('user_id', ownerId).maybeSingle()
+    if (m?.role) role = m.role as Role
+    else if (personal) return { status: 'invalid' }
+  }
+
+  return {
+    status: 'ok',
+    key: {
+      orgId:     keyRow.org_id as string,
+      projectId: (keyRow.project_id as string | null) ?? null,
+      keyId:     keyRow.id as string,
+      scopes:    Array.isArray(keyRow.scopes) ? (keyRow.scopes as string[]) : [],
+      userId:    ownerId,
+      personal,
+      role,
+    },
+  }
 }
 
 /**
  * Resolves the org (and project) from a Bearer API key in the Authorization header.
  * Returns null if no key present, or the key is invalid, inactive, expired, or
- * lacks the 'read' scope. Legacy keys with an empty scopes array are treated as
- * read-capable for backward compatibility.
+ * lacks the 'read' scope (ingest-only keys cannot read). Legacy keys with an
+ * empty scopes array are treated as read-capable for backward compatibility.
  */
 export async function resolveOrgFromApiKey(
   req: NextRequest,
 ): Promise<ApiKeyContext | null> {
-  const auth = req.headers.get('authorization') ?? ''
-  const raw  = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
-  if (!raw) return null
+  const r = await lookupApiKey(req)
+  if (r.status !== 'ok' || !keyCanRead(r.key.scopes)) return null
+  return r.key
+}
 
-  const keyHash        = crypto.createHash('sha256').update(raw).digest('hex')
-  const { data: keyRow } = await createAdminClient()
-    .from('api_keys')
-    .select('id, org_id, project_id, is_active, expires_at, scopes')
-    .eq('key_hash', keyHash)
-    .maybeSingle()
-
-  if (!keyRow || !keyRow.is_active) return null
-  if (keyRow.expires_at && new Date(keyRow.expires_at) < new Date()) return null
-
-  const scopes = Array.isArray(keyRow.scopes) ? (keyRow.scopes as string[]) : []
-  if (scopes.length > 0 && !scopes.includes('read') && !scopes.includes('admin')) return null
-
-  return {
-    orgId:     keyRow.org_id as string,
-    projectId: (keyRow.project_id as string | null) ?? null,
-    keyId:     keyRow.id as string,
-    scopes,
-  }
+export interface ReadGuard {
+  orgId:       string
+  projectId?:  string | null
+  /** Caller identity: the key owner (API key) or the session user. */
+  userId:      string | null
+  role:        Role
+  viaKey:      boolean
+  keyId?:      string
+  /**
+   * When non-null, the caller may only see rows for this user_id (members /
+   * viewers). null = org-wide (owner/admin). Routes that support per-user data
+   * should apply `.eq('user_id', scopeUserId)` when set.
+   */
+  scopeUserId: string | null
 }
 
 /**
  * requireApiKeyOrOrgMember — accepts EITHER:
  *  • Bearer API key (with 'read' scope) → resolves org_id (+ project_id) from api_keys
- *  • Supabase session + org_id query param  →  delegates to requireOrgMember
+ *  • Supabase session + org_id query param  →  membership check
  *
- * Use this on any READ route the MCP server calls. `projectId` is set only for
- * API-key callers and is the project the key belongs to.
+ * A Bearer header that is present but invalid → 401 (never falls through to the
+ * session path); a valid key without 'read' → 403. The caller's role (the key
+ * OWNER's role for keys) is returned and, if `opts.permission` is given, enforced.
  */
 export async function requireApiKeyOrOrgMember(
   req: NextRequest,
   orgIdParam?: string | null,
-): Promise<{ orgId: string; projectId?: string | null } | NextResponse> {
-  const apiKey = await resolveOrgFromApiKey(req)
-  if (apiKey) return { orgId: apiKey.orgId, projectId: apiKey.projectId }
+  opts: { permission?: Permission } = {},
+): Promise<ReadGuard | NextResponse> {
+  const r = await lookupApiKey(req)
+  if (r.status === 'invalid') {
+    return NextResponse.json({ error: 'Invalid or expired API key' }, {
+      status: 401, headers: { 'WWW-Authenticate': 'Bearer error="invalid_token"' },
+    })
+  }
+  if (r.status === 'ok') {
+    const k = r.key
+    if (!keyCanRead(k.scopes)) {
+      return NextResponse.json({ error: 'Forbidden', reason: 'API key lacks the read scope' }, { status: 403 })
+    }
+    // The key's org always wins; a stray ?org_id= is ignored (as before).
+    if (opts.permission && !can(k.role, opts.permission)) {
+      return NextResponse.json({ error: 'Forbidden', reason: `Requires permission: ${opts.permission}` }, { status: 403 })
+    }
+    return {
+      orgId: k.orgId, projectId: k.projectId, userId: k.userId, role: k.role,
+      viaKey: true, keyId: k.keyId, scopeUserId: promptScope(k.role, k.userId),
+    }
+  }
 
-  const guard = await requireOrgMember(orgIdParam)
+  const guard = await requireOrgMemberWithRole(orgIdParam)
   if (guard instanceof NextResponse) return guard
-  return { orgId: orgIdParam! }
+  if (opts.permission && !can(guard.role, opts.permission)) {
+    return NextResponse.json({ error: 'Forbidden', reason: `Requires permission: ${opts.permission}` }, { status: 403 })
+  }
+  return {
+    orgId: orgIdParam!, userId: guard.userId, role: guard.role, viaKey: false,
+    scopeUserId: promptScope(guard.role, guard.userId),
+  }
 }
 
 /**

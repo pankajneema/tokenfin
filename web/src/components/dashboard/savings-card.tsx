@@ -1,7 +1,6 @@
 import { PiggyBank, BadgeCheck, Sparkles } from 'lucide-react'
+import { formatCost, formatTokens } from '@/lib/utils'
 
-const fmtUsd = (n: number) => n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`
-const fmtTok = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${n}`
 
 /** Reusable savings summary card for Overview / My Usage. */
 export function SavingsCard({ costSaved, tokensSaved, savingsRate, measured, href = '/dashboard/analytics/savings' }: {
@@ -15,8 +14,8 @@ export function SavingsCard({ costSaved, tokensSaved, savingsRate, measured, hre
           {measured ? <><BadgeCheck size={10} className="text-teal" /> measured</> : <><Sparkles size={10} /> estimated</>}
         </span>
       </div>
-      <div className="text-[24px] font-bold text-[var(--fg)]">{fmtUsd(costSaved)}</div>
-      <div className="mt-0.5 text-[11.5px] text-[var(--fg-secondary)]">{fmtTok(tokensSaved)} tokens · {savingsRate}% of spend</div>
+      <div className="text-[24px] font-bold text-[var(--fg)]">{formatCost(costSaved)}</div>
+      <div className="mt-0.5 text-[11.5px] text-[var(--fg-secondary)]">{formatTokens(tokensSaved)} tokens · {savingsRate}% of spend</div>
     </a>
   )
 }

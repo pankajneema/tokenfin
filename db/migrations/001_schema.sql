@@ -355,151 +355,211 @@ ALTER TABLE invitations ENABLE ROW LEVEL SECURITY;
 -- Applied: 2026-06-15
 
 -- organizations: allow authenticated users to create and access their orgs
-CREATE POLICY "organizations_insert" ON organizations
-  FOR INSERT WITH CHECK (
-    auth.uid() = owner_id OR
-    auth.uid() IS NOT NULL  -- allow creation, owner_id is set in app
-  );
+DO $$ BEGIN
+  CREATE POLICY "organizations_insert" ON organizations
+    FOR INSERT WITH CHECK (
+      auth.uid() = owner_id OR
+      auth.uid() IS NOT NULL  -- allow creation, owner_id is set in app
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
-CREATE POLICY "organizations_select" ON organizations
-  FOR SELECT USING (
-    auth.uid() = owner_id OR
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = organizations.id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "organizations_select" ON organizations
+    FOR SELECT USING (
+      auth.uid() = owner_id OR
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = organizations.id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
-CREATE POLICY "organizations_update" ON organizations
-  FOR UPDATE USING (auth.uid() = owner_id)
-  WITH CHECK (auth.uid() = owner_id);
+DO $$ BEGIN
+  CREATE POLICY "organizations_update" ON organizations
+    FOR UPDATE USING (auth.uid() = owner_id)
+    WITH CHECK (auth.uid() = owner_id);
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- members: allow org members to view and add members
-CREATE POLICY "members_insert" ON members
-  FOR INSERT WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM organizations WHERE organizations.id = members.org_id AND organizations.owner_id = auth.uid()
-    ) OR
-    auth.uid() = invited_by
-  );
+DO $$ BEGIN
+  CREATE POLICY "members_insert" ON members
+    FOR INSERT WITH CHECK (
+      EXISTS (
+        SELECT 1 FROM organizations WHERE organizations.id = members.org_id AND organizations.owner_id = auth.uid()
+      ) OR
+      auth.uid() = invited_by
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
-CREATE POLICY "members_select" ON members
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members AS m WHERE m.org_id = members.org_id AND m.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "members_select" ON members
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members AS m WHERE m.org_id = members.org_id AND m.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- projects: allow org members to view and create projects
-CREATE POLICY "projects_select" ON projects
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = projects.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "projects_select" ON projects
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = projects.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
-CREATE POLICY "projects_insert" ON projects
-  FOR INSERT WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = projects.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "projects_insert" ON projects
+    FOR INSERT WITH CHECK (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = projects.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- api_keys: allow org members to view and create keys
-CREATE POLICY "api_keys_select" ON api_keys
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = api_keys.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "api_keys_select" ON api_keys
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = api_keys.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
-CREATE POLICY "api_keys_insert" ON api_keys
-  FOR INSERT WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = api_keys.org_id AND members.user_id = auth.uid() AND members.role IN ('owner', 'admin')
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "api_keys_insert" ON api_keys
+    FOR INSERT WITH CHECK (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = api_keys.org_id AND members.user_id = auth.uid() AND members.role IN ('owner', 'admin')
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- usage_events: allow service role to write, members to read
-CREATE POLICY "usage_events_select" ON usage_events
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = usage_events.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "usage_events_select" ON usage_events
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = usage_events.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- limits: allow org admins to manage limits
-CREATE POLICY "limits_select" ON limits
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = limits.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "limits_select" ON limits
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = limits.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
-CREATE POLICY "limits_insert" ON limits
-  FOR INSERT WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = limits.org_id AND members.user_id = auth.uid() AND members.role IN ('owner', 'admin')
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "limits_insert" ON limits
+    FOR INSERT WITH CHECK (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = limits.org_id AND members.user_id = auth.uid() AND members.role IN ('owner', 'admin')
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- invitations: allow org owners to send invites
-CREATE POLICY "invitations_select" ON invitations
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = invitations.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "invitations_select" ON invitations
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = invitations.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
-CREATE POLICY "invitations_insert" ON invitations
-  FOR INSERT WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM organizations WHERE organizations.id = invitations.org_id AND organizations.owner_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "invitations_insert" ON invitations
+    FOR INSERT WITH CHECK (
+      EXISTS (
+        SELECT 1 FROM organizations WHERE organizations.id = invitations.org_id AND organizations.owner_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- notifications: allow users to view their own notifications
-CREATE POLICY "notifications_select" ON notifications
-  FOR SELECT USING (user_id = auth.uid() OR user_id IS NULL);
+DO $$ BEGIN
+  CREATE POLICY "notifications_select" ON notifications
+    FOR SELECT USING (user_id = auth.uid() OR user_id IS NULL);
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- alert_rules: allow org members to view, admins to create
-CREATE POLICY "alert_rules_select" ON alert_rules
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = alert_rules.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "alert_rules_select" ON alert_rules
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = alert_rules.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- blocks: allow org admins to view
-CREATE POLICY "blocks_select" ON blocks
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = blocks.org_id AND members.user_id = auth.uid() AND members.role IN ('owner', 'admin')
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "blocks_select" ON blocks
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = blocks.org_id AND members.user_id = auth.uid() AND members.role IN ('owner', 'admin')
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- budget_requests: allow members to view their org's requests
-CREATE POLICY "budget_requests_select" ON budget_requests
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = budget_requests.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "budget_requests_select" ON budget_requests
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = budget_requests.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
-CREATE POLICY "budget_requests_insert" ON budget_requests
-  FOR INSERT WITH CHECK (
-    auth.uid() = requested_by AND
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = budget_requests.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "budget_requests_insert" ON budget_requests
+    FOR INSERT WITH CHECK (
+      auth.uid() = requested_by AND
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = budget_requests.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- usage_agg: allow members to view aggregated usage
-CREATE POLICY "usage_agg_select" ON usage_agg
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM members WHERE members.org_id = usage_agg.org_id AND members.user_id = auth.uid()
-    )
-  );
+DO $$ BEGIN
+  CREATE POLICY "usage_agg_select" ON usage_agg
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM members WHERE members.org_id = usage_agg.org_id AND members.user_id = auth.uid()
+      )
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 
 -- per-file 005-022 and the partial APPLY_PENDING.sql bundle.
@@ -976,10 +1036,13 @@ ALTER TABLE prompt_captures ENABLE ROW LEVEL SECURITY;
 
 -- Org members may read their org's captures.
 DROP POLICY IF EXISTS prompt_captures_select ON prompt_captures;
-CREATE POLICY prompt_captures_select ON prompt_captures
-  FOR SELECT USING (
-    org_id IN (SELECT org_id FROM members WHERE user_id = auth.uid())
-  );
+DO $$ BEGIN
+  CREATE POLICY prompt_captures_select ON prompt_captures
+    FOR SELECT USING (
+      org_id IN (SELECT org_id FROM members WHERE user_id = auth.uid())
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 -- No INSERT/UPDATE/DELETE policies → only the service role (gateway / cleanup)
 -- can write. RLS denies all other roles by default.
@@ -1083,13 +1146,19 @@ ALTER TABLE traces ENABLE ROW LEVEL SECURITY;
 ALTER TABLE spans  ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS traces_select ON traces;
-CREATE POLICY traces_select ON traces FOR SELECT USING (
-  org_id IN (SELECT org_id FROM members WHERE user_id = auth.uid())
-);
+DO $$ BEGIN
+  CREATE POLICY traces_select ON traces FOR SELECT USING (
+    org_id IN (SELECT org_id FROM members WHERE user_id = auth.uid())
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 DROP POLICY IF EXISTS spans_select ON spans;
-CREATE POLICY spans_select ON spans FOR SELECT USING (
-  org_id IN (SELECT org_id FROM members WHERE user_id = auth.uid())
-);
+DO $$ BEGIN
+  CREATE POLICY spans_select ON spans FOR SELECT USING (
+    org_id IN (SELECT org_id FROM members WHERE user_id = auth.uid())
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 -- No write policies → service-role (the OTLP ingest route) only.
 
 
@@ -1261,9 +1330,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_model_routes_active
 
 ALTER TABLE model_routes ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS model_routes_select ON model_routes;
-CREATE POLICY model_routes_select ON model_routes FOR SELECT USING (
-  org_id IN (SELECT org_id FROM members WHERE user_id = auth.uid())
-);
+DO $$ BEGIN
+  CREATE POLICY model_routes_select ON model_routes FOR SELECT USING (
+    org_id IN (SELECT org_id FROM members WHERE user_id = auth.uid())
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;  -- re-run: keep the existing (possibly newer) policy
+END $$;
 
 
 -- >>>>>>>>>>>>>>>>>>>>>>>>  022_api_key_encrypted.sql  >>>>>>>>>>>>>>>>>>>>>>>>

@@ -90,20 +90,39 @@ export function OnboardingClient({ orgId }: { orgId: string }) {
     }
   }
 
-  async function handleInviteNext(invites: string[]) {
+  // Returns the emails that FAILED (so the invite step keeps only those), or
+  // nothing when everything was sent and we moved on.
+  async function handleInviteNext(invites: string[]): Promise<string[] | void> {
+    if (invites.length === 0) { setStep(2); return }
     setSaving(true); setError('')
     try {
-      if (invites.length > 0) {
-        await fetch('/api/v1/invites', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ org_id: orgId, emails: invites }),
-        })
+      const res = await fetch('/api/v1/invites', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ org_id: orgId, emails: invites }),
+      })
+      const body = await res.json().catch(() => null) as
+        | { invited?: number; failed?: number; results?: { email: string; status: string; error?: string }[]; error?: unknown }
+        | null
+      if (!res.ok) {
+        const e = body?.error
+        const msg = typeof e === 'string' ? e
+          : e && typeof e === 'object' && 'fieldErrors' in e ? 'Check the email addresses — some are not valid.'
+          : `Could not send invites (HTTP ${res.status}).`
+        setError(msg)
+        return invites
       }
-      patch({ invites })
+      const failed = (body?.results ?? []).filter(r => r.status !== 'sent')
+      const sent = (body?.results ?? []).filter(r => r.status === 'sent').map(r => r.email)
+      patch({ invites: [...data.invites, ...sent] })
+      if (failed.length) {
+        setError(`Sent ${sent.length} of ${invites.length}. Not sent — ${failed.map(f => `${f.email}: ${f.error ?? 'failed'}`).join('; ')}. Fix and retry, or skip.`)
+        return failed.map(f => f.email)
+      }
       setStep(2)
     } catch (e: any) {
-      setError(e.message)
+      setError(e?.message ?? 'Network error — invites were not sent.')
+      return invites
     } finally {
       setSaving(false)
     }
@@ -152,8 +171,8 @@ export function OnboardingClient({ orgId }: { orgId: string }) {
 
           <div className="bg-[var(--bg)] rounded-2xl border border-[var(--border)] shadow-soft overflow-hidden">
             {step === 0 && <StepProject saving={saving} onNext={handleProjectNext} />}
-            {step === 1 && <StepInvite  saving={saving} onNext={handleInviteNext} onSkip={() => setStep(2)} />}
-            {step === 2 && <StepDone    data={data} onGo={() => { router.refresh(); router.push('/dashboard') }} />}
+            {step === 1 && <StepInvite  saving={saving} onNext={handleInviteNext} onSkip={() => { setError(''); setStep(2) }} />}
+            {step === 2 && <StepDone    data={data} onGo={(href) => { router.refresh(); router.push(href) }} />}
           </div>
         </div>
       </main>

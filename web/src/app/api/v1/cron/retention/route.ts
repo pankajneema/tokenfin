@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
+import { withJobRun } from '@/lib/jobs'
+import { log } from '@/lib/log'
+
+const ROUTE = '/api/v1/cron/retention'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -20,10 +24,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
-  const { data, error } = await createAdminClient().rpc('purge_expired_data')
-  if (error) {
-    console.error('[cron/retention] purge failed:', error.message)
-    return NextResponse.json({ error: 'purge failed' }, { status: 500 })
-  }
-  return NextResponse.json({ ok: true, purged: data })
+  return withJobRun('retention', async () => {
+    const { data, error } = await createAdminClient().rpc('purge_expired_data')
+    if (error) {
+      log.error('purge failed', { route: ROUTE, err: error })
+      return NextResponse.json({ error: 'purge failed' }, { status: 500 })
+    }
+    return NextResponse.json({ ok: true, purged: data })
+  }, { route: ROUTE })
 }

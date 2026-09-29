@@ -114,9 +114,6 @@ dmypy.json
 # ══════════════════════════════════════════════════════════════
 
 # Compiled binaries
-backend/bin/
-backend/cmd/ingest/ingest
-backend/cmd/worker/worker
 *.exe
 *.dll
 *.so

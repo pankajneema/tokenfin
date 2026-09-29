@@ -9,13 +9,14 @@
  * token saving (compress / retrieve / savings_stats).
  *
  * Security: Bearer auth per request (401 + WWW-Authenticate on failure); org-scoped
- * queries; browser Origin rejected (DNS-rebinding); bearer token never logged.
+ * queries, role-scoped per-user data (members/viewers see only their own prompts,
+ * sessions and member spend — lib/mcp/scope.ts); browser Origin rejected (DNS-rebinding); bearer token never logged.
  * Future: OAuth 2.1 + PKCE discovery (spec 2025-11-25); bearer is the interop baseline.
  */
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import crypto from 'crypto'
-import { authenticate, unauthorized, authUnavailable, AuthUnavailableError } from '@/lib/mcp/auth'
+import { authenticate, unauthorized, authUnavailable, AuthUnavailableError, credentialFrom, originAllowed } from '@/lib/mcp/auth'
 import { handleRpc } from '@/lib/mcp/server'
 
 // DNS-rebinding guard. Blanket-rejecting every Origin broke legitimate clients —
@@ -26,16 +27,9 @@ const ALLOWED_ORIGINS = [
   'https://claude.ai', 'https://claude.com', 'https://chatgpt.com', 'https://chat.openai.com',
 ].filter(Boolean) as string[]
 
-function originAllowed(origin: string | null): boolean {
-  if (!origin) return true // non-browser clients
-  try {
-    const o = new URL(origin).origin
-    return ALLOWED_ORIGINS.some(a => new URL(a).origin === o) || o.startsWith('http://localhost') || o.startsWith('http://127.0.0.1')
-  } catch { return false }
-}
 
 export async function POST(req: NextRequest) {
-  if (!originAllowed(req.headers.get('origin'))) {
+  if (!originAllowed(req.headers.get('origin'), ALLOWED_ORIGINS)) {
     return NextResponse.json({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Origin not allowed' } }, { status: 403 })
   }
 
@@ -44,9 +38,18 @@ export async function POST(req: NextRequest) {
     if (e instanceof AuthUnavailableError) return authUnavailable()
     throw e
   }
-  if (!ctx) return unauthorized()
-  if (ctx.scopes.length > 0 && !ctx.scopes.includes('read')) {
+  if (!ctx) return unauthorized(credentialFrom(req) !== '')
+  // MCP is read-only analytics: only keys carrying the 'read' scope (new split
+  // read keys, or legacy read+write keys). Ingest-only keys are refused.
+  if (!ctx.scopes.includes('read')) {
     return NextResponse.json({ jsonrpc: '2.0', id: null, error: { code: -32003, message: 'Forbidden: key lacks read scope' } }, { status: 403 })
+  }
+
+  // Lets get_insights call GET /api/v1/insights as this same key. Prefer the
+  // configured app URL over the Host header.
+  ctx.forward = {
+    baseUrl: (process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin).replace(/\/+$/, ''),
+    authorization: `Bearer ${credentialFrom(req)}`,
   }
 
   let body: unknown

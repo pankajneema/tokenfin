@@ -1,6 +1,7 @@
 'use client'
-import { DollarSign, Zap, Activity, Users, TrendingUp, TrendingDown } from 'lucide-react'
+import { DollarSign, Zap, Activity, Users, MessageSquare, TrendingUp, TrendingDown, CalendarDays } from 'lucide-react'
 import { cn, formatCost, formatTokens, formatNumber } from '@/lib/utils'
+import { basisLine } from './cost-basis'
 
 /* ── Sparkline ──────────────────────────────────────────────── */
 function Sparkline({ data, color }: { data: number[]; color: string }) {
@@ -51,34 +52,50 @@ function TrendBadge({ pct }: { pct: number | null }) {
 }
 
 /* ── Types ──────────────────────────────────────────────────── */
+interface CostSplit { cost: number; metered: number; notional: number }
 interface Props {
-  totalCost:     number
+  /** org-local month to date; `projected` is null with < 3 days of history */
+  mtd:           CostSplit & { projected: number | null }
+  last30:        CostSplit
   totalTokens:   number
   inputTokens:   number
   outputTokens:  number
   totalRequests: number
+  totalPrompts:  number
   memberCount:   number
-  sparks:        { costs: number[]; tokens: number[]; reqs: number[] }
-  trends:        { cost: number | null; tokens: number | null; reqs: number | null }
-  notionalCost?: number
-  meteredCost?:  number
+  activeUsers?:  number
+  sparks:        { costs: number[]; tokens: number[]; reqs: number[]; prompts: number[] }
+  trends:        { cost: number | null; tokens: number | null; reqs: number | null; prompts: number | null }
 }
 
-function fmtTokShort(n: number): string {
-  if (n === 0)            return '0'
-  if (n >= 1_000_000_000) return `${(n/1_000_000_000).toFixed(1)}B`
-  if (n >= 1_000_000)     return `${(n/1_000_000).toFixed(1)}M`
-  if (n >= 1_000)         return `${(n/1_000).toFixed(0)}K`
-  return String(n)
+interface Card {
+  label: string; value: string; sub: string; sub2?: string
+  Icon: React.ElementType; trend: number | null; color: string; iconBg: string; iconColor: string; spark: number[]
 }
 
 /* ═══════════════════════════════════════════════════════════════ */
-export function StatsCards({ totalCost, totalTokens, inputTokens, outputTokens, totalRequests, memberCount, sparks, trends, notionalCost = 0, meteredCost = 0 }: Props) {
-  const cards = [
+export function StatsCards({ mtd, last30, totalTokens, inputTokens, outputTokens, totalRequests, totalPrompts, memberCount, activeUsers, sparks, trends }: Props) {
+  const perPrompt = totalPrompts > 0 ? totalRequests / totalPrompts : 0
+  const cards: Card[] = [
     {
-      label:     'Total Cost',
-      value:     formatCost(totalCost),
-      sub:       notionalCost > 0 ? `metered ${formatCost(meteredCost)} · notional ${formatCost(notionalCost)}` : 'vs. previous 30 days',
+      label:     'Spend · Month to date',
+      value:     formatCost(mtd.cost),
+      sub:       mtd.projected != null
+        ? `Projected end of month ${formatCost(mtd.projected)}`
+        : 'Projection shows after 3 days of data',
+      sub2:      basisLine(mtd.metered, mtd.notional),
+      Icon:      CalendarDays,
+      trend:     null,
+      color:     '#E8533A',
+      iconBg:    'bg-[#FDECEA] dark:bg-coral/10',
+      iconColor: 'text-coral',
+      spark:     [],
+    },
+    {
+      label:     'Spend · Last 30 days',
+      value:     formatCost(last30.cost),
+      sub:       trends.cost != null ? 'vs. the 30 days before' : 'No earlier 30 days to compare',
+      sub2:      basisLine(last30.metered, last30.notional),
       Icon:      DollarSign,
       trend:     trends.cost,
       color:     '#E8533A',
@@ -87,10 +104,10 @@ export function StatsCards({ totalCost, totalTokens, inputTokens, outputTokens, 
       spark:     sparks.costs,
     },
     {
-      label:     'Tokens Used',
+      label:     'Tokens · 30 days',
       value:     formatTokens(totalTokens),
-      sub:       inputTokens > 0
-        ? `${fmtTokShort(inputTokens)} in · ${fmtTokShort(outputTokens)} out`
+      sub:       inputTokens + outputTokens > 0
+        ? `${formatTokens(inputTokens)} in · ${formatTokens(outputTokens)} out`
         : 'Input + output combined',
       Icon:      Zap,
       trend:     trends.tokens,
@@ -100,9 +117,9 @@ export function StatsCards({ totalCost, totalTokens, inputTokens, outputTokens, 
       spark:     sparks.tokens,
     },
     {
-      label:     'LLM Calls',
+      label:     'LLM calls · 30 days',
       value:     formatNumber(totalRequests),
-      sub:       'Total completions sent',
+      sub:       perPrompt > 0 ? `${perPrompt.toFixed(1)} calls per prompt` : 'Total completions sent',
       Icon:      Activity,
       trend:     trends.reqs,
       color:     '#60A5FA',
@@ -111,20 +128,31 @@ export function StatsCards({ totalCost, totalTokens, inputTokens, outputTokens, 
       spark:     sparks.reqs,
     },
     {
+      label:     'Prompts · 30 days',
+      value:     formatNumber(totalPrompts),
+      sub:       'What people asked · each can trigger several calls',
+      Icon:      MessageSquare,
+      trend:     trends.prompts,
+      color:     '#F59E0B',
+      iconBg:    'bg-[var(--amber-bg)]',
+      iconColor: 'text-[var(--amber)]',
+      spark:     sparks.prompts,
+    },
+    {
       label:     'Members',
-      value:     String(memberCount || '—'),
-      sub:       'Active members in org',
+      value:     memberCount ? formatNumber(memberCount) : '—',
+      sub:       activeUsers != null ? `${formatNumber(activeUsers)} active user${activeUsers === 1 ? '' : 's'} in 30 days` : 'Members in this workspace',
       Icon:      Users,
-      trend:     null as number | null,
+      trend:     null,
       color:     '#8B5CF6',
       iconBg:    'bg-purple-50 dark:bg-purple-900/20',
       iconColor: 'text-purple-500',
-      spark:     [] as number[],
+      spark:     [],
     },
   ]
 
   return (
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
       {cards.map(c => (
         <div
           key={c.label}
@@ -141,14 +169,17 @@ export function StatsCards({ totalCost, totalTokens, inputTokens, outputTokens, 
 
           {/* Value + label */}
           <div>
-            <p className="text-[26px] font-bold text-[var(--fg)] tabular-nums leading-none tracking-tight">{c.value}</p>
+            <p className="text-[24px] font-bold text-[var(--fg)] tabular-nums leading-none tracking-tight">{c.value}</p>
             <p className="text-[12.5px] text-[var(--fg-secondary)] mt-1.5 font-medium">{c.label}</p>
           </div>
 
           {/* Sparkline + sub */}
           <div className="flex items-end justify-between gap-2 pt-1 mt-auto">
-            <p className="text-[11px] text-[var(--fg-tertiary)] leading-snug">{c.sub}</p>
-            <Sparkline data={c.spark} color={c.color} />
+            <div className="min-w-0">
+              <p className="text-[11px] text-[var(--fg-tertiary)] leading-snug">{c.sub}</p>
+              {c.sub2 && <p className="text-[10.5px] text-[var(--fg-tertiary)] leading-snug mt-0.5">{c.sub2}</p>}
+            </div>
+            {c.spark.length > 0 && <Sparkline data={c.spark} color={c.color} />}
           </div>
         </div>
       ))}

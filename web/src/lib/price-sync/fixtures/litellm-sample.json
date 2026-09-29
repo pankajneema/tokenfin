@@ -1,0 +1,14 @@
+{
+  "sample_spec": { "litellm_provider": "one of https://docs.litellm.ai/docs/providers", "input_cost_per_token": 0, "output_cost_per_token": 0, "mode": "chat" },
+  "claude-sonnet-4-6": { "litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05, "cache_read_input_token_cost": 3e-07, "cache_creation_input_token_cost": 3.75e-06 },
+  "claude-haiku-4-5": { "litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 1e-06, "output_cost_per_token": 5e-06 },
+  "claude-opus-4-7": { "litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 1.5e-05, "output_cost_per_token": 7.5e-05 },
+  "gpt-4o": { "litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2.5e-06, "output_cost_per_token": 1e-05, "cache_read_input_token_cost": 1.25e-06 },
+  "gpt-4o-mini": { "litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1.5e-07, "output_cost_per_token": 6e-07 },
+  "gemini/gemini-2.5-pro": { "litellm_provider": "gemini", "mode": "chat", "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05 },
+  "mistral-large-latest": { "litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 2e-06, "output_cost_per_token": 6e-06 },
+  "text-embedding-3-small": { "litellm_provider": "openai", "mode": "embedding", "input_cost_per_token": 2e-08, "output_cost_per_token": 0 },
+  "vertex_ai/gemini-2.5-pro": { "litellm_provider": "vertex_ai-language-models", "mode": "chat", "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05 },
+  "ft:gpt-4o-2024-08-06": { "litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 3.75e-06, "output_cost_per_token": 1.5e-05 },
+  "brand-new-model-x": { "litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 4e-06, "output_cost_per_token": 8e-06 }
+}

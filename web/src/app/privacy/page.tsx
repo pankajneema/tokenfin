@@ -24,47 +24,51 @@ export default function PrivacyPage() {
       {/* Content */}
       <div className="max-w-3xl mx-auto px-6 py-12">
         <h1 className="text-[28px] font-bold mb-2">Privacy Policy</h1>
-        <p className="text-[13px] text-[var(--fg-tertiary)] mb-10">Last updated: June 15, 2026</p>
+        <p className="text-[13px] text-[var(--fg-tertiary)] mb-10">Last updated: September 29, 2026</p>
 
         {[
           {
             title: '1. Information We Collect',
-            body: 'We collect information you provide directly (name, email, organization details), usage data (API calls, token counts, cost metrics), and technical data (IP address, browser type, device info) to operate and improve the Service.',
+            body: 'We collect information you provide directly (name, email, organization details), usage data (model, token counts, cost, session and repository identifiers, and the email your coding agent reports), and technical data (IP address, browser type, device info) to operate and improve the Service. If prompt capture is on (see section 2), we also receive the text of the prompts you type into connected coding agents.',
           },
           {
-            title: '2. How We Use Your Information',
+            title: '2. Prompt Text',
+            body: 'By default, `npx tokenfin@latest setup` turns on prompt logging in Claude Code, Codex and Gemini CLI, so the text of each prompt you type is sent to TokenFin alongside its token counts and shown to your workspace in Prompt Analytics. We never receive model responses, your files, or your model-provider API keys. You can opt out on any machine with `npx tokenfin@latest setup --no-prompts`; a workspace owner or admin can switch prompt capture off for the whole workspace in Settings → Workspace, in which case prompt text is discarded on arrival. Captured prompt text is deleted automatically after 90 days, and owners can delete it sooner in Settings → Data.',
+          },
+          {
+            title: '3. How We Use Your Information',
             body: 'We use collected data to provide and improve the Service, send transactional emails (account confirmations, alerts), generate aggregated analytics, and comply with legal obligations. We do not sell your personal data.',
           },
           {
-            title: '3. Data Storage & Security',
-            body: 'Your data is stored on Supabase-hosted PostgreSQL in the US. We use 256-bit TLS encryption in transit and AES-256 at rest. API keys are stored only as SHA-256 hashes — we never store raw keys.',
+            title: '4. Data Storage & Security',
+            body: 'Your data is stored on Supabase-hosted PostgreSQL in the US. We use 256-bit TLS encryption in transit and AES-256 at rest. API keys are stored as SHA-256 hashes. The few keys we must be able to show again (the workspace setup key and unopened one-time reveal links, which expire) are additionally kept AES-256-GCM encrypted.',
           },
           {
-            title: '4. Cookies & Tracking',
+            title: '5. Cookies & Tracking',
             body: 'We use session cookies for authentication and local storage for UI preferences. We do not use third-party advertising trackers. You can disable cookies in your browser but some features may not function correctly.',
           },
           {
-            title: '5. Data Sharing',
+            title: '6. Data Sharing',
             body: 'We share data with subprocessors necessary to operate the Service (Supabase, email providers). We do not share your data with third parties for marketing. We may disclose data if required by law.',
           },
           {
-            title: '6. Data Retention',
-            body: 'Usage data is kept until you delete it. Workspace owners can delete monitoring data older than 7, 30 or 90 days, or all of it, at any time in Settings → Data, and can set automatic retention so older data is deleted daily. Captured prompt text expires after 90 days. Account data is retained while your account is active and for 30 days after deletion, then permanently erased.',
+            title: '7. Data Retention',
+            body: 'Usage data is kept until you delete it. Workspace owners can delete monitoring data older than 7, 30 or 90 days, or all of it, at any time in Settings → Data, and can set automatic retention so older data is deleted daily. Captured prompt text expires after 90 days, and prompt capture can be switched off per machine or for the whole workspace (section 2). Account data is retained while your account is active and for 30 days after deletion, then permanently erased.',
           },
           {
-            title: '7. Your Rights',
+            title: '8. Your Rights',
             body: 'Depending on your jurisdiction, you may have the right to access, correct, export, or delete your personal data. To exercise these rights, contact us at privacy@tokenfin.io. We respond within 30 days.',
           },
           {
-            title: '8. Children\'s Privacy',
+            title: '9. Children\'s Privacy',
             body: 'The Service is not directed to children under 16. We do not knowingly collect personal information from minors. If you believe we have collected such data, contact us immediately.',
           },
           {
-            title: '9. Changes to This Policy',
+            title: '10. Changes to This Policy',
             body: 'We may update this policy from time to time. We will notify you of significant changes via email or an in-app banner. Your continued use of the Service after changes constitutes acceptance.',
           },
           {
-            title: '10. Contact Us',
+            title: '11. Contact Us',
             body: 'For privacy-related questions or data requests, email us at privacy@tokenfin.io or write to CuriousDevs, Privacy Team.',
           },
         ].map(({ title, body }) => (

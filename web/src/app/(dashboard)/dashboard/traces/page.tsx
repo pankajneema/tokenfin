@@ -1,72 +1,84 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server'
-import Link from 'next/link'
-import { Waypoints } from 'lucide-react'
+import { createAdminClient } from '@/lib/supabase/server'
+import { requireOrgContext } from '@/lib/org-context'
+import { promptScope } from '@/lib/rbac'
+import { TracesClient, type TraceListRow, type TraceFilters } from './_client'
+import { RANGES, RANGE_LABEL, asRange, cursorFilter, decodeCursor, encodeCursor, rangeStartIso } from './_lib'
 
 export const metadata = { title: 'Traces — TokenFin' }
+export const dynamic = 'force-dynamic'
 
-const fmtUsd = (n: number) => n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`
-const fmtTok = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${n}`
+const PAGE = 50
+const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? ''
 
-export default async function TracesPage() {
-  const supabase = createClient()
+/**
+ * Visibility: owners/admins see every trace. Members/viewers see traces
+ * attributed to them (a span carried their email, or the key is theirs) plus
+ * UNATTRIBUTED traces — most app traces come from a backend service and carry
+ * no end user, so hiding them would leave the page empty for everyone but
+ * admins. Traces attributed to another member stay hidden, and prompt content
+ * on traces that aren't theirs is stripped on the detail page.
+ */
+export default async function TracesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const sp = await searchParams
+  const ctx = await requireOrgContext()
+  const scope = promptScope(ctx.role, ctx.user.id)
   const admin = createAdminClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  const { data: membership } = await admin
-    .from('members').select('org_id').eq('user_id', user!.id).order('joined_at', { ascending: true }).limit(1)
-  const orgId = membership?.[0]?.org_id ?? ''
 
-  const { data: traces } = await admin
-    .from('traces')
-    .select('trace_id, name, span_count, total_tokens, cost_usd, start_time, created_at')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: false })
-    .limit(50)
+  const filters: TraceFilters = {
+    service: one(sp.service).slice(0, 200),
+    model: one(sp.model).slice(0, 200),
+    status: ['error', 'ok'].includes(one(sp.status)) ? one(sp.status) as 'error' | 'ok' : '',
+    range: asRange(one(sp.range) || '7d'),
+  }
+  const cursor = decodeCursor(one(sp.cursor))
+  const since = rangeStartIso(asRange(filters.range), ctx.timezone)
 
-  const rows = traces ?? []
+  const base = () => {
+    let q = admin.from('traces')
+      .select('trace_id, name, service_name, start_time, duration_ms, span_count, total_tokens, cost_usd, error_count, models, user_id')
+      .eq('org_id', ctx.orgId).gte('start_time', since)
+    if (scope) q = q.or(`user_id.is.null,user_id.eq.${scope}`)
+    if (filters.service) q = q.eq('service_name', filters.service)
+    if (filters.model) q = q.contains('models', [filters.model])
+    if (filters.status === 'error') q = q.gt('error_count', 0)
+    if (filters.status === 'ok') q = q.eq('error_count', 0)
+    return q
+  }
+  let list = base()
+  if (cursor) list = list.or(cursorFilter(cursor))
+  const [page, anyTrace, opts] = await Promise.all([
+    list.order('start_time', { ascending: false }).order('trace_id', { ascending: false }).limit(PAGE + 1),
+    (scope ? admin.from('traces').select('trace_id').eq('org_id', ctx.orgId).or(`user_id.is.null,user_id.eq.${scope}`)
+      : admin.from('traces').select('trace_id').eq('org_id', ctx.orgId)).limit(1),
+    admin.rpc('trace_filter_options', { p_org: ctx.orgId, p_since: since }),
+  ])
+  if (page.error) console.error('[traces] list failed:', page.error.message)
+
+  const raw = (page.data ?? []) as Array<Record<string, any>>
+  const hasMore = raw.length > PAGE
+  const rows: TraceListRow[] = raw.slice(0, PAGE).map(t => ({
+    traceId: t.trace_id, name: t.name ?? 'trace', service: t.service_name ?? null, start: t.start_time,
+    durationMs: t.duration_ms != null ? Number(t.duration_ms) : null, spans: Number(t.span_count ?? 0),
+    tokens: Number(t.total_tokens ?? 0), cost: Number(t.cost_usd ?? 0), errors: Number(t.error_count ?? 0),
+    models: (t.models ?? []) as string[],
+  }))
+  const last = raw[PAGE - 1]
+  const nextCursor = hasMore && last ? encodeCursor({ t: last.start_time, id: last.trace_id }) : null
+  const o = (opts.data ?? {}) as { services?: string[]; models?: string[] }
 
   return (
-    <div className="mx-auto max-w-5xl">
-      <div className="mb-1 flex items-center gap-2 text-[19px] font-bold text-[var(--fg)]"><Waypoints size={18} className="text-teal" /> Traces</div>
-      <p className="mb-6 text-[13px] text-[var(--fg-secondary)]">OpenTelemetry GenAI traces ingested at <code className="font-mono">/api/otel/v1/traces</code> (point any OTLP exporter here with your key).</p>
-
-      {rows.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-[var(--border)] p-10 text-center">
-          <Waypoints size={22} className="mx-auto mb-3 text-[var(--fg-tertiary)]" />
-          <p className="text-[14px] font-semibold text-[var(--fg)]">No traces yet</p>
-          <p className="mx-auto mt-1 max-w-md text-[12.5px] text-[var(--fg-secondary)]">
-            Send OTLP traces to <code className="font-mono">/api/otel/v1/traces</code> with header <code className="font-mono">x-api-key: tfk_…</code>.
-          </p>
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-2xl border border-[var(--border)]">
-          <table className="w-full text-[12.5px]">
-            <thead className="bg-[var(--bg-secondary)] text-[var(--fg-tertiary)]">
-              <tr>
-                <th className="px-4 py-2 text-left font-medium">Trace</th>
-                <th className="px-4 py-2 text-right font-medium">Spans</th>
-                <th className="px-4 py-2 text-right font-medium">Tokens</th>
-                <th className="px-4 py-2 text-right font-medium">Cost</th>
-                <th className="px-4 py-2 text-right font-medium">When</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(t => (
-                <tr key={t.trace_id} className="border-t border-[var(--border)] hover:bg-[var(--bg-secondary)]">
-                  <td className="px-4 py-2 font-medium text-[var(--fg)]">
-                    <Link href={`/dashboard/traces/${t.trace_id}`} className="hover:text-teal">
-                      {t.name} <span className="font-mono text-[10.5px] text-[var(--fg-tertiary)]">{t.trace_id.slice(0, 12)}</span>
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2 text-right text-[var(--fg-secondary)]">{t.span_count}</td>
-                  <td className="px-4 py-2 text-right text-[var(--fg-secondary)]">{fmtTok(Number(t.total_tokens))}</td>
-                  <td className="px-4 py-2 text-right text-[var(--fg)]">{fmtUsd(Number(t.cost_usd))}</td>
-                  <td className="px-4 py-2 text-right text-[var(--fg-tertiary)]">{new Date(t.created_at).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+    <TracesClient
+      rows={rows}
+      filters={filters}
+      nextCursor={nextCursor}
+      paged={!!cursor}
+      hasAnyTrace={(anyTrace.data ?? []).length > 0}
+      services={o.services ?? []}
+      models={o.models ?? []}
+      ranges={RANGES.map(r => ({ value: r, label: RANGE_LABEL[r] }))}
+      timezone={ctx.timezone}
+      scopedToSelf={!!scope}
+      appUrl={process.env.NEXT_PUBLIC_APP_URL || 'https://your-tokenfin-host'}
+    />
   )
 }

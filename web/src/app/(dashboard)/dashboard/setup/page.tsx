@@ -3,6 +3,7 @@ import { can } from '@/lib/rbac'
 import type { Role } from '@/lib/rbac'
 import { getOrCreateSetupKey } from '@/lib/setup/key'
 import { SetupClient } from './_client'
+import { getRollout, type RolloutRow } from './_rollout'
 
 export const metadata = { title: 'Connections — TokenFin' }
 
@@ -33,6 +34,12 @@ export default async function SetupPage() {
 
   let setupKey: { id: string; raw: string; masked: string } | null = null
   let keyError = false
+  let rollout: RolloutRow[] = []
+  let capturePrompts = true
+  if (orgId) {
+    const { data: org, error } = await admin.from('organizations').select('capture_prompts').eq('id', orgId).maybeSingle()
+    if (!error && (org as { capture_prompts?: boolean | null } | null)?.capture_prompts === false) capturePrompts = false
+  }
   if (orgId && isAdmin) {
     try {
       const k = await getOrCreateSetupKey(orgId, user.id)
@@ -40,6 +47,7 @@ export default async function SetupPage() {
     } catch {
       keyError = true
     }
+    try { rollout = await getRollout(orgId) } catch (e) { console.error('[setup] rollout failed:', e) }
   }
 
   return (
@@ -50,6 +58,8 @@ export default async function SetupPage() {
       isAdmin={isAdmin}
       keyError={keyError}
       initialKey={setupKey}
+      rollout={rollout}
+      capturePrompts={capturePrompts}
     />
   )
 }

@@ -1,5 +1,6 @@
--- TokenFin additive migration: durable account/tool attribution.
--- Existing usage history is preserved; this migration only adds columns/indexes.
+-- TokenFin additive migration 002
+-- Durable external-account/tool attribution and prompt analytics dimensions.
+-- Safe to re-run; no usage history is deleted or rewritten.
 
 ALTER TABLE usage_events
   ADD COLUMN IF NOT EXISTS actor_id       TEXT,

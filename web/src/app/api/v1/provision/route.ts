@@ -5,6 +5,7 @@ import { requirePermission } from '@/lib/api/auth'
 import { sealKey, revealToken } from '@/lib/crypto/key-reveal'
 import crypto from 'crypto'
 import { z } from 'zod'
+import { audit } from '@/lib/audit'
 
 function db() { return createAdminClient() }
 
@@ -79,6 +80,8 @@ export async function POST(req: NextRequest) {
     if (opts.userId) {
       await admin.from('api_keys').update({ is_active: false })
         .eq('org_id', org_id).eq('project_id', opts.projectId).eq('user_id', opts.userId).eq('is_active', true)
+        // Only the member's provisioned (legacy, device-less) key — never their CLI device keys.
+        .eq('kind', 'legacy').is('device_id', null)
     }
     const { data: keyRow, error: keyErr } = await admin.from('api_keys').insert({
       org_id, project_id: opts.projectId, team_id: team_id ?? null,
@@ -137,13 +140,23 @@ export async function POST(req: NextRequest) {
     serviceResults.push({ name: sa.name, ...r })
   }
 
+  const keysCreated = memberResults.flatMap(m => m.keys).filter((k: any) => k?.ok).length
+    + serviceResults.filter((s: any) => s.ok).length
+  await audit({
+    orgId: org_id, actorUserId: actorId, action: 'member.invite', targetType: 'provision', targetId: null,
+    details: {
+      via: 'provision', role, env, team_id: team_id ?? null, project_ids,
+      emails: memberResults.map(m => m.email), invited: memberResults.filter(m => m.invited).length,
+      service_accounts: service_accounts.map(s => s.name), keys_created: keysCreated,
+    },
+  })
+
   return NextResponse.json({
     members: memberResults,
     service_accounts: serviceResults,
     summary: {
       members_invited: memberResults.filter(m => m.invited).length,
-      keys_created: memberResults.flatMap(m => m.keys).filter((k: any) => k?.ok).length
-        + serviceResults.filter((s: any) => s.ok).length,
+      keys_created: keysCreated,
     },
   }, { status: 201 })
 }

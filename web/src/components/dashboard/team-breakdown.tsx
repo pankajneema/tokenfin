@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { Users, ArrowRight, Crown } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatCost } from '@/lib/utils'
 
 /* ── Types ──────────────────────────────────────────────── */
 export interface MemberStat {
@@ -14,8 +14,10 @@ export interface MemberStat {
 }
 
 interface Props {
+  /** top spenders in the window (lower(email) or user id keys, resolved to members) */
   memberRows:  MemberStat[]
   memberCount: number
+  activeUsers?: number
 }
 
 const ROLE_BADGE: Record<string, string> = {
@@ -31,15 +33,8 @@ function initials(name: string) {
   return name.split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?'
 }
 
-function fmtCost(usd: number) {
-  if (usd === 0) return null
-  if (usd < 0.01) return `$${usd.toFixed(4)}`
-  if (usd < 1)    return `$${usd.toFixed(3)}`
-  return `$${usd.toFixed(2)}`
-}
-
 /* ════════════════════════════════════════════════════════ */
-export function TeamBreakdown({ memberRows, memberCount }: Props) {
+export function TeamBreakdown({ memberRows, memberCount, activeUsers }: Props) {
   const topMembers  = memberRows.slice(0, 4)
   const hasCostData = memberRows.some(m => m.cost > 0)
   const maxCost     = Math.max(...memberRows.map(m => m.cost), 0.0001)
@@ -52,7 +47,7 @@ export function TeamBreakdown({ memberRows, memberCount }: Props) {
         <div>
           <h2 className="text-[13px] font-semibold text-[var(--fg)]">Team Activity</h2>
           <p className="text-[11.5px] text-[var(--fg-secondary)] mt-0.5">
-            {memberCount} member{memberCount !== 1 ? 's' : ''} · last 30 days
+            Top spenders · last 30 days{activeUsers != null ? ` · ${activeUsers} active` : ''}
           </p>
         </div>
         <Link href="/dashboard/teams" className="flex items-center gap-1 text-[11.5px] text-coral font-medium hover:underline">
@@ -67,9 +62,9 @@ export function TeamBreakdown({ memberRows, memberCount }: Props) {
             <Users size={20} className="text-[var(--fg-tertiary)]" />
           </div>
           <div className="text-center">
-            <p className="text-[13px] font-semibold text-[var(--fg)]">No members yet</p>
+            <p className="text-[13px] font-semibold text-[var(--fg)]">No per-person usage yet</p>
             <p className="text-[11.5px] text-[var(--fg-tertiary)] mt-1">
-              Invite teammates to start tracking team activity
+              Usage appears here once events carry a user email or id (Claude Code sends user.email automatically)
             </p>
           </div>
           <Link href="/dashboard/teams"
@@ -80,7 +75,7 @@ export function TeamBreakdown({ memberRows, memberCount }: Props) {
       ) : (
         <div className="flex flex-col gap-1 flex-1">
           {topMembers.map((m, i) => {
-            const cost     = fmtCost(m.cost)
+            const cost     = m.cost > 0 ? formatCost(m.cost) : null
             const barWidth = hasCostData ? Math.round((m.cost / maxCost) * 100) : 0
             const color    = AVATAR_COLORS[i % AVATAR_COLORS.length]
             const isTop    = i === 0 && m.cost > 0
@@ -106,7 +101,7 @@ export function TeamBreakdown({ memberRows, memberCount }: Props) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <p className="text-[12px] font-medium text-[var(--fg)] truncate leading-tight">{m.name}</p>
-                    {m.role !== 'member' && (
+                    {m.role && m.role !== 'member' && (
                       <span className={cn('px-1.5 py-px rounded-full text-[9.5px] font-semibold capitalize flex-shrink-0',
                         ROLE_BADGE[m.role] ?? ROLE_BADGE.viewer)}>
                         {m.role}

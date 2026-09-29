@@ -1,12 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { Terminal, ShieldCheck, Check, AlertCircle, Loader2 } from 'lucide-react'
+import { Terminal, ShieldCheck, Check, AlertCircle, Loader2, Laptop } from 'lucide-react'
 
 export function CliAuthorizeClient({
-  valid, hasOrg, port, state, label, email,
+  valid, hasOrg, port, state, label, deviceId, email,
 }: {
-  valid: boolean; hasOrg: boolean; port: number; state: string; label: string; email: string
+  valid: boolean; hasOrg: boolean; port: number; state: string; label: string; deviceId: string; email: string
 }) {
   const [status, setStatus] = useState<'idle' | 'working' | 'done' | 'error'>('idle')
   const [err, setErr] = useState<string | null>(null)
@@ -17,7 +17,7 @@ export function CliAuthorizeClient({
       const res = await fetch('/api/v1/cli/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label }),
+        body: JSON.stringify(deviceId ? { device_label: label, device_id: deviceId } : { label }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to authorize')
@@ -57,9 +57,23 @@ export function CliAuthorizeClient({
           </Banner>
         ) : (
           <>
-            <p className="mb-4 text-[13px] leading-relaxed text-[var(--fg-secondary)]">
-              A TokenFin CLI on this device (<span className="font-medium text-[var(--fg)]">{label}</span>) wants to
-              create an API key for your workspace so it can record usage and read analytics.
+            <p className="mb-3 text-[13px] leading-relaxed text-[var(--fg-secondary)]">
+              A TokenFin CLI wants to create API keys for your workspace so it can record usage and read analytics.
+            </p>
+
+            <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3.5 py-2.5">
+              <Laptop size={15} className="flex-shrink-0 text-[var(--fg-secondary)]" />
+              <div className="min-w-0 text-[12.5px]">
+                <div className="truncate font-medium text-[var(--fg)]">{label}</div>
+                <div className="text-[11.5px] text-[var(--fg-tertiary)]">
+                  Key name: <span className="font-mono">CLI · {label}</span>
+                </div>
+              </div>
+            </div>
+
+            <p className="mb-4 text-[12px] leading-relaxed text-[var(--fg-secondary)]">
+              Only this device&rsquo;s key is replaced if it has signed in before &mdash; the CLI on your other
+              devices keeps working.
             </p>
 
             <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3.5 text-[12px] text-[var(--fg-secondary)]">

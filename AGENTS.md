@@ -285,18 +285,6 @@ tokenfin/                         ← root (control plane only)
 │   ├── tailwind.config.ts
 │   └── tsconfig.json
 │
-├── backend/                      ← Go services
-│   ├── ingest/                   ← high-throughput ingest (port 8001)
-│   │   ├── main.go
-│   │   └── go.mod
-│   ├── worker/                   ← alerts + aggregation cron
-│   │   ├── main.go
-│   │   └── go.mod
-│   └── shared/                   ← shared Go packages
-│       ├── config/config.go
-│       ├── models/event.go
-│       └── db/
-│
 ├── infra/
 │   ├── docker/
 │   │   ├── Dockerfile.web

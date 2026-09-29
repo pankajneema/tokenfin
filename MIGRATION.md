@@ -70,3 +70,8 @@ the dashboard from chat.
 Full `doctor` polish (P5); grouped `/connections` UI with five states + per-tool guides (P6); Copilot
 poller (P7), Cursor (P8), Anthropic admin + reconciliation (P9). The interim `/dashboard/setup` is
 Claude-Code-first and will be replaced wholesale by P6.
+
+
+## 2026-09-29: Go ingest service removed
+
+The optional Go ingest + worker (`backend/`, Redis, Railway) was deleted. It only served the SDK path, duplicated pricing and day bucketing, and OTLP never used it. The web app's `/api/v1/ingest` (plus `/api/v1/ingest/batch`) handles SDK traffic directly; `INGEST_SERVICE_URL` no longer exists.

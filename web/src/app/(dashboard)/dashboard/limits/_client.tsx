@@ -1,13 +1,22 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Shield, Plus, AlertTriangle, Ban, Bell, BellOff, BellPlus,
-  Trash2, Pencil, PauseCircle, PlayCircle, MoreHorizontal, Check, X,
-  Building2, FolderOpen, Users, User, Zap, Activity,
+  Trash2, Pencil, PauseCircle, PlayCircle, MoreHorizontal, Check,
+  Building2, FolderOpen, Users, User, Zap, Activity, TrendingUp,
 } from 'lucide-react'
 import { cn, readApiError } from '@/lib/utils'
 import { can, type Role } from '@/lib/rbac'
+import { Dialog } from '@/components/ui/dialog'
 import type { LimitRow, LimitScope, LimitPeriod, ScopeOption } from './page'
+import type { ChannelStatus } from '../alerts/_types'
+
+type ChannelMap = Map<ChannelStatus['id'], ChannelStatus>
+/** Default channels for a new budget alert: in-app plus email only if the server can send it. */
+const defaultChannels = (ch: ChannelMap) => ({ email: !!ch.get('email')?.deliverable, slack: false, webhook: false, inapp: true })
+
 
 /* ── Helpers ─────────────────────────────────────────────────── */
 
@@ -44,6 +53,61 @@ const STATUS_META: Record<LimitStatus, { label: string; color: string; bg: strin
   blocked:   { label: 'Blocked',   color: 'text-[var(--red)]',   bg: 'bg-[var(--red-bg)]',   dot: 'bg-[var(--red)]'   },
 }
 
+/* ── Forecast ── */
+// Budget-dependent numbers are derived here from the server's run-rate and
+// projection so they stay right after the budget is edited in place.
+function deriveForecast(l: LimitRow) {
+  const f = l.forecast
+  if (!f || l.budgetUsd <= 0) return null
+  const onTrack = f.projectedUsd <= l.budgetUsd
+  const runway  = l.spentUsd >= l.budgetUsd ? 0 : f.ratePerDay > 0 ? (l.budgetUsd - l.spentUsd) / f.ratePerDay : null
+  const exceed  = onTrack ? null
+    : new Date(Date.now() + (runway ?? 0) * 86400_000).toISOString().slice(0, 10)
+  return { ...f, onTrack, runwayDays: runway, exceedDate: exceed, projectedPct: (f.projectedUsd / l.budgetUsd) * 100 }
+}
+
+const PERIOD_END: Record<LimitPeriod, string> = { daily: 'end of day', weekly: 'next 7 days', monthly: 'month-end' }
+
+// Locale-independent so server and browser render identical text (no hydration mismatch).
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+function fmtDate(d: string) {
+  const [, m, day] = d.split('-').map(Number)
+  return `${MONTHS[m - 1]} ${day}`
+}
+
+function fmtRunway(days: number | null) {
+  if (days == null) return 'No spend trend'
+  if (days <= 0)    return 'Budget used up'
+  if (days < 1)     return '< 1 day'
+  return `${days >= 100 ? Math.round(days) : days.toFixed(days < 10 ? 1 : 0)} days`
+}
+
+function ForecastRow({ limit }: { limit: LimitRow }) {
+  const f = deriveForecast(limit)
+  if (!f) return null
+  return (
+    <div className="grid grid-cols-3 gap-3 rounded-xl bg-[var(--bg-secondary)] px-3 py-2.5" data-testid="limit-forecast">
+      <div className="min-w-0">
+        <p className="text-[9.5px] font-semibold uppercase tracking-wider text-[var(--fg-tertiary)] flex items-center gap-1"><TrendingUp size={9} />Projected {PERIOD_END[limit.period]}</p>
+        <p className="text-[13px] font-bold text-[var(--fg)] mt-0.5">{fmtUsd(f.projectedUsd)} <span className="text-[10.5px] font-medium text-[var(--fg-tertiary)]">· {f.projectedPct.toFixed(0)}%</span></p>
+      </div>
+      <div className="min-w-0">
+        <p className="text-[9.5px] font-semibold uppercase tracking-wider text-[var(--fg-tertiary)]">Runway</p>
+        <p className="text-[13px] font-bold text-[var(--fg)] mt-0.5" title={`${fmtUsd(f.ratePerDay)}/day run-rate (14 days, weighted to the last 7)`}>{fmtRunway(f.runwayDays)}</p>
+      </div>
+      <div className="flex items-center justify-end">
+        {f.onTrack ? (
+          <span className="text-[10.5px] font-semibold px-2 py-1 rounded-full bg-[var(--green-bg)] text-teal whitespace-nowrap">On track</span>
+        ) : (
+          <span className="text-[10.5px] font-semibold px-2 py-1 rounded-full bg-[var(--red-bg)] text-[var(--red)] whitespace-nowrap">
+            {f.runwayDays === 0 ? 'Over budget' : `Will exceed on ${fmtDate(f.exceedDate!)}`}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /* ── ThresholdBar ── */
 function ThresholdBar({ limit }: { limit: LimitRow }) {
   const pct    = Math.min(limit.budgetUsd > 0 ? (limit.spentUsd / limit.budgetUsd) * 100 : 0, 100)
@@ -68,8 +132,9 @@ function ThresholdBar({ limit }: { limit: LimitRow }) {
 
 /* ── LimitCard ── */
 function LimitCard({
-  limit, onToggle, onDelete, onEdit, onAddAlert, readOnly = false,
+  limit, onToggle, onDelete, onEdit, onAddAlert, readOnly = false, canAlert,
 }: {
+  canAlert:    boolean
   limit:       LimitRow
   onToggle:    (id: string) => void
   onDelete:    (id: string) => void
@@ -85,8 +150,8 @@ function LimitCard({
   const pct       = limit.budgetUsd > 0 ? Math.min((limit.spentUsd / limit.budgetUsd) * 100, 100) : 0
 
   return (
-    <div className={cn(
-      'bg-white dark:bg-[#141428] border rounded-2xl p-5 space-y-4 transition-all',
+    <div id={`limit-${limit.id}`} className={cn(
+      'bg-white dark:bg-[#141428] border rounded-2xl p-5 space-y-4 transition-all scroll-mt-4 target:ring-2 target:ring-coral/40',
       !limit.isActive ? 'opacity-60 border-[var(--border)]' :
       status === 'blocked'   ? 'border-[var(--red)]/40 shadow-[0_0_0_1px_var(--red-bg)]' :
       status === 'throttled' ? 'border-[var(--red)]/30' :
@@ -117,24 +182,24 @@ function LimitCard({
             <span className={cn('w-1.5 h-1.5 rounded-full', stm.dot)} />{stm.label}
           </div>
           {!readOnly && <div className="relative">
-            <button onClick={() => setMenuOpen(v => !v)}
+            <button type="button" onClick={() => setMenuOpen(v => !v)} aria-label={`Actions for ${limit.scopeName} limit`} aria-haspopup="menu" aria-expanded={menuOpen}
               className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--fg-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] transition-colors">
-              <MoreHorizontal size={15} />
+              <MoreHorizontal size={15} aria-hidden="true" />
             </button>
             {menuOpen && (
               <>
                 <div className="fixed inset-0 z-[9]" onClick={() => setMenuOpen(false)} />
-                <div className="absolute right-0 top-9 w-48 bg-white dark:bg-[#1E1E35] border border-[var(--border)] rounded-xl shadow-2xl z-10 p-1">
+                <div role="menu" className="absolute right-0 top-9 w-48 bg-white dark:bg-[#1E1E35] border border-[var(--border)] rounded-xl shadow-2xl z-10 p-1">
                   {([
                     { icon: Pencil,                                     label: 'Edit limit',     danger: false, fn: () => { onEdit(limit); setMenuOpen(false) } },
                     { icon: limit.isActive ? PauseCircle : PlayCircle,  label: limit.isActive ? 'Pause' : 'Resume', danger: false, fn: () => { onToggle(limit.id); setMenuOpen(false) } },
-                    { icon: BellPlus,                                   label: 'Add alert rule', danger: false, fn: () => { onAddAlert(limit); setMenuOpen(false) } },
+                    ...(canAlert && limit.scope !== 'member' ? [{ icon: BellPlus, label: 'Create alert for this budget', danger: false, fn: () => { onAddAlert(limit); setMenuOpen(false) } }] : []),
                     { icon: Trash2,                                     label: 'Delete limit',   danger: true,  fn: () => { onDelete(limit.id); setMenuOpen(false) } },
                   ] as { icon: React.ElementType; label: string; danger: boolean; fn: () => void }[]).map((item, i) => (
-                    <button key={i} onClick={item.fn}
+                    <button key={i} type="button" role="menuitem" onClick={item.fn}
                       className={cn('w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[12.5px] font-medium text-left transition-colors',
                         item.danger ? 'text-[var(--red)] hover:bg-[var(--red-bg)]' : 'text-[var(--fg)] hover:bg-[var(--bg-hover)]')}>
-                      <item.icon size={13} className="flex-shrink-0" />
+                      <item.icon size={13} className="flex-shrink-0" aria-hidden="true" />
                       {item.label}
                     </button>
                   ))}
@@ -155,6 +220,8 @@ function LimitCard({
 
       <ThresholdBar limit={limit} />
 
+      {limit.isActive && <ForecastRow limit={limit} />}
+
       {/* Footer */}
       <div className="flex items-center justify-between pt-1 border-t border-[var(--border)]">
         <div className="flex items-center gap-3 text-[10.5px] text-[var(--fg-tertiary)]">
@@ -162,14 +229,29 @@ function LimitCard({
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--red)] inline-block" />Throttle {limit.throttleAt}%</span>
           <span className="flex items-center gap-1"><Ban size={9} />Block {limit.blockAt}%</span>
         </div>
-        {limit.hasAlert ? (
-          <span className="flex items-center gap-1 text-[10.5px] font-medium text-[var(--green)]">
-            <Bell size={11} />Alert on
-          </span>
+      </div>
+
+      {/* Alert rules watching this budget (same matching as the alert engine) */}
+      <div className="rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)] px-3 py-2.5 space-y-1.5">
+        {limit.scope === 'member' ? (
+          <p className="text-[11px] text-[var(--fg-secondary)] flex items-center gap-1.5"><BellOff size={11} aria-hidden="true" /> Alerts can&apos;t watch member limits yet.</p>
+        ) : limit.alertRules.length === 0 ? (
+          <p className="text-[11px] text-[var(--fg-secondary)] flex items-center gap-1.5"><BellOff size={11} aria-hidden="true" /> No alert watches this budget.</p>
         ) : (
-          <button onClick={() => onAddAlert(limit)}
-            className="flex items-center gap-1 text-[10.5px] font-medium text-[var(--fg-tertiary)] hover:text-[var(--fg)] transition-colors">
-            <BellOff size={11} />No alert
+          <ul className="space-y-1">
+            {limit.alertRules.map(r => (
+              <li key={r.id} className="flex items-center gap-1.5 text-[11px]">
+                {r.triggerType === 'forecast' ? <TrendingUp size={11} className="text-[var(--blue)]" aria-hidden="true" /> : <Bell size={11} className="text-[var(--green)]" aria-hidden="true" />}
+                <Link href={`/dashboard/alerts#rule-${r.id}`} className="font-semibold text-[var(--fg)] hover:text-coral hover:underline truncate">{r.name}</Link>
+                <span className="text-[var(--fg-tertiary)]">· {r.triggerType === 'forecast' ? 'forecast' : 'limit breach'}{r.isActive ? '' : ' · paused'}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {canAlert && limit.scope !== 'member' && (
+          <button type="button" onClick={() => onAddAlert(limit)}
+            className="flex items-center gap-1 text-[11px] font-semibold text-coral hover:underline">
+            <BellPlus size={11} aria-hidden="true" /> Create alert for this budget
           </button>
         )}
       </div>
@@ -192,8 +274,10 @@ const PERIOD_OPTIONS: { value: LimitPeriod; label: string }[] = [
 ]
 
 function LimitModal({
-  initial, projects, teams, orgId, onClose, onCreated, onUpdated,
+  initial, projects, teams, orgId, onClose, onCreated, onUpdated, channels, canAlert,
 }: {
+  channels:   ChannelMap
+  canAlert:   boolean
   initial?:   LimitRow | null
   projects:   ScopeOption[]
   teams:      ScopeOption[]
@@ -250,6 +334,8 @@ function LimitModal({
         const data = await res.json()
         row = {
           ...initial!,
+          // A new period changes the projection window — drop it until reload.
+          forecast:   data.period === initial!.period ? initial!.forecast : null,
           period:     data.period,
           budgetUsd:  data.budget_usd,
           warnAt:     data.warn_at,
@@ -277,13 +363,14 @@ function LimitModal({
           throttleAt:    data.throttle_at,
           blockAt:       data.block_at,
           isActive:      true,
-          hasAlert:      createAlert,
+          hasAlert:      false,
+          hasForecastAlert: false,
+          alertRules:    [],   // recomputed by the server refresh after save
+          forecast:      null,
         }
-        onCreated(row)
-
-        // Optionally create alert rule linked to this limit
+        // Optionally create an alert rule that watches this limit
         if (createAlert) {
-          await fetch('/api/v1/alerts', {
+          const ar = await fetch('/api/v1/alerts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -295,10 +382,12 @@ function LimitModal({
               scope:          scopeName,
               threshold:      warnAt,
               cooldown_hours: 4,
-              channels:       { email: true, slack: false, webhook: false, inapp: true },
+              channels:       defaultChannels(channels),
             }),
           })
+          if (!ar.ok) { onCreated(row); throw new Error(`Limit saved, but the alert rule failed: ${await readApiError(ar)}`) }
         }
+        onCreated(row)
       }
       onClose()
     } catch (e: unknown) {
@@ -311,20 +400,23 @@ function LimitModal({
   const valid = budget && Number(budget) > 0 && (scope === 'org' || !!targetId)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-[520px] bg-white dark:bg-[#141428] rounded-2xl shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
-          <div>
-            <h2 className="text-[15px] font-bold text-[var(--fg)]">{isEdit ? 'Edit limit' : 'New budget limit'}</h2>
-            <p className="text-[12px] text-[var(--fg-tertiary)] mt-0.5">Warn → throttle → block spend guardrails</p>
-          </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-hover)] transition-colors">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
+    <Dialog
+      open
+      onClose={onClose}
+      size="lg"
+      title={isEdit ? 'Edit limit' : 'New budget limit'}
+      description="Warn → throttle → block spend guardrails"
+      footer={<>
+        <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+        <button type="button" onClick={handleSave} disabled={!valid || saving}
+          className="btn-primary disabled:opacity-40 disabled:cursor-not-allowed">
+          {saving
+            ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" aria-hidden="true" /> Saving…</>
+            : <><Check size={13} aria-hidden="true" /> {isEdit ? 'Save changes' : 'Create limit'}</>}
+        </button>
+      </>}
+    >
+        <div className="px-6 py-5 space-y-5">
           {/* Scope */}
           {!isEdit && (
             <div>
@@ -432,8 +524,8 @@ function LimitModal({
           </div>
 
           {/* Create alert toggle (create only) */}
-          {!isEdit && (
-            <button onClick={() => setCreateAlert(v => !v)}
+          {!isEdit && canAlert && scope !== 'member' && (
+            <button type="button" role="checkbox" aria-checked={createAlert} onClick={() => setCreateAlert(v => !v)}
               className={cn('w-full flex items-center gap-3 p-4 rounded-xl border transition-all text-left',
                 createAlert ? 'border-teal bg-[var(--green-bg)]' : 'border-[var(--border)] hover:border-[var(--border-strong)] bg-[var(--bg-secondary)]')}>
               <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors', createAlert ? 'bg-teal/20' : 'bg-[var(--bg-tertiary)]')}>
@@ -441,7 +533,9 @@ function LimitModal({
               </div>
               <div className="flex-1 min-w-0">
                 <p className={cn('text-[12.5px] font-semibold', createAlert ? 'text-[var(--green)]' : 'text-[var(--fg)]')}>Create alert rule</p>
-                <p className="text-[11px] text-[var(--fg-tertiary)]">Notify via email when warn threshold is hit</p>
+                <p className="text-[11px] text-[var(--fg-tertiary)]">
+                  At the warn threshold, notify in-app{channels.get('email')?.deliverable ? ' and by email' : ' (email isn’t set up on this server)'}
+                </p>
               </div>
               <div className={cn('w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all', createAlert ? 'bg-teal border-teal' : 'border-[var(--border)]')}>
                 {createAlert && <Check size={11} className="text-white" />}
@@ -449,32 +543,22 @@ function LimitModal({
             </button>
           )}
 
-          {error && <p className="text-[12px] text-[var(--red)] bg-[var(--red-bg)] border border-[var(--red)]/20 px-3 py-2 rounded-lg">{error}</p>}
+          {error && <p role="alert" className="text-[12px] text-[var(--red)] bg-[var(--red-bg)] border border-[var(--red)]/20 px-3 py-2 rounded-lg">{error}</p>}
         </div>
-
-        <div className="px-6 py-4 border-t border-[var(--border)] flex items-center justify-between">
-          <button onClick={onClose} className="btn-secondary">Cancel</button>
-          <button onClick={handleSave} disabled={!valid || saving}
-            className="btn-primary disabled:opacity-40 disabled:cursor-not-allowed">
-            {saving
-              ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" /> Saving…</>
-              : <><Check size={13} /> {isEdit ? 'Save changes' : 'Create limit'}</>}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }
 
 /* ── AddAlertModal ── */
-function AddAlertModal({ limit, orgId, onClose, onCreated }: {
+function AddAlertModal({ limit, orgId, onClose, onCreated, status }: {
+  status:    ChannelMap
   limit:     LimitRow
   orgId:     string
   onClose:   () => void
-  onCreated: () => void
+  onCreated: (kind: 'limit_breach' | 'forecast') => void
 }) {
-  const [channels,  setChannels]  = useState({ email: true, slack: false, webhook: false, inapp: true })
-  const [threshold, setThreshold] = useState(limit.warnAt.toString())
+  const [channels,  setChannels]  = useState(defaultChannels(status))
+  const [threshold, setThreshold] = useState(limit.warnAt.toString())   // % of budget, or 'forecast'
   const [saving,    setSaving]    = useState(false)
   const [error,     setError]     = useState<string | null>(null)
 
@@ -484,8 +568,18 @@ function AddAlertModal({ limit, orgId, onClose, onCreated }: {
       const res = await fetch('/api/v1/alerts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(threshold === 'forecast' ? {
           org_id:         orgId,
+          project_id:     limit.scope === 'project' ? limit.scopeTargetId : null,
+          name:           `${limit.scopeName} projected overspend`,
+          trigger_type:   'forecast',
+          condition:      'Projected to exceed budget this period',
+          scope:          limit.scopeName,
+          cooldown_hours: 24,
+          channels,
+        } : {
+          org_id:         orgId,
+          project_id:     limit.scope === 'project' ? limit.scopeTargetId : null,
           name:           `${limit.scopeName} budget alert`,
           trigger_type:   'limit_breach',
           condition:      `spend >= ${threshold}%`,
@@ -496,7 +590,7 @@ function AddAlertModal({ limit, orgId, onClose, onCreated }: {
         }),
       })
       if (!res.ok) throw new Error(await readApiError(res))
-      onCreated()
+      onCreated(threshold === 'forecast' ? 'forecast' : 'limit_breach')
       onClose()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to create alert')
@@ -506,20 +600,21 @@ function AddAlertModal({ limit, orgId, onClose, onCreated }: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-[440px] bg-white dark:bg-[#141428] rounded-2xl shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
-          <div>
-            <h2 className="text-[15px] font-bold text-[var(--fg)]">Add alert rule</h2>
-            <p className="text-[12px] text-[var(--fg-tertiary)] mt-0.5">
-              For <span className="font-semibold text-[var(--fg)]">{limit.scopeName}</span> · {PERIOD_LABEL[limit.period]} · {fmtUsd(limit.budgetUsd)} budget
-            </p>
-          </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--fg-tertiary)] hover:bg-[var(--bg-hover)]">
-            <X size={16} />
-          </button>
-        </div>
+    <Dialog
+      open
+      onClose={onClose}
+      size="md"
+      title="Create alert for this budget"
+      description={<>For <span className="font-semibold text-[var(--fg)]">{limit.scopeName}</span> · {PERIOD_LABEL[limit.period]} · {fmtUsd(limit.budgetUsd)} budget</>}
+      footer={<>
+        <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+        <button type="button" onClick={handleCreate} disabled={saving} className="btn-primary disabled:opacity-40">
+          {saving
+            ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" aria-hidden="true" /> Creating…</>
+            : <><Bell size={13} aria-hidden="true" /> Create alert rule</>}
+        </button>
+      </>}
+    >
 
         <div className="px-6 py-5 space-y-5">
           {/* Context */}
@@ -541,6 +636,7 @@ function AddAlertModal({ limit, orgId, onClose, onCreated }: {
                 { v: limit.warnAt.toString(),     label: `${limit.warnAt}% · Warn`           },
                 { v: limit.throttleAt.toString(), label: `${limit.throttleAt}% · Throttle`   },
                 { v: '100',                       label: '100% · Block'                       },
+                { v: 'forecast',                  label: 'Projected over'                     },
               ].map(opt => (
                 <button key={opt.v} onClick={() => setThreshold(opt.v)}
                   className={cn('flex-1 py-1.5 px-2 rounded-lg text-[11px] font-semibold transition-all',
@@ -549,6 +645,11 @@ function AddAlertModal({ limit, orgId, onClose, onCreated }: {
                 </button>
               ))}
             </div>
+            {threshold === 'forecast' && (
+              <p className="text-[11px] text-[var(--fg-tertiary)] mt-2">
+                Warns when the 14-day run-rate projects spend past this budget before the period ends — before the limit is actually hit.
+              </p>
+            )}
           </div>
 
           {/* Channels */}
@@ -559,33 +660,31 @@ function AddAlertModal({ limit, orgId, onClose, onCreated }: {
                 const active = channels[ch]
                 const labels: Record<string, string>  = { email: 'Email', slack: 'Slack', webhook: 'Webhook', inapp: 'In-app' }
                 const colors: Record<string, string>  = { email: 'text-[var(--blue)] bg-[var(--blue-bg)]', slack: 'text-[#8B5CF6] bg-[#8B5CF6]/10', webhook: 'text-[var(--amber)] bg-[var(--amber-bg)]', inapp: 'text-teal bg-[var(--green-bg)]' }
+                const ok = status.get(ch)?.deliverable ?? false
                 return (
-                  <button key={ch}
-                    onClick={() => ch !== 'inapp' && setChannels(prev => ({ ...prev, [ch]: !prev[ch] }))}
-                    className={cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border text-[12px] font-semibold transition-all',
-                      active ? `${colors[ch]} border-current/30` : 'border-[var(--border)] text-[var(--fg-tertiary)] hover:bg-[var(--bg-hover)]',
-                      ch === 'inapp' && 'opacity-70 cursor-default')}>
-                    {active ? <Check size={12} className="text-current" /> : <span className="w-3 h-3 rounded border-2 border-[var(--border-strong)]" />}
+                  <button key={ch} type="button" role="checkbox" aria-checked={active}
+                    aria-disabled={ch === 'inapp' || (!ok && !active)}
+                    title={!ok ? status.get(ch)?.detail : undefined}
+                    onClick={() => ch !== 'inapp' && (ok || active) && setChannels(prev => ({ ...prev, [ch]: !prev[ch] }))}
+                    className={cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border text-[12px] font-semibold transition-all text-left',
+                      active ? `${colors[ch]} border-current/30` : 'border-[var(--border)] text-[var(--fg-secondary)] hover:bg-[var(--bg-hover)]',
+                      (ch === 'inapp' || !ok) && 'cursor-not-allowed', !ok && !active && 'opacity-60')}>
+                    {active ? <Check size={12} className="text-current" aria-hidden="true" /> : <span className="w-3 h-3 rounded border-2 border-[var(--border-strong)]" aria-hidden="true" />}
                     {labels[ch]}
-                    {ch === 'inapp' && <span className="text-[9.5px] ml-auto opacity-70">always</span>}
+                    {ch === 'inapp' && <span className="text-[9.5px] ml-auto opacity-80">always</span>}
+                    {!ok && <span className="text-[9.5px] ml-auto">not set up</span>}
                   </button>
                 )
               })}
             </div>
           </div>
-          {error && <p className="text-[12px] text-[var(--red)] bg-[var(--red-bg)] border border-[var(--red)]/20 px-3 py-2 rounded-lg">{error}</p>}
+          {error && <p role="alert" className="text-[12px] text-[var(--red)] bg-[var(--red-bg)] border border-[var(--red)]/20 px-3 py-2 rounded-lg">{error}</p>}
+          <p className="text-[11px] text-[var(--fg-tertiary)]">
+            Watches {limit.scope === 'project' ? 'this project’s budgets' : 'every budget in the org'} — the rule shows up on{' '}
+            <Link href="/dashboard/alerts" className="font-semibold text-coral hover:underline">Alerts</Link>.
+          </p>
         </div>
-
-        <div className="px-6 py-4 border-t border-[var(--border)] flex items-center justify-between">
-          <button onClick={onClose} className="btn-secondary">Cancel</button>
-          <button onClick={handleCreate} disabled={saving} className="btn-primary disabled:opacity-40">
-            {saving
-              ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" /> Creating…</>
-              : <><Bell size={13} /> Create alert rule</>}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }
 
@@ -598,10 +697,17 @@ interface Props {
   teams:         ScopeOption[]
   orgId:         string
   role:          Role
+  channels:      ChannelStatus[]
 }
 
-export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Props) {
+export function LimitsClient({ initialLimits, projects, teams, orgId, role, channels }: Props) {
+  const router       = useRouter()
+  const searchParams = useSearchParams()
+  const status       = new Map(channels.map(c => [c.id, c]))
+  const canAlert     = can(role, 'alerts:write')
   const [limits,        setLimits]        = useState<LimitRow[]>(initialLimits)
+  // Re-sync after router.refresh() (server recomputes spend + linked alerts).
+  useEffect(() => { setLimits(initialLimits) }, [initialLimits])
   const [scopeFilter,   setScopeFilter]   = useState<LimitScope | 'all'>('all')
   const [showModal,     setShowModal]     = useState(false)
   const [editTarget,    setEditTarget]    = useState<LimitRow | null>(null)
@@ -617,16 +723,25 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
     setTimeout(() => setToast(''), 2500)
   }
 
+  // ⌘K "New budget limit" → /dashboard/limits?new=1
+  useEffect(() => {
+    if (searchParams?.get('new') === '1' && can(role, 'limits:write')) {
+      setEditTarget(null); setShowModal(true)
+      router.replace('/dashboard/limits', { scroll: false })
+    }
+  }, [searchParams, role, router])
+
   async function handleToggle(id: string) {
     const limit = limits.find(l => l.id === id)
     if (!limit) return
     setToggling(id)
     try {
-      await fetch('/api/v1/limits', {
+      const res = await fetch('/api/v1/limits', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, is_active: !limit.isActive }),
       })
+      if (!res.ok) { showToast(await readApiError(res)); return }
       setLimits(prev => prev.map(l => l.id === id ? { ...l, isActive: !l.isActive } : l))
     } finally {
       setToggling(null)
@@ -637,7 +752,8 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
     if (!deleteId) return
     setDeleting(true)
     try {
-      await fetch(`/api/v1/limits?id=${deleteId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/v1/limits?id=${encodeURIComponent(deleteId)}`, { method: 'DELETE' })
+      if (!res.ok) { showToast(await readApiError(res)); return }
       setLimits(prev => prev.filter(l => l.id !== deleteId))
       showToast('Limit deleted')
     } finally {
@@ -649,7 +765,9 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
 
   const filtered = scopeFilter === 'all' ? limits : limits.filter(l => l.scope === scopeFilter)
 
-  const totalBudget = limits.filter(l => l.isActive).reduce((s, l) => s + l.budgetUsd, 0)
+  // Normalise every period to a month so daily/weekly caps aren't summed as if monthly.
+  const PER_MONTH: Record<LimitPeriod, number> = { daily: 30.44, weekly: 30.44 / 7, monthly: 1 }
+  const totalBudget = limits.filter(l => l.isActive).reduce((s, l) => s + l.budgetUsd * PER_MONTH[l.period], 0)
   const atRisk      = limits.filter(l => { const s = getStatus(l); return s === 'warning' || s === 'throttled' }).length
   const blocked     = limits.filter(l => getStatus(l) === 'blocked').length
   const activeCount = limits.filter(l => l.isActive).length
@@ -661,20 +779,20 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Budget Limits</h1>
+          <h2 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Budget Limits</h2>
           <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Spend guardrails · warn → throttle → block pipeline</p>
         </div>
         {can(role, 'limits:write') && (
-          <button onClick={() => { setEditTarget(null); setShowModal(true) }} className="btn-primary flex-shrink-0">
-            <Plus size={14} /> New limit
+          <button type="button" onClick={() => { setEditTarget(null); setShowModal(true) }} className="btn-primary flex-shrink-0">
+            <Plus size={14} aria-hidden="true" /> New limit
           </button>
         )}
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
-          { label: 'Total budget capped', value: `${fmtUsd(totalBudget)} / mo`, icon: Shield,        color: 'text-[var(--blue)]',  bg: 'bg-[var(--blue-bg)]'  },
+          { label: 'Budgets (≈ per month)', value: `${fmtUsd(totalBudget)}`, icon: Shield,        color: 'text-[var(--blue)]',  bg: 'bg-[var(--blue-bg)]'  },
           { label: 'Active limits',       value: activeCount.toString(),                       icon: Activity,      color: 'text-teal',            bg: 'bg-[var(--green-bg)]' },
           { label: 'At risk (>70%)',      value: atRisk.toString(),                            icon: AlertTriangle, color: 'text-[var(--amber)]',  bg: 'bg-[var(--amber-bg)]' },
           { label: 'Blocked scopes',      value: blocked.toString(),                           icon: Ban,           color: 'text-[var(--red)]',    bg: 'bg-[var(--red-bg)]'   },
@@ -736,6 +854,7 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
               onEdit={can(role, 'limits:write') ? l => { setEditTarget(l); setShowModal(true) } : () => {}}
               onAddAlert={l => setAlertForLimit(l)}
               readOnly={!can(role, 'limits:write')}
+              canAlert={canAlert}
             />
           ))}
         </div>
@@ -764,7 +883,9 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
           teams={teams}
           orgId={orgId}
           onClose={() => { setShowModal(false); setEditTarget(null) }}
-          onCreated={row => { setLimits(prev => [row, ...prev]); showToast('Limit created') }}
+          channels={status}
+          canAlert={canAlert}
+          onCreated={row => { setLimits(prev => [row, ...prev]); showToast('Limit created'); router.refresh() }}
           onUpdated={row => { setLimits(prev => prev.map(l => l.id === row.id ? row : l)); showToast('Limit updated') }}
         />
       )}
@@ -774,16 +895,19 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
         <AddAlertModal
           limit={alertForLimit}
           orgId={orgId}
+          status={status}
           onClose={() => setAlertForLimit(null)}
-          onCreated={() => showToast(`Alert created for ${alertForLimit.scopeName}`)}
+          onCreated={kind => {
+            showToast(`${kind === 'forecast' ? 'Forecast alert' : 'Alert'} created for ${alertForLimit.scopeName}`)
+            router.refresh()
+          }}
         />
       )}
 
       {/* Delete confirm */}
       {deleteId && deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setDeleteId(null)} />
-          <div className="relative w-full max-w-[400px] bg-white dark:bg-[#141428] rounded-2xl shadow-2xl p-6 space-y-4">
+        <Dialog open bare ariaLabel="Delete limit" size="sm" onClose={() => setDeleteId(null)}>
+          <div className="p-6 space-y-4">
             <div className="w-10 h-10 rounded-2xl bg-[var(--red-bg)] flex items-center justify-center">
               <Trash2 size={18} className="text-[var(--red)]" />
             </div>
@@ -797,18 +921,18 @@ export function LimitsClient({ initialLimits, projects, teams, orgId, role }: Pr
               <p className="text-[11.5px] text-[var(--fg-secondary)] mb-2">
                 Type <span className="font-mono font-bold text-[var(--fg)]">delete</span> to confirm
               </p>
-              <input value={deleteInput} onChange={e => setDeleteInput(e.target.value)} placeholder="delete"
+              <input aria-label="Type delete to confirm" data-autofocus value={deleteInput} onChange={e => setDeleteInput(e.target.value)} placeholder="delete"
                 className="w-full px-3 py-2 rounded-lg border border-[var(--red)]/30 text-[12.5px] bg-[var(--bg)] text-[var(--fg)] focus:outline-none focus:border-[var(--red)]" />
             </div>
             <div className="flex gap-2">
               <button onClick={() => setDeleteId(null)} className="btn-secondary flex-1">Cancel</button>
               <button disabled={deleteInput !== 'delete' || deleting} onClick={handleDelete}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[var(--red)] text-white text-[13px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--red)]/90 transition-colors">
-                <Trash2 size={13} /> Delete limit
+                <Trash2 size={13} aria-hidden="true" /> Delete limit
               </button>
             </div>
           </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Toast */}

@@ -2,12 +2,12 @@
 > Architecture reference for AI sessions. Keep this updated when adding pages, tables, or API routes.
 
 ## What is TokenFin
-LLM Cost Attribution & FinOps platform. Tracks API usage (tokens, cost, requests) across projects, models, and team members. Built with Next.js 14 App Router + Supabase.
+LLM Cost Attribution & FinOps platform. Tracks API usage (tokens, cost, requests) across projects, models, and team members. Built with Next.js 15 App Router + Supabase. Free and unlimited — no plans or billing.
 
 ---
 
 ## Tech Stack
-- **Framework**: Next.js 14 App Router, TypeScript strict, `src/` directory
+- **Framework**: Next.js 15 App Router, TypeScript strict, `src/` directory (middleware in `src/middleware.ts`)
 - **Database**: Supabase (Postgres + Auth + RLS)
 - **Styling**: Tailwind CSS + CSS custom properties (design tokens in `globals.css`)
 - **Charts**: Recharts
@@ -77,6 +77,22 @@ prevMap.set(shifted, prev + cost)
 | `notifications` | `id, org_id, user_id, title, body, type, is_read` | alerts history tab |
 | `org_integrations` | `id, org_id, provider, status, config` | integrations page |
 | `user_preferences` | `user_id, key, value` | notifications settings |
+| `productivity_daily` | `org_id, user_key, user_id, repo, day, lines_added/removed, commits, pull_requests, edits_accepted/rejected, active_seconds, sessions` | Productivity, Teams, My Usage (from Claude Code metrics, migration 007) |
+| `api_errors_daily` | `org_id, user_key, model, day, errors` | error counts from `api_error` log events (007) |
+| `org_model_prices` | `org_id, model_prefix, input/output/cache_read/cache_write_per_m` | Models page custom prices; override `lib/mcp/pricing.ts` (007) |
+| `provider_connections` / `provider_costs` | sealed admin key; daily provider-billed cost | Bill check (reconciliation), `lib/billing-sync` (008) |
+| `digest_runs` | `org_id, week_key` | weekly digest idempotency (009) |
+| `coding_tool_usage` / `merged_prs` / `github_user_map` | per-user daily usage from Claude Code Analytics, Cursor, Copilot; merged GitHub PRs + login→member map | `/dashboard/coding-tools`, cost per merged PR on Productivity (`lib/connectors/*`, migration 013; service-role only, RPCs `coding_tools_summary`, `merged_pr_costs`) |
+| `usage_daily` / `usage_sessions` / `usage_daily_prompts` | org-local daily rollups of usage_events (by project/model/user/source/cost_basis), per-session and per-prompt | **Dashboards read these** via `lib/rollups.ts` (`dashSummary`, `dashBreakdown`, `dashSessions`, `dashPrompts`, `orgSpendSince`). Maintained by INSERT/UPDATE/DELETE triggers on usage_events; `rebuild_rollups(org)` runs automatically on a time-zone change (011) |
+| `allocation_rules` | `org_id, match, target (team / cost_center), split` | Settings → Allocation; applied by chargeback + FOCUS exports (014) |
+| `price_sync_findings` | `model, kind, ours, theirs, orgs[]` | nightly LiteLLM price diff → Models page `<PriceFindings>` (014) |
+| `audit_log` | `org_id, actor_user_id, actor_email, action, target_type, target_id, details` | Settings → Audit log, `lib/audit.ts` (010) |
+
+`organizations.capture_prompts` (011, default true; Settings → Workspace) drops prompt text on arrival when false. `organizations.retention_days` (006) and `organizations.timezone` (010, IANA, default `Asia/Kolkata`) drive Settings → Data and day bucketing. Server code gets the zone with `getOrgTimezone(orgId)` (`lib/org-timezone.ts`) and buckets with `toZonedDate` / `daysAgoIn`; a `usage_agg.bucket` is already a day label — use `bucketDay` / `shiftDay`, never re-convert it.
+
+Prompts vs LLM calls: count prompts with `countPrompts()` from `lib/prompts.ts` (one CLI prompt = one `correlation_id`; each SDK request = one prompt). Read raw rows with `selectAll()` (`lib/supabase/paginate.ts`, keyset-paged when the select has `created_at,id`) — PostgREST caps a single response at 1,000 rows. Prefer the rollup RPCs in `lib/rollups.ts` for anything aggregate.
+
+Migrations 011–015: 011 rollups + ingest (event ids are org-prefixed; `purge_org_data` covers rollups), 012 keys/access, 013 connectors, 014 FinOps, 015 retention for connector tables, 017 `job_runs` (every cron route runs inside `withJobRun()` from `lib/jobs.ts`; 30-day self-prune), 018 traces (span/trace columns, keyset index, `refresh_traces`), 016 prompt privacy (RLS on `prompt_captures`, `usage_events`, `spans`: owner/admin read all, others only their own rows), 019 `dash_breakdown` returns `prompts` per key (each prompt attributed to one key, so they sum to the total; null for skill / mcp_server / cost_basis). Every migration is idempotent and has a byte-identical copy in `supabase/migrations/2026093000001N_*.sql`.
 
 ### `usage_agg` is the central analytics table
 - Pre-aggregated daily by `(org_id, project_id, model, bucket)`
@@ -89,7 +105,8 @@ prevMap.set(shifted, prev + cost)
 
 | Route | Methods | Auth | Purpose |
 |---|---|---|---|
-| `/api/v1/ingest` | POST | API key header | Write usage events → upsert usage_agg |
+| `/api/v1/ingest` | POST | API key header | Write one usage event → usage_events (+ usage_agg for metered rows). Shared logic in `ingest/_core.ts` |
+| `/api/v1/ingest/batch` | POST | API key header | `{events:[…]}` (1–500) → `{results:[{index,status,code}],accepted,duplicates,errors}`; used by the SDKs, which fall back to `/ingest` on 404 |
 | `/api/v1/keys` | GET POST DELETE | Admin | Manage api_keys table |
 | `/api/v1/limits` | GET POST PATCH DELETE | Admin | Manage limits table |
 | `/api/v1/alerts` | GET POST PATCH DELETE | Admin | Manage alert_rules + notifications |
@@ -108,13 +125,33 @@ prevMap.set(shifted, prev + cost)
 | `/api/mcp` | POST | API key (Bearer, read) | Remote MCP server — Streamable HTTP, JSON-RPC, read-only FinOps tools |
 | `/api/otel/v1/logs` | POST | API key (Bearer) | **OTLP receiver — per-turn usage.** Parses `*.api_request` log events → one usage_events row, deduped by `event_id`. JSON + protobuf. |
 | `/api/otel/v1/metrics` | POST | API key (Bearer/`?key=`) | OTLP receiver — health checks + **Codex/Gemini capture**: derives per-turn rows by diffing cumulative counters (`lib/otlp/metrics.ts`, state in `otlp_metric_state`, migration 024). Claude Code metrics are NOT derived (its logs own those rows). |
-| `/api/otel/v1/traces` | POST | API key (Bearer) | OTLP receiver — GenAI spans → spans/traces + usage mirror. |
+| `/api/otel/v1/traces` | POST | API key (Bearer) | OTLP receiver — spans/traces (JSON, protobuf, gzip). GenAI semconv + OpenLLMetry + OpenInference mapped in `lib/otlp/genai.ts` (versioned); only LEAF LLM spans are mirrored into usage_events (metered), CLI-agent spans skipped. See `docs/TRACES.md`. |
 | `/api/v1/connections` | GET | API key or session | Per-source connection status (last event, tokens today, cost_basis). Powers CLI `setup`/`status`/`doctor` + setup beacon. |
+| `/api/v1/data` | GET PATCH POST | Session (owner for writes) | Retention setting + delete monitoring data |
+| `/api/v1/audit` | GET | Owner/admin | Audit log |
+| `/api/v1/export/chargeback` | GET | Owner/admin | Monthly chargeback CSV by team/project/member |
+| `/api/v1/provider-connections` | GET POST DELETE | Owner | Anthropic/OpenAI admin keys for bill sync; also Claude Code Analytics, Cursor, GitHub Copilot and GitHub connectors (`?action=github_map` maps GitHub logins to members) |
+| `/api/v1/cron/{alerts,retention,digest,reconcile,connectors,prices}` | GET | `CRON_SECRET` | Scheduled jobs (fail closed) |
+| `/api/v1/cli/token` | POST DELETE | Session (POST) / device key (DELETE) | CLI login mints the per-device key pair; DELETE self-revokes that device's keys (`tokenfin remove`) |
+| `/api/v1/cli/device/{start,poll,approve}` | POST | — / session | Device-code login for headless machines (`tokenfin login --device`, page `/cli/device`) |
+| `/api/v1/setup/managed-settings` | GET | Owner/admin | Downloadable Claude Code managed-settings.json for fleet rollout (`docs/ROLLOUT.md`) |
+| `/api/v1/export/focus` | GET | Owner/admin | FOCUS 1.2 CSV (streamed; notional rows bill $0, ListCost = computed) |
+| `/api/v1/allocation-rules` | GET POST PATCH DELETE | Owner/admin | Team / cost-center allocation rules |
+| `/api/v1/budgets/apply` | POST | Admin session or admin-scoped key | Budgets-as-code: plan / apply limits + alerts from YAML/JSON (dry run by default) |
+| `/api/v1/me/budget` | GET | API key (read) or session | Caller's today + month-to-date spend (notional share) and tightest limit %. Powers the CLI statusline. |
+| `/.well-known/oauth-{protected-resource,authorization-server}` | GET | — | Deliberate 404 JSON: MCP is Bearer-only, no OAuth discovery |
+| `/api/v1/ask` | POST | Session | ⌘K "ask your spend": deterministic intent parser (`lib/ask`), optional Claude mapping when `ANTHROPIC_API_KEY` is set (question + intent schema only, never usage rows); answers from rollups, member-scoped |
+| `/api/v1/insights` | GET | API key (read) or session | Waste findings + spikes (`lib/insights`) |
+| `/api/health` | GET | — | `{ok, db latency, version, migrations}` (10 s cache, no secrets) |
 | `/auth/callback` | GET | — | Supabase OAuth callback |
 
 ### Key security model (IMPORTANT)
 - API keys are stored ONLY as `key_hash` (SHA-256) + a **masked** `key_prefix` (e.g. `tfk_prod_abc1_…c05a`). The raw key is returned **once** in the POST response, never again.
 - Bulk-provisioned keys are delivered via single-use, expiring, AES-256-GCM reveal links (`/keys/reveal/[token]`). Needs `KEY_ENCRYPTION_SECRET` env + migration 012 (`key_reveals` table, `api_keys.is_service_account`).
+- **Key kinds (migration 012 `keys_access`):** `api_keys.kind` + `device_id`. CLI login mints a per-device pair: an **ingest-only** key (OTLP/ingest) and a **read** key (MCP, status, `me/budget`). Re-login rotates only that device's keys. `requireApiKeyOrOrgMember` answers 401 for a bad Bearer, 403 for an ingest-only key. MCP rejects `?key=` (OTLP still accepts it for Gemini).
+- Demoting a member to viewer narrows their keys to read; removing a member revokes their keys and destroys pending reveals (audited as `keys_revoked`).
+- Org selection: use `getOrgContext()` / `requireOrgContext()` (`lib/org-context.ts`, React `cache()`); honours a `tf_org` cookie only when the user is a member.
+- Security headers (CSP, frame DENY, nosniff, Permissions-Policy) are set in `next.config.js`; `/keys/reveal/*` is `no-store` + `no-referrer`.
 - MCP keys are created **read-only** (`scopes: ['read']`); the MCP server (`/api/mcp`) exposes no write tools. See `docs/MCP.md`.
 
 ### New dashboard pages
@@ -139,7 +176,8 @@ removed — see `MIGRATION.md`). `npx tokenfin setup` writes an OTel `env` block
 - **cost_basis**: CLI-agent usage is `notional` (subscription usage priced at API rates — NOT a
   bill; never summed into a metered total). `metered`/`vendor_reported` come with pull connectors.
 - **Mapping is versioned in one file** (`otlp/mapping.ts`); unrecognized metric names are logged,
-  never silently dropped.
+  never silently dropped. `detectSource` matches CLI agents by service.name **prefix** (`claude-code`, `codex*`,
+  `gemini-cli`, `opencode*`) or event-name prefix — never by model name — so a generic app calling claude-* models stays metered `otlp`.
 - **Codex/Gemini (Phase 4, needs a real-session confirm)**: they report tokens only as metric
   counters. `otlp/metrics.ts` derives per-turn rows by cumulative-diffing (first-seen = baseline,
   emit nothing). `setup` writes `~/.codex/config.toml` (`[otel]`, user-level, `metrics_exporter=otlp-http`
@@ -149,7 +187,10 @@ removed — see `MIGRATION.md`). `npx tokenfin setup` writes an OTel `env` block
 ### MCP is read-only (query the dashboard from chat)
 `web/src/lib/mcp/*` behind `web/src/app/api/mcp/route.ts` (Streamable HTTP, JSON-RPC, Bearer,
 Origin guard). Tools:
-- **Analytics (read):** list_projects, get_spend, get_usage_by_model, get_daily_costs, get_budget_status
+- **Analytics (read):** list_projects, get_spend, get_usage_by_model, get_daily_costs, get_budget_status,
+  get_breakdown, get_sessions, get_session, get_prompts, get_mtd_and_forecast, get_insights (rollup-backed)
+- **Role-aware:** a member/viewer key sees only its owner's sessions, prompts and per-member spend (`lib/mcp/scope.ts`); org totals stay visible. `evaluate` needs owner/admin.
+- **Claude Code plugin:** `plugins/claude-code/` (MCP server via `TOKENFIN_READ_KEY`, `/tokenfin:spend`, `/tokenfin:budget`, `/tokenfin:top-models`).
 - **Token saving:** compress / retrieve (reversible CCR, needs migration 015 for retrieve), savings_stats
 
 There is **no** `record_usage` / write tool — MCP never captures usage (it can't reliably know
@@ -227,6 +268,19 @@ tool and would force us to hold customer provider keys. Savings columns (migrati
 /dashboard/settings/profile       ← SERVER (supabase.auth.getUser)
 /dashboard/settings/notifications ← SERVER (user_preferences table)
 /dashboard/settings/data          ← SERVER + /api/v1/data (retention & deletion)
+/dashboard/settings/workspace     ← organizations (name, timezone) + SSO help
+/dashboard/settings/audit         ← /api/v1/audit
+/dashboard/productivity           ← productivity_daily + usage_events (cost per PR/commit/1k lines)
+/dashboard/sessions[/id]          ← usage_events grouped by session_id (+ prompt_captures)
+/dashboard/analytics/reconciliation ← provider_costs vs metered usage_events (anthropic/openai connections only)
+/dashboard/insights                ← lib/insights (waste finder: 6 rules with monthly-saving estimates; spike explainer: mean+3σ, decomposed by dimension). Also GET /api/v1/insights, MCP get_insights, weekly digest section
+/dashboard/analytics/what-if       ← lib/insights/whatif.ts (pure simulator: model switch, cache-hit, output cap, seats→API)
+/dashboard/traces[/trace_id]       ← spans/traces (018): keyset list + waterfall. Members see their own + unattributed service traces; prompt content stripped on others'
+/dashboard/explore                 ← lib/explore.ts + components/filters (group-by any rollup dimension, URL-state filters, CSV)
+/dashboard/members/[key]           ← per-member drill-down (owner/admin: anyone; others: only themselves)
+/dashboard/settings/allocation    ← allocation_rules (preview of the split)
+/dashboard/coding-tools            ← coding_tool_usage (Claude Code Analytics, Cursor, Copilot) via lib/connectors
+/welcome                          ← creates the free workspace after signup
 ```
 
 ---
@@ -279,18 +333,6 @@ tokenfin/                         ← root (control plane only)
 │   ├── tailwind.config.ts
 │   └── tsconfig.json
 │
-├── backend/                      ← Go services
-│   ├── ingest/                   ← high-throughput ingest (port 8001)
-│   │   ├── main.go
-│   │   └── go.mod
-│   ├── worker/                   ← alerts + aggregation cron
-│   │   ├── main.go
-│   │   └── go.mod
-│   └── shared/                   ← shared Go packages
-│       ├── config/config.go
-│       ├── models/event.go
-│       └── db/
-│
 ├── infra/
 │   ├── docker/
 │   │   ├── Dockerfile.web
@@ -315,6 +357,12 @@ make dev
 
 ---
 
+## Operations & tests
+- Logs: `lib/log.ts` (JSON lines, secrets masked). Errors: `lib/monitoring.ts` → Sentry envelope API when `SENTRY_DSN` is set.
+- Tests: `npx vitest run` (unit + route-auth in `src/app/api/_tests`), `npm run test:e2e` (Playwright smoke; authed specs need `E2E_EMAIL`/`E2E_PASSWORD`), `scripts/rls-check.sql`.
+- CI applies every migration twice to a fresh Supabase (`scripts/ci-db-check.sh`), checks `db/` ↔ `supabase/` copies are byte-identical, runs the RLS check, web, SDK and CLI tests.
+- `npm run gen:types` regenerates `src/types/supabase.ts` from the local DB. Runbook: `docs/OPERATIONS.md` (pg_cron alternative, opt-in `scripts/partition-usage-events.sql`).
+
 ## Mock Data Status
 **Zero mock data** — all pages connected to real Supabase. If user has no data, empty states are shown with onboarding hints.
 
@@ -328,6 +376,11 @@ Previously removed:
 - `ALL_DAILY`, `MODELS`, `PROJECTS`, `PLATFORMS` in analytics/_client
 
 ---
+
+## App shell
+- Navigation lives in ONE place: `components/layout/nav-config.ts` (sidebar sections, ⌘K palette destinations + actions, topbar titles). Add every new page there.
+- The topbar title is the page's single `<h1>`; in-page titles are `<h2>`.
+- Mobile: below `md` the sidebar is an off-canvas dialog (`components/ui/dialog.tsx` focus trap + scroll lock). `?new=1` on keys / alerts / limits opens the create form.
 
 ## Design System
 

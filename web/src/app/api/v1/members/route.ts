@@ -10,8 +10,45 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { requireOrgMemberWithRole, requirePermission, assertOrgOwnsIds, dbError } from '@/lib/api/auth'
 import { can } from '@/lib/rbac'
 import { z }                 from 'zod'
+import { audit } from '@/lib/audit'
 
 function db() { return createAdminClient() }
+import { invalidateKeyCache } from '@/lib/otlp/auth'
+
+/**
+ * Revoke a (former) member's personal API keys in an org: deactivate them and
+ * destroy any not-yet-revealed one-time key material. Org-level keys the user
+ * merely created (user_id NULL, e.g. setup-hub) are untouched.
+ */
+async function revokeMemberKeys(orgId: string, userId: string): Promise<{ keys: number; reveals: number }> {
+  const { data: keys } = await db().from('api_keys').update({ is_active: false })
+    .eq('org_id', orgId).eq('user_id', userId).eq('is_active', true).select('id')
+  const { data: allKeys } = await db().from('api_keys').select('id').eq('org_id', orgId).eq('user_id', userId)
+  const ids = (allKeys ?? []).map(k => k.id as string)
+  let reveals = 0
+  if (ids.length) {
+    const { data: burned } = await db().from('key_reveals')
+      .update({ ciphertext: null, iv: null, auth_tag: null })
+      .in('key_id', ids).is('revealed_at', null).not('ciphertext', 'is', null).select('token')
+    reveals = (burned ?? []).length
+  }
+  invalidateKeyCache()
+  return { keys: (keys ?? []).length, reveals }
+}
+
+/**
+ * Demotion to viewer: personal keys become read-only. Ingest-only keys are
+ * deactivated (a viewer may not push telemetry); every other key keeps working
+ * with scopes = {read}.
+ */
+async function downgradeMemberKeys(orgId: string, userId: string): Promise<{ readOnly: number; deactivated: number }> {
+  const { data: off } = await db().from('api_keys').update({ is_active: false })
+    .eq('org_id', orgId).eq('user_id', userId).eq('is_active', true).eq('kind', 'ingest').select('id')
+  const { data: ro } = await db().from('api_keys').update({ scopes: ['read'] })
+    .eq('org_id', orgId).eq('user_id', userId).eq('is_active', true).neq('kind', 'ingest').select('id')
+  invalidateKeyCache()
+  return { readOnly: (ro ?? []).length, deactivated: (off ?? []).length }
+}
 
 /* GET /api/v1/members?org_id=xxx
    Returns members enriched with name (and email for owners/admins) from auth.users.
@@ -74,7 +111,7 @@ export async function PATCH(req: NextRequest) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const { data: memRow } = await db().from('members').select('org_id, role').eq('id', parsed.data.id).maybeSingle()
+  const { data: memRow } = await db().from('members').select('org_id, role, user_id').eq('id', parsed.data.id).maybeSingle()
   if (!memRow) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const guard = await requirePermission(memRow.org_id, 'members:change_role')
   if (guard instanceof NextResponse) return guard
@@ -96,6 +133,14 @@ export async function PATCH(req: NextRequest) {
   const { id, ...fields } = parsed.data
   const { data, error } = await db().from('members').update(fields).eq('id', id).eq('org_id', memRow.org_id).select().single()
   if (error) return dbError(error, 'PATCH members')
+  let keys: { readOnly: number; deactivated: number } | undefined
+  if (fields.role === 'viewer' && memRow.role !== 'viewer') {
+    keys = await downgradeMemberKeys(memRow.org_id, memRow.user_id as string)
+  }
+  await audit({
+    orgId: memRow.org_id, actorUserId: guard.userId, action: 'member.role_change', targetType: 'member', targetId: id,
+    details: { ...fields, previous_role: memRow.role, ...(keys ? { keys_read_only: keys.readOnly, keys_deactivated: keys.deactivated } : {}) },
+  })
   return NextResponse.json(data)
 }
 
@@ -108,7 +153,7 @@ export async function DELETE(req: NextRequest) {
   // Fetch member's role + org — need both for the guard and the last-owner check
   const { data: member } = await db()
     .from('members')
-    .select('role, org_id')
+    .select('role, org_id, user_id')
     .eq('id', id)
     .maybeSingle()
 
@@ -131,5 +176,12 @@ export async function DELETE(req: NextRequest) {
 
   const { error } = await db().from('members').delete().eq('id', id)
   if (error) return dbError(error, 'DELETE members')
-  return NextResponse.json({ ok: true })
+  // A removed member's keys must stop working immediately (keys resolve org by
+  // hash alone, so membership removal by itself would not revoke them).
+  const revoked = await revokeMemberKeys(member.org_id, member.user_id as string)
+  await audit({
+    orgId: member.org_id, actorUserId: guard.userId, action: 'member.remove', targetType: 'member', targetId: id,
+    details: { role: member.role, user_id: member.user_id, keys_revoked: revoked.keys, reveals_destroyed: revoked.reveals },
+  })
+  return NextResponse.json({ ok: true, keys_revoked: revoked.keys })
 }

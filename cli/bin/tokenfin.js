@@ -2,23 +2,29 @@
 'use strict'
 
 const pkg = require('../package.json')
-const { setup } = require('../lib/setup')
-const { status } = require('../lib/status')
-const { doctor } = require('../lib/doctor')
-const { remove } = require('../lib/remove')
-const { runLogin } = require('../lib/login')
 
 function parseArgs(argv) {
   const out = { _: [], flags: {} }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--key' || a === '-k') out.flags.key = argv[++i]
+    else if (a === '--read-key') out.flags.readKey = argv[++i]
     else if (a === '--url' || a === '-u') out.flags.url = argv[++i]
     else if (a === '--app-url' || a === '-a') out.flags.appUrl = argv[++i]
     else if (a === '--yes' || a === '-y') out.flags.yes = true
+    else if (a === '--device') out.flags.device = true
+    else if (a === '--no-prompts') out.flags.prompts = false
+    else if (a === '--prompts') out.flags.prompts = true
+    else if (a === '--statusline') out.flags.statusline = true
+    else if (a === '--no-wait') out.flags.wait = false
+    else if (a === '--no-mcp') out.flags.mcp = false
+    else if (a === '--no-revoke') out.flags.revoke = false
+    else if (a === '--json') out.flags.json = true
+    else if (a === '--dry-run') out.flags.dryRun = true
     else if (a === '--help' || a === '-h') out.flags.help = true
     else if (a === '--version' || a === '-v' || a === '-V') out.flags.version = true
     else if (a.startsWith('--key=')) out.flags.key = a.slice(6)
+    else if (a.startsWith('--read-key=')) out.flags.readKey = a.slice(11)
     else if (a.startsWith('--url=')) out.flags.url = a.slice(6)
     else if (a.startsWith('--app-url=')) out.flags.appUrl = a.slice(10)
     else out._.push(a)
@@ -26,47 +32,84 @@ function parseArgs(argv) {
   return out
 }
 
-const HELP = `tokenfin — connect your coding agents to TokenFin (LLM cost tracking)
+const HELP = `tokenfin ${pkg.version} — connect your coding agents to TokenFin (LLM cost tracking)
 
 Usage:
-  npx tokenfin <command> [options]
+  npx tokenfin@latest <command> [options]
 
 Commands:
-  login      Open a browser, approve, and store an ingest key (~/.tokenfin/config.json).
-  setup      Point Claude Code's native OpenTelemetry at TokenFin, then wait for the
-             first real event. Writes an env block to ~/.claude/settings.json.
-  status     Show whether Claude Code is configured and events are flowing.
-  doctor     Diagnose why events might not be arriving, and how to fix it.
-  remove     Fully undo setup (strip the env block, unregister the MCP server).
+  login       Sign in (browser) and store this device's keys in ~/.tokenfin/config.json.
+              Re-points existing agent configs at the new key.
+  login --device
+              Same, for SSH / devcontainers: prints a code to approve in any browser.
+  setup       Point every installed agent's native OpenTelemetry at TokenFin
+              (Claude Code, Codex CLI, Gemini CLI, OpenCode), then wait for the
+              first real event.
+  status      Is Claude Code configured, and are events flowing?
+  doctor      Diagnose why events might not be arriving (incl. revoked keys).
+  budget      Today / month-to-date spend and your tightest budget.
+  budgets apply <file> [--dry-run]
+              Budgets-as-code: plan / apply limits + alerts from a YAML file
+              (needs an admin-scoped key via --key or TOKENFIN_API_KEY).
+  statusline  One line for Claude Code's status bar (used by setup --statusline).
+  remove      Fully undo setup, revoke this device's key, delete ~/.tokenfin.
 
 Options:
   -k, --key <key>       Ingest key (or TOKENFIN_KEY). Skips browser login.
+      --read-key <key>  Read key for status/doctor/budget/MCP (defaults to --key).
   -a, --app-url <url>   TokenFin web app origin (or TOKENFIN_APP_URL).
-  -y, --yes             Non-interactive; never prompt to open a browser.
+      --no-prompts      setup: never send prompt text (token counts/cost only).
+      --prompts         setup: re-enable prompt text capture.
+      --statusline      setup: add the TokenFin budget line to Claude Code's
+                        status bar (only if you don't already have a statusLine).
+      --no-wait         setup: don't wait for the first event.
+      --no-mcp          setup: don't register the read-only MCP server.
+  -y, --yes             Non-interactive; never prompt or open a browser.
   -h, --help            Show help.
   -v, --version         Print version.
 
+Privacy:
+  By default Claude Code, Codex and Gemini also send the TEXT of each prompt so
+  your workspace can see which prompts cost what. It expires after 90 days and
+  your org admin can switch it off for everyone. Opt out: setup --no-prompts.
+
 How it works:
   Claude Code, Codex, and Gemini ship native OpenTelemetry. TokenFin is an OTLP
-  receiver — no proxy in your request path, no provider keys held, no hooks.
-  Usage is captured from each agent's own telemetry and shown on your dashboard.`
+  receiver — no proxy in your request path, no provider keys held, no hooks.`
 
 async function main() {
   const { _, flags } = parseArgs(process.argv.slice(2))
   if (flags.version) { console.log(pkg.version); return }
-  const cmd = _[0] || (flags.help ? 'help' : 'help')
+  const cmd = _[0] || 'help'
+  if (flags.help && cmd !== 'help') { console.log(HELP); return }
+
+  // statusline must be fast and quiet: no update check, no extra output.
+  if (cmd === 'statusline') { await require('../lib/budget').statusline(); return }
+
+  const { checkForUpdate, updateNotice } = require('../lib/update')
+  const updateP = (cmd === 'help' || cmd === 'remove' || cmd === 'uninstall') ? Promise.resolve(null) : checkForUpdate(pkg.version, flags).catch(() => null)
+
   switch (cmd) {
-    case 'login': case 'auth':          await runLogin(flags); break
-    case 'setup': case 'init': case 'start': await setup(flags); break
-    case 'status':                      await status(flags); break
-    case 'doctor':                      await doctor(flags); break
-    case 'remove': case 'uninstall':    await remove(); break
-    case 'help':                        console.log(HELP); break
+    case 'login': case 'auth':               await require('../lib/login').runLogin(flags); break
+    case 'setup': case 'init': case 'start': await require('../lib/setup').setup(flags); break
+    case 'status':                           await require('../lib/status').status(flags); break
+    case 'doctor': {
+      const r = await require('../lib/doctor').doctor(flags)
+      if (r && r.fails) process.exitCode = 1
+      break
+    }
+    case 'budget':                           await require('../lib/budget').budget(flags); break
+    case 'budgets':                          process.exitCode = await require('../lib/budgets').budgets(_, flags); break
+    case 'remove': case 'uninstall':         await require('../lib/remove').remove(flags); break
+    case 'help':                             console.log(HELP); break
     default:
       console.error(`tokenfin: unknown command "${cmd}"\n`)
       console.log(HELP)
       process.exit(1)
   }
+
+  const latest = await updateP
+  if (latest) process.stderr.write(updateNotice(pkg.version, latest))
 }
 
 main().catch((e) => { console.error('tokenfin: ' + ((e && e.message) || e)); process.exit(1) })

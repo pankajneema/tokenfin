@@ -11,6 +11,7 @@ interface Props {
   tokensSaved: number; inputTokensSaved: number; outputTokensSaved: number
   savingsRate: number; outputSavingsPct: number | null; measured: boolean
   optimizedRequests: number; holdoutRequests: number; days: DayPoint[]
+  windowLabel: string
 }
 
 export function SavingsClient(p: Props) {
@@ -37,7 +38,7 @@ export function SavingsClient(p: Props) {
       <div className="mb-5 flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--green-bg)] p-5">
         <div>
           <div className="flex items-center gap-2 text-[12px] font-medium text-teal">
-            <PiggyBank size={15} /> Saved in the last 30 days
+            <PiggyBank size={15} /> Saved · {p.windowLabel}
             <span className="flex items-center gap-1 rounded-full bg-[var(--bg)] px-2 py-0.5 text-[10px] text-[var(--fg-secondary)]">
               {p.measured ? <><BadgeCheck size={10} className="text-teal" /> measured (holdout)</> : <><Sparkles size={10} /> estimated</>}
             </span>
@@ -79,7 +80,6 @@ export function SavingsClient(p: Props) {
 function Header() {
   return (
     <div className="mb-6">
-      <div className="text-[19px] font-bold text-[var(--fg)]">Savings</div>
       <p className="text-[13px] text-[var(--fg-secondary)]">What TokenFin cut from your bill — measured against a live holdout, not just estimated.</p>
     </div>
   )

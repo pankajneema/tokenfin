@@ -1,7 +1,14 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/server'
+import { requireOrgContext } from '@/lib/org-context'
+import { dashBreakdown }     from '@/lib/rollups'
+import { resolveWindow }     from '@/lib/rollup-scope'
 import { TeamsClient }        from './_client'
+import { fetchAllRows } from '@/lib/supabase/paginate'
+import { PRODUCTIVITY_COLUMNS, type ProductivityRow } from '@/components/dashboard/productivity-card'
 
 export const metadata = { title: 'Teams — TokenFin' }
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 /* ── Types (exported so _client.tsx can import them) ─────── */
 export interface TeamRow {
@@ -25,6 +32,14 @@ export interface MemberRow {
   email:     string    // from auth.users
 }
 
+/** Per-member engineering impact over the last 30 days (keyed by user_id). */
+export interface MemberImpact {
+  linesAdded: number
+  commits:    number
+  prs:        number
+  cost:       number
+}
+
 export interface ProjectRow {
   id:   string
   name: string
@@ -42,19 +57,10 @@ export interface InviteRow {
 
 /* ═══════════════════════════════════════════════════════════════ */
 export default async function TeamsPage() {
-  const supabase = createClient()
-  const admin    = createAdminClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  // Use admin client — bypasses RLS so membership is always found
-  const { data: membershipRows } = await admin
-    .from('members')
-    .select('org_id')
-    .eq('user_id', user!.id)
-    .limit(1)
-
-  const orgId = membershipRows?.[0]?.org_id ?? ''
+  const ctx   = await requireOrgContext()
+  const admin = createAdminClient()
+  const orgId = ctx.orgId
+  const win   = resolveWindow(undefined, ctx.timezone, { defaultDays: 30 })
 
   const [
     { data: teams       },
@@ -83,6 +89,34 @@ export default async function TeamsPage() {
       },
     ])
   )
+
+  /* ── Per-member impact (last 30 days): productivity_daily + rollup cost ──
+   * Match on user_id when present, else user_key / email ↔ auth email. */
+  const orgUserIds = new Set((members ?? []).map(m => m.user_id as string))
+  const emailToUid = new Map<string, string>()
+  for (const [uid, u] of Array.from(userMap.entries())) if (orgUserIds.has(uid) && u.email) emailToUid.set(u.email.toLowerCase(), uid)
+  const resolve = (uid: string | null, email: string | null) =>
+    (uid && orgUserIds.has(uid) ? uid : null) ?? emailToUid.get((email ?? '').trim().toLowerCase()) ?? null
+
+  const [prodRows, byMember] = await Promise.all([
+    fetchAllRows<ProductivityRow>((from, to) => admin.from('productivity_daily')
+      .select(PRODUCTIVITY_COLUMNS).eq('org_id', orgId).gte('day', win.from).lte('day', win.to)
+      .order('day').order('user_key').order('repo').range(from, to)).catch(() => [] as ProductivityRow[]),
+    // rollup key = lower(email) else user id
+    dashBreakdown(admin, orgId, win.from, win.to, 'member', undefined, 1000),
+  ])
+  const impact: Record<string, MemberImpact> = {}
+  const slot = (uid: string) => (impact[uid] ??= { linesAdded: 0, commits: 0, prs: 0, cost: 0 })
+  for (const r of prodRows) {
+    const uid = resolve(r.user_id, r.user_key)
+    if (!uid) continue
+    const e = slot(uid)
+    e.linesAdded += Number(r.lines_added ?? 0); e.commits += Number(r.commits ?? 0); e.prs += Number(r.pull_requests ?? 0)
+  }
+  for (const r of byMember.rows) {
+    const uid = resolve(r.key, r.key)
+    if (uid) slot(uid).cost += r.cost_usd
+  }
 
   /* ── Aggregate limits ── */
   const limitMap: Record<string, { budget: number; warnAt: number; throttleAt: number }> = {}
@@ -134,6 +168,7 @@ export default async function TeamsPage() {
       projects={(projects ?? []) as ProjectRow[]}
       invites={enrichedInvites}
       orgId={orgId}
+      impact={impact}
     />
   )
 }

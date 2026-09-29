@@ -1,288 +1,371 @@
-import { TokenFinConfig, TrackEvent, FlushResult, IngestPayload } from './types'
-import { uuidV4, sleep, backoffMs } from './utils'
+import type { TokenFinConfig, TrackEvent, FlushResult, ClientStats, IngestPayload } from './types'
+import { uuidV4, sleep, backoffMs, parseRetryAfter, isRetryableStatus } from './utils'
 
-const DEFAULT_BASE_URL       = 'https://tokenfin.curiousdevs.com'
-const DEFAULT_TIMEOUT_MS     = 3_000
-const DEFAULT_FLUSH_INTERVAL = 1_000
-const DEFAULT_BATCH_SIZE     = 50
-const DEFAULT_MAX_QUEUE      = 1_000
-const MAX_RETRIES            = 3
+export const SDK_VERSION = '0.2.0'
 
-// Status codes that are worth retrying
-const RETRYABLE = new Set([429, 500, 502, 503, 504])
+const DEFAULT_BASE_URL        = 'https://tokenfin.curiousdevs.com'
+const DEFAULT_TIMEOUT_MS      = 5_000
+const DEFAULT_FLUSH_INTERVAL  = 1_000
+const DEFAULT_BATCH_SIZE      = 100
+const DEFAULT_MAX_QUEUE       = 10_000
+const DEFAULT_MAX_RETRIES     = 3
+const DEFAULT_MAX_RETRY_AFTER = 30_000
+const SERVER_BATCH_CAP        = 500
+const SINGLE_CONCURRENCY      = 8
 
-// ─── Circuit breaker state ─────────────────────────────────────────────────────
-const CB_THRESHOLD = 5   // consecutive failures before opening
-const CB_COOLDOWN  = 60_000 // 60s open before half-open probe
+// Circuit breaker: after N consecutive failed sends, drop instead of sending for a cooldown.
+const CB_THRESHOLD = 5
+const CB_COOLDOWN  = 60_000
+
+/** Result of sending a set of events. `retry` = events that may be retried. */
+interface SendOutcome { sent: number; dropped: number; retry: IngestPayload[]; retryAfterMs: number | null }
+
+type HttpResult =
+  | { kind: 'response'; status: number; retryAfterMs: number | null; body: unknown }
+  | { kind: 'network'; error: string }
 
 /**
  * TokenFin client.
  *
- * Events are queued in memory and flushed in batches, so `track()` never
- * blocks your application's hot path. The client flushes automatically on a
- * timer and on process/page exit.
+ * Events are queued in memory and sent in batches to `/api/v1/ingest/batch`
+ * (falling back to `/api/v1/ingest` on older servers), so `track()` never
+ * blocks and never throws.
  *
  * ```ts
- * const tf = new TokenFinClient({ apiKey: 'tfk_prod_...' })
- *
- * // After your LLM call — synchronous, non-blocking
+ * const tf = new TokenFinClient({ apiKey: process.env.TOKENFIN_API_KEY! })
  * tf.track({ model: 'gpt-4o', inputTokens: 800, outputTokens: 120 })
- *
- * // Graceful shutdown — waits for the queue to drain
- * await tf.flush()
+ * await tf.shutdown()   // drain before exit
  * ```
  */
 export class TokenFinClient {
-  private readonly apiKey:        string
-  private readonly baseUrl:       string
-  private readonly timeoutMs:     number
-  private readonly batchSize:     number
-  private readonly maxQueueSize:  number
-  private readonly debug:         boolean
+  private readonly apiKey:          string
+  private readonly baseUrl:         string
+  private readonly timeoutMs:       number
+  private readonly batchSize:       number
+  private readonly maxQueueSize:    number
+  private readonly maxRetries:      number
+  private readonly maxRetryAfterMs: number
+  private readonly debug:           boolean
+  private readonly fetchImpl:       typeof fetch | undefined
 
-  private queue:      IngestPayload[]  = []
-  private timer:      ReturnType<typeof setInterval> | null = null
-  private flushing    = false
+  private queue: IngestPayload[] = []
+  private timer: ReturnType<typeof setInterval> | null = null
+  private inflight: Promise<FlushResult> | null = null
+  private closed = false
+  private batchSupported: boolean | null = null // null = unknown, probe on first send
+  private exitHandler: (() => void) | null = null
 
-  // Circuit breaker
-  private cbFailures = 0
+  private totals = { sent: 0, dropped: 0 }
+  private cbFailures  = 0
   private cbOpenUntil = 0
 
   constructor(cfg: TokenFinConfig) {
-    this.apiKey       = cfg.apiKey
-    this.baseUrl      = (cfg.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '')
-    this.timeoutMs    = cfg.timeoutMs    ?? DEFAULT_TIMEOUT_MS
-    this.batchSize    = cfg.batchSize    ?? DEFAULT_BATCH_SIZE
-    this.maxQueueSize = cfg.maxQueueSize ?? DEFAULT_MAX_QUEUE
-    this.debug        = cfg.debug        ?? false
+    this.apiKey          = cfg.apiKey
+    this.baseUrl         = (cfg.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '')
+    this.timeoutMs       = cfg.timeoutMs       ?? DEFAULT_TIMEOUT_MS
+    this.batchSize       = Math.max(1, Math.min(cfg.batchSize ?? DEFAULT_BATCH_SIZE, SERVER_BATCH_CAP))
+    this.maxQueueSize    = Math.max(1, cfg.maxQueueSize ?? DEFAULT_MAX_QUEUE)
+    this.maxRetries      = Math.max(0, cfg.maxRetries ?? DEFAULT_MAX_RETRIES)
+    this.maxRetryAfterMs = cfg.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER
+    this.debug           = cfg.debug ?? false
+    this.fetchImpl       = cfg.fetch ?? (typeof fetch === 'function' ? fetch.bind(globalThis) : undefined)
 
     const interval = cfg.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL
     if (interval > 0) {
-      this.timer = setInterval(() => { this._flushBackground() }, interval)
-      // Don't keep Node process alive just for this timer
-      if (typeof this.timer === 'object' && this.timer !== null && 'unref' in this.timer) {
-        (this.timer as NodeJS.Timeout).unref()
-      }
+      this.timer = setInterval(() => this._flushBackground(), interval)
+      ;(this.timer as { unref?: () => void }).unref?.() // never keep the process alive
     }
-
-    // Graceful exit hooks — best-effort only
-    this._registerExitHooks()
+    if (cfg.flushOnExit !== false) this._registerExitHooks()
   }
 
   // ─── Public API ─────────────────────────────────────────────────────────────
 
-  /**
-   * Enqueue a usage event. Returns immediately — never throws.
-   * The event will be sent on the next flush (timer or batchSize trigger).
-   */
+  /** Enqueue a usage event. Returns immediately and never throws. */
   track(event: TrackEvent): void {
-    if (this.queue.length >= this.maxQueueSize) {
-      this._log('queue full — dropping oldest event')
-      this.queue.shift() // drop oldest to make room
-    }
-
-    this.queue.push({
-      model:           event.model,
-      input_tokens:    event.inputTokens,
-      output_tokens:   event.outputTokens,
-      idempotency_key: event.idempotencyKey ?? uuidV4(),
-      tags:            event.tags,
-      metadata:        event.metadata,
-    })
-
-    this._log(`queued event, queue length=${this.queue.length}`)
-
-    // Flush immediately if we've hit the batch threshold
-    if (this.queue.length >= this.batchSize) {
-      this._flushBackground()
+    try {
+      if (this.closed) { this.totals.dropped++; return }
+      if (!event || !event.model) { this._log('track() ignored: model is required'); return }
+      if (this.queue.length >= this.maxQueueSize) {
+        this.queue.shift()
+        this.totals.dropped++
+        this._log('queue full — dropped oldest event')
+      }
+      this.queue.push(toPayload(event))
+      if (this.queue.length >= this.batchSize) this._flushBackground()
+    } catch (err) {
+      this._log('track() failed', errMsg(err))
     }
   }
 
-  /**
-   * Drain the queue and wait for all in-flight requests to complete.
-   * Call this before your process exits to avoid dropping queued events.
-   */
+  /** Send everything queued so far and wait for it. Never rejects. */
   async flush(): Promise<FlushResult> {
-    this._stopTimer()
-    return this._flushOnce()
+    const result: FlushResult = { sent: 0, dropped: 0 }
+    try {
+      // Wait for any in-progress background flush, then drain the rest.
+      while (this.inflight) {
+        const r = await this.inflight
+        result.sent += r.sent; result.dropped += r.dropped
+      }
+      if (this.queue.length > 0) {
+        const r = await this._startFlush()
+        result.sent += r.sent; result.dropped += r.dropped
+      }
+    } catch (err) {
+      this._log('flush() failed', errMsg(err))
+    }
+    return result
   }
 
-  /**
-   * Stop the auto-flush timer and drop any queued events.
-   * Call if you want to shut down without flushing.
-   */
+  /** Stop the timer, detach exit hooks and drain the queue. Idempotent. */
+  async shutdown(): Promise<FlushResult> {
+    this._stopTimer()
+    this._detachExitHooks()
+    const r = await this.flush()
+    this.closed = true
+    return r
+  }
+
+  /** Stop the timer and discard queued events (counted as dropped). */
   destroy(): void {
     this._stopTimer()
-    const dropped = this.queue.length
+    this._detachExitHooks()
+    this.totals.dropped += this.queue.length
     this.queue = []
-    this._log(`destroyed — dropped ${dropped} queued events`)
+    this.closed = true
   }
 
-  // ─── Internal ───────────────────────────────────────────────────────────────
+  /** Lifetime counters. */
+  stats(): ClientStats {
+    return { sent: this.totals.sent, dropped: this.totals.dropped, queued: this.queue.length }
+  }
 
-  /** Non-async wrapper for background flushing (timer + batch trigger). */
+  // ─── Flushing ───────────────────────────────────────────────────────────────
+
   private _flushBackground(): void {
-    if (this.queue.length === 0 || this.flushing) return
-    this._flushOnce().catch(() => {}) // errors handled inside
+    if (this.inflight || this.queue.length === 0) return
+    this._startFlush().catch(() => {})
   }
 
-  private async _flushOnce(): Promise<FlushResult> {
-    if (this.queue.length === 0) return { sent: 0, dropped: 0 }
+  private _startFlush(): Promise<FlushResult> {
+    const p = this._drain().finally(() => { if (this.inflight === p) this.inflight = null })
+    this.inflight = p
+    return p
+  }
 
-    // Prevent concurrent flushes
-    if (this.flushing) return { sent: 0, dropped: 0 }
-    this.flushing = true
-
-    let sent    = 0
+  private async _drain(): Promise<FlushResult> {
+    let sent = 0
     let dropped = 0
-
-    try {
-      // Drain the queue in batches
-      while (this.queue.length > 0) {
-        // Circuit breaker check
-        if (Date.now() < this.cbOpenUntil) {
-          this._log(`circuit open — dropping ${this.queue.length} events`)
-          dropped += this.queue.length
-          this.queue = []
-          break
-        }
-
-        const batch = this.queue.splice(0, this.batchSize)
-        const ok    = await this._sendBatch(batch)
-
-        if (ok) {
-          sent            += batch.length
-          this.cbFailures  = 0
-        } else {
-          // Re-queue failed batch at the front so next flush retries
-          this.queue.unshift(...batch)
-          dropped += batch.length
-          this.queue.splice(0, batch.length) // remove from front (already counted)
-          break
-        }
+    while (this.queue.length > 0) {
+      if (Date.now() < this.cbOpenUntil) {
+        this._log(`circuit open — dropping ${this.queue.length} events`)
+        dropped += this.queue.length
+        this.queue = []
+        break
       }
-    } finally {
-      this.flushing = false
+      const batch = this.queue.splice(0, this.batchSize)
+      const r = await this._sendWithRetry(batch)
+      sent += r.sent
+      dropped += r.dropped
+      if (r.failedHard) { this._openCircuit(); break }
+      this.cbFailures = 0
     }
-
+    this.totals.sent += sent
+    this.totals.dropped += dropped
     return { sent, dropped }
   }
 
-  /**
-   * Send a single batch with retries and exponential backoff.
-   * Returns true if the server accepted the batch.
-   */
-  private async _sendBatch(batch: IngestPayload[]): Promise<boolean> {
-    const url = `${this.baseUrl}/api/v1/ingest`
+  /** Send a batch; retry only the retryable subset, honouring Retry-After. */
+  private async _sendWithRetry(batch: IngestPayload[]): Promise<FlushResult & { failedHard: boolean }> {
+    let sent = 0
+    let dropped = 0
+    let pending = batch
+    for (let attempt = 0; attempt <= this.maxRetries && pending.length > 0; attempt++) {
+      const r = await this._send(pending)
+      sent += r.sent
+      dropped += r.dropped
+      pending = r.retry
+      if (pending.length === 0) break
+      if (attempt === this.maxRetries) break
+      const wait = r.retryAfterMs !== null ? Math.min(r.retryAfterMs, this.maxRetryAfterMs) : backoffMs(attempt)
+      this._log(`${pending.length} events retryable — waiting ${Math.round(wait)}ms (attempt ${attempt + 1})`)
+      await sleep(wait)
+    }
+    // Anything still pending exhausted its retries.
+    return { sent, dropped: dropped + pending.length, failedHard: pending.length > 0 && sent === 0 }
+  }
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        if (attempt > 0) {
-          await sleep(backoffMs(attempt - 1))
-        }
-
-        const controller = new AbortController()
-        const timer      = setTimeout(() => controller.abort(), this.timeoutMs)
-
-        // The Go ingest endpoint accepts a single event per request.
-        // We make one request per event in the batch (parallel for throughput).
-        const results = await Promise.allSettled(
-          batch.map(payload =>
-            fetch(url, {
-              method:  'POST',
-              headers: {
-                'Content-Type':  'application/json',
-                'Authorization': `Bearer ${this.apiKey}`,
-              },
-              body:   JSON.stringify(payload),
-              signal: controller.signal,
-            })
-          )
-        )
-
-        clearTimeout(timer)
-
-        // Check for retryable failures
-        const failures = results.filter(r =>
-          r.status === 'rejected' ||
-          (r.status === 'fulfilled' && RETRYABLE.has(r.value.status))
-        )
-
-        if (failures.length === 0) {
-          this._log(`batch sent ok (${batch.length} events)`)
-          return true
-        }
-
-        const hasRetryable = results.some(r =>
-          r.status === 'rejected' ||
-          (r.status === 'fulfilled' && RETRYABLE.has(r.value.status))
-        )
-
-        if (!hasRetryable || attempt === MAX_RETRIES - 1) {
-          this._openCircuit()
-          return false
-        }
-
-        this._log(`batch attempt ${attempt + 1} failed — retrying`)
-
-      } catch (err) {
-        if (attempt === MAX_RETRIES - 1) {
-          this._openCircuit()
-          return false
-        }
-        // Log only the message — never the raw Error object, which in some
-        // fetch implementations includes request headers (Bearer token).
-        const msg = err instanceof Error ? err.message : String(err)
-        this._log(`send error (attempt ${attempt + 1}): ${msg}`)
+  private async _send(events: IngestPayload[]): Promise<SendOutcome> {
+    if (this.batchSupported !== false) {
+      const r = await this._post('/api/v1/ingest/batch', { events })
+      if (r.kind === 'response' && (r.status === 404 || r.status === 405)) {
+        this._log('batch endpoint not available — falling back to /api/v1/ingest')
+        this.batchSupported = false
+      } else {
+        if (r.kind === 'response' && r.status < 300) this.batchSupported = true
+        return interpretBatch(r, events)
       }
     }
+    return this._sendSingles(events)
+  }
 
-    return false
+  private async _sendSingles(events: IngestPayload[]): Promise<SendOutcome> {
+    const out: SendOutcome = { sent: 0, dropped: 0, retry: [], retryAfterMs: null }
+    for (let i = 0; i < events.length; i += SINGLE_CONCURRENCY) {
+      const chunk = events.slice(i, i + SINGLE_CONCURRENCY)
+      const results = await Promise.all(chunk.map(e =>
+        this._post('/api/v1/ingest', e, { 'Idempotency-Key': e.idempotency_key })))
+      results.forEach((r, j) => {
+        if (r.kind === 'network' || isRetryableStatus(r.status)) {
+          out.retry.push(chunk[j])
+          if (r.kind === 'response' && r.retryAfterMs !== null)
+            out.retryAfterMs = Math.max(out.retryAfterMs ?? 0, r.retryAfterMs)
+        } else if (r.status < 300) {
+          out.sent++
+        } else {
+          this._log(`event rejected with HTTP ${r.status} — dropped`)
+          out.dropped++
+        }
+      })
+    }
+    return out
+  }
+
+  private async _post(path: string, body: unknown, extra: Record<string, string> = {}): Promise<HttpResult> {
+    if (!this.fetchImpl) return { kind: 'network', error: 'fetch is not available' }
+    const controller = typeof AbortController === 'function' ? new AbortController() : null
+    const timer = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null
+    ;(timer as { unref?: () => void } | null)?.unref?.()
+    try {
+      const res = await this.fetchImpl(this.baseUrl + path, {
+        method: 'POST',
+        headers: {
+          'Content-Type':   'application/json',
+          'Authorization':  `Bearer ${this.apiKey}`,
+          'X-TokenFin-SDK': `ts/${SDK_VERSION}`,
+          ...extra,
+        },
+        body: JSON.stringify(body),
+        signal: controller?.signal,
+      })
+      let parsed: unknown = null
+      try { parsed = await res.json() } catch { /* empty / non-JSON body */ }
+      return { kind: 'response', status: res.status, retryAfterMs: parseRetryAfter(res.headers.get('retry-after')), body: parsed }
+    } catch (err) {
+      // Log only the message — never the raw error (may include headers / Bearer token).
+      this._log(`request to ${path} failed: ${errMsg(err)}`)
+      return { kind: 'network', error: errMsg(err) }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   private _openCircuit(): void {
     this.cbFailures++
     if (this.cbFailures >= CB_THRESHOLD) {
       this.cbOpenUntil = Date.now() + CB_COOLDOWN
-      this._log(`circuit opened — will retry after ${CB_COOLDOWN / 1000}s`)
+      this._log(`circuit opened — sending paused for ${CB_COOLDOWN / 1000}s`)
     }
   }
 
   private _stopTimer(): void {
-    if (this.timer !== null) {
-      clearInterval(this.timer)
-      this.timer = null
+    if (this.timer !== null) { clearInterval(this.timer); this.timer = null }
+  }
+
+  /**
+   * Flush on `beforeExit` (fires when the event loop drains — pending fetches
+   * keep it alive until they finish). We deliberately do NOT register
+   * SIGINT/SIGTERM handlers: adding one suppresses Node's default exit.
+   */
+  private _registerExitHooks(): void {
+    const proc = (globalThis as { process?: NodeJS.Process }).process
+    if (proc && typeof proc.once === 'function') {
+      this.exitHandler = () => { if (this.queue.length > 0) this._flushBackground() }
+      proc.on('beforeExit', this.exitHandler)
+    }
+    const win = (globalThis as { window?: Window }).window
+    if (win && typeof win.addEventListener === 'function') {
+      win.addEventListener('pagehide', () => this._flushBackground())
     }
   }
 
-  private _registerExitHooks(): void {
-    // Node.js process exit
-    if (typeof process !== 'undefined' && typeof process.on === 'function') {
-      const handler = () => {
-        // Synchronous — best-effort, Node drains pending promises before exit
-        this._flushBackground()
-      }
-      process.on('beforeExit', handler)
-      process.on('SIGTERM',    handler)
-      process.on('SIGINT',     handler)
-    }
-
-    // Browser page unload
-    if (typeof window !== 'undefined') {
-      window.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-          this._flushBackground()
-        }
-      })
-      window.addEventListener('beforeunload', () => {
-        this._flushBackground()
-      })
-    }
+  private _detachExitHooks(): void {
+    const proc = (globalThis as { process?: NodeJS.Process }).process
+    if (this.exitHandler && proc && typeof proc.off === 'function') proc.off('beforeExit', this.exitHandler)
+    this.exitHandler = null
   }
 
   private _log(...args: unknown[]): void {
-    if (this.debug) {
-      console.debug('[TokenFin]', ...args)
-    }
+    if (this.debug) console.debug('[TokenFin]', ...args)
   }
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+const OK_WORDS    = new Set(['ok', 'accepted', 'created', 'inserted', 'duplicate', 'deduped', 'skipped', 'success'])
+const RETRY_WORDS = new Set(['retry', 'throttled', 'rate_limited', 'unavailable'])
+
+/** Map a batch-endpoint response onto sent / dropped / retry. */
+export function interpretBatch(r: HttpResult, events: IngestPayload[]): SendOutcome {
+  if (r.kind === 'network') return { sent: 0, dropped: 0, retry: events, retryAfterMs: null }
+  if (isRetryableStatus(r.status)) return { sent: 0, dropped: 0, retry: events, retryAfterMs: r.retryAfterMs }
+  if (r.status >= 300) return { sent: 0, dropped: events.length, retry: [], retryAfterMs: null }
+
+  const results = (r.body as { results?: unknown } | null)?.results
+  if (!Array.isArray(results)) return { sent: events.length, dropped: 0, retry: [], retryAfterMs: null }
+
+  const out: SendOutcome = { sent: 0, dropped: 0, retry: [], retryAfterMs: null }
+  events.forEach((ev, i) => {
+    const item = (results.find((x: { index?: number }) => x && x.index === i) ?? results[i]) as Record<string, unknown> | undefined
+    const verdict = classifyItem(item)
+    if (verdict === 'sent') out.sent++
+    else if (verdict === 'retry') out.retry.push(ev)
+    else out.dropped++
+  })
+  return out
+}
+
+function classifyItem(item: Record<string, unknown> | undefined): 'sent' | 'dropped' | 'retry' {
+  if (!item || typeof item !== 'object') return 'sent' // server returned fewer results: assume accepted
+  const status = item.status
+  if (typeof status === 'number') {
+    if (status < 300) return 'sent'
+    return isRetryableStatus(status) ? 'retry' : 'dropped'
+  }
+  if (typeof status === 'string') {
+    const s = status.toLowerCase()
+    if (OK_WORDS.has(s)) return 'sent'
+    if (RETRY_WORDS.has(s)) return 'retry'
+    return 'dropped'
+  }
+  if (item.ok === true || item.accepted === true || item.duplicate === true) return 'sent'
+  if (item.ok === false || item.error) return 'dropped'
+  return 'sent'
+}
+
+function toPayload(e: TrackEvent): IngestPayload {
+  const p: IngestPayload = { model: e.model, idempotency_key: e.idempotencyKey ?? uuidV4() }
+  const num = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, v) : undefined)
+  const set = <K extends keyof IngestPayload>(k: K, v: IngestPayload[K] | undefined) => { if (v !== undefined && v !== null && v !== '') p[k] = v }
+  set('input_tokens',       num(e.inputTokens))
+  set('output_tokens',      num(e.outputTokens))
+  set('cache_read_tokens',  num(e.cacheReadTokens))
+  set('cache_write_tokens', num(e.cacheWriteTokens))
+  set('total_tokens',       num(e.totalTokens))
+  set('latency_ms',         num(e.latencyMs))
+  set('project_id',  e.projectId)
+  set('user_email',  e.userEmail)
+  set('session_id',  e.sessionId)
+  set('provider',    e.provider)
+  set('source',      e.source)
+  set('tool',        e.tool)
+  set('prompt_text', e.promptText)
+  set('prompt_hash', e.promptHash)
+  set('timestamp', e.timestamp instanceof Date ? e.timestamp.toISOString() : (e.timestamp ?? new Date().toISOString()))
+  if (e.tags && Object.keys(e.tags).length) p.tags = e.tags
+  if (e.metadata && Object.keys(e.metadata).length) p.metadata = e.metadata
+  return p
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }

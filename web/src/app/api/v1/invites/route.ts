@@ -3,6 +3,7 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { requireOrgMemberWithRole, requirePermission, dbError } from '@/lib/api/auth'
 import { can } from '@/lib/rbac'
 import { z } from 'zod'
+import { audit } from '@/lib/audit'
 
 function db() { return createAdminClient() }
 
@@ -63,6 +64,7 @@ export async function POST(req: NextRequest) {
   const sent   = results.filter(r => r.status === 'sent').length
   const failed = results.filter(r => r.status === 'failed').length
 
+  await audit({ orgId: org_id, actorUserId: guard.userId, action: 'member.invite', targetType: 'invitation', details: { invited: sent, failed } })
   return NextResponse.json({ invited: sent, failed, results }, { status: 201 })
 }
 

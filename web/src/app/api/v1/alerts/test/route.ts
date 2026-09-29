@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { requirePermission } from '@/lib/api/auth'
 import { buildOrgCtx, deliverAlert, type AlertRule } from '@/lib/alerts/engine'
+import { recordDeliveryResults } from '@/lib/integrations/delivery'
 
 /**
  * POST /api/v1/alerts/test  { id }
@@ -32,6 +33,7 @@ export async function POST(req: NextRequest) {
   const ctx = await buildOrgCtx(admin, rule.org_id, emailByUser)
   const message = `This is a test of your "${rule.name}" alert. If you received it, this channel is working.`
   const results = await deliverAlert(admin, rule as AlertRule, ctx, message, { test: true })
+  await recordDeliveryResults(admin, rule.org_id, results)
 
   return NextResponse.json({ ok: true, delivered: results })
 }

@@ -3,12 +3,13 @@ import type { NextRequest }                          from 'next/server'
 import { createAdminClient }                         from '@/lib/supabase/server'
 import { requireApiKeyOrOrgMember, requirePermission, dbError } from '@/lib/api/auth'
 import { z }                                          from 'zod'
+import { audit } from '@/lib/audit'
 
 function db() { return createAdminClient() }
 
-/* GET /api/v1/limits?org_id=xxx */
+/* GET /api/v1/limits?org_id=xxx — org limits are readable by every role. */
 export async function GET(req: NextRequest) {
-  const guard = await requireApiKeyOrOrgMember(req, req.nextUrl.searchParams.get('org_id'))
+  const guard = await requireApiKeyOrOrgMember(req, req.nextUrl.searchParams.get('org_id'), { permission: 'analytics:view' })
   if (guard instanceof NextResponse) return guard
   const { orgId } = guard
 
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
   if (guard instanceof NextResponse) return guard
 
   const { data, error } = await db().from('limits').insert(parsed.data).select().single()
+  if (!error && data) await audit({ orgId: parsed.data.org_id, actorUserId: guard.userId, action: 'limit.create', targetType: 'limit', targetId: data.id, details: { scope: data.scope, period: data.period, budget_usd: data.budget_usd } })
   if (error) return dbError(error, 'POST limits')
   return NextResponse.json(data, { status: 201 })
 }
@@ -93,6 +95,7 @@ export async function PATCH(req: NextRequest) {
 
   const { id, ...fields } = parsed.data
   const { data, error } = await db().from('limits').update(fields).eq('id', id).select().single()
+  if (!error) await audit({ orgId: limRow.org_id, actorUserId: guard.userId, action: 'limit.update', targetType: 'limit', targetId: id, details: fields })
   if (error) return dbError(error, 'PATCH limits')
   return NextResponse.json(data)
 }
@@ -107,6 +110,7 @@ export async function DELETE(req: NextRequest) {
   if (guard instanceof NextResponse) return guard
 
   const { error } = await db().from('limits').delete().eq('id', id!)
+  if (!error) await audit({ orgId: limRow.org_id, actorUserId: guard.userId, action: 'limit.delete', targetType: 'limit', targetId: id })
   if (error) return dbError(error, 'DELETE limits')
   return NextResponse.json({ ok: true })
 }

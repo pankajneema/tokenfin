@@ -14,21 +14,29 @@ export interface ModelRow {
   id:           string
   name:         string
   provider:     string
-  tier:         'frontier' | 'standard' | 'fast'
   color:        string
-  bg:           string
+  /** $/1M input & output from lib/mcp/pricing.ts or the org's override */
+  priceIn:      number
+  priceOut:     number
+  priceSource:  'override' | 'list' | 'unknown'
+  /** effective $/1M actually paid (measured) */
   costPer1M:    number
   cost30d:      number
+  metered:      number
+  notional:     number
   costPrev:     number
   inputTok:     number   // millions
   outputTok:    number   // millions
   calls30d:     number
   callsPrev:    number
-  avgLatencyMs: number
-  deprecated?:  boolean
+  /** measured mean latency from telemetry; null when no latency was reported */
+  avgLatencyMs: number | null
 }
 
-interface Props { models: ModelRow[]; days: number }
+interface Props {
+  models: ModelRow[]; days: number; windowLabel: string; totalPrompts: number
+  meteredCost: number; notionalCost: number
+}
 
 /* ── Provider color palette for dynamic providers ── */
 const PROVIDER_COLORS: Record<string, string> = {
@@ -44,11 +52,12 @@ function providerAbbr(p: string) {
   return p.slice(0, 2).toUpperCase()
 }
 
-const TIER_META: Record<string, { label: string; bg: string; color: string }> = {
-  frontier: { label: 'Frontier', bg: 'bg-[#8B5CF6]/10',          color: 'text-[#8B5CF6]' },
-  standard: { label: 'Standard', bg: 'bg-[var(--blue-bg)]',       color: 'text-[var(--blue)]'  },
-  fast:     { label: 'Fast',     bg: 'bg-[var(--green-bg)]',      color: 'text-teal'            },
+const PRICE_SOURCE_LABEL: Record<ModelRow['priceSource'], string> = {
+  override: 'custom price',
+  list:     'list price',
+  unknown:  'unknown model · fallback price',
 }
+function fmtRate(p: number) { return p < 1 ? `$${p.toFixed(p < 0.1 ? 3 : 2)}` : `$${p.toFixed(2)}` }
 
 /* ═══════════════════════════════════════════════════════════
    HELPERS
@@ -84,10 +93,10 @@ function DeltaBadge({ curr, prev, size = 10 }: { curr: number; prev: number; siz
    CSV EXPORT
 ═══════════════════════════════════════════════════════════ */
 function downloadModelsCSV(models: ModelRow[]) {
-  const headers = ['Model','Provider','Tier','Cost ($)','vs Prior (%)','Input Tokens (M)','Output Tokens (M)','LLM Calls','$/1M tokens']
+  const headers = ['Model','Provider','Cost ($)','Metered ($)','Notional ($)','vs Prior (%)','Input Tokens (M)','Output Tokens (M)','LLM Calls','Effective $/1M tokens','Input $/1M','Output $/1M','Price source','Avg latency (ms)']
   const lines = models.map(m => {
     const delta = m.costPrev > 0 ? ((m.cost30d - m.costPrev) / m.costPrev * 100).toFixed(1) + '%' : 'N/A'
-    return [m.name, m.provider, m.tier, m.cost30d.toFixed(4), delta, m.inputTok.toFixed(4), m.outputTok.toFixed(4), m.calls30d, m.costPer1M.toFixed(3)]
+    return [m.name, m.provider, m.cost30d.toFixed(4), m.metered.toFixed(4), m.notional.toFixed(4), delta, m.inputTok.toFixed(4), m.outputTok.toFixed(4), m.calls30d, m.costPer1M.toFixed(3), m.priceIn, m.priceOut, m.priceSource, m.avgLatencyMs ?? '']
   })
   const csv = [headers, ...lines].map(r => r.join(',')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv' })
@@ -137,11 +146,10 @@ const DAY_OPTIONS = [
   { label: '90D', value: 90 },
 ]
 
-export function ModelsClient({ models, days }: Props) {
+export function ModelsClient({ models, days, windowLabel, totalPrompts, meteredCost, notionalCost }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
   const [provFil,    setProvFil]    = useState<string>('all')
-  const [tierFil,    setTierFil]    = useState<string>('all')
   const [sortKey,    setSortKey]    = useState<SortKey>('cost')
   const [sortDir,    setSortDir]    = useState<SortDir>('desc')
   const [exportDone, setExportDone] = useState(false)
@@ -156,11 +164,6 @@ export function ModelsClient({ models, days }: Props) {
     setTimeout(() => setExportDone(false), 2500)
   }
 
-  const dateRange = (() => {
-    const now   = new Date()
-    const start = new Date(now.getTime() - days * 86400_000)
-    return `${start.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${now.toLocaleDateString('en-US',{month:'short',day:'numeric'})}`
-  })()
 
   const totalCost  = models.reduce((s, m) => s + m.cost30d, 0)
   const totalTokM  = models.reduce((s, m) => s + m.inputTok + m.outputTok, 0)
@@ -173,7 +176,6 @@ export function ModelsClient({ models, days }: Props) {
 
   const filtered = useMemo(() => models
     .filter(m => provFil === 'all' || m.provider === provFil)
-    .filter(m => tierFil === 'all' || m.tier === tierFil)
     .sort((a, b) => {
       const av = sortKey === 'cost'       ? a.cost30d
                : sortKey === 'tokens'     ? a.inputTok + a.outputTok
@@ -186,7 +188,7 @@ export function ModelsClient({ models, days }: Props) {
                : sortKey === 'efficiency' ? b.costPer1M
                : (b.cost30d / (totalCost || 1))
       return sortDir === 'desc' ? bv - av : av - bv
-    }), [models, provFil, tierFil, sortKey, sortDir, totalCost])
+    }), [models, provFil, sortKey, sortDir, totalCost])
 
   function toggleSort(k: SortKey) {
     if (sortKey === k) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
@@ -198,13 +200,10 @@ export function ModelsClient({ models, days }: Props) {
     return sortDir === 'desc' ? <ChevronDown size={11} className="text-coral" /> : <ChevronUp size={11} className="text-coral" />
   }
 
-  // Active tiers in data
-  const activeTiers = Array.from(new Set(models.map(m => m.tier)))
-
   if (models.length === 0) {
     return (
       <div className="space-y-5">
-        <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Model</h1>
+        <p className="text-[13px] text-[var(--fg-secondary)]">{windowLabel}</p>
         <div className="bg-white dark:bg-[#141428] border border-[var(--border)] rounded-2xl p-12 text-center">
           <Cpu size={32} className="mx-auto mb-3 text-[var(--fg-tertiary)]" />
           <p className="text-[14px] font-semibold text-[var(--fg)]">No model usage yet</p>
@@ -221,10 +220,7 @@ export function ModelsClient({ models, days }: Props) {
 
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">By Model</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Cost, token usage, efficiency and latency — {dateRange}</p>
-        </div>
+        <p className="text-[13px] text-[var(--fg-secondary)]">Cost, token usage, prices and measured latency · {windowLabel}</p>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Date range pills */}
           <div className="flex items-center gap-1 p-1 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl">
@@ -252,10 +248,11 @@ export function ModelsClient({ models, days }: Props) {
       </div>
 
       {/* ── KPI strip ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
-          { label:`Total spend (${days}d)`, value: fmtCost(totalCost),      color:'#D97757' },
+          { label:`Spend · ${fmtCost(meteredCost)} metered · ${fmtCost(notionalCost)} notional`, value: fmtCost(totalCost), color:'#D97757' },
           { label:'Total tokens',      value: fmtTokens(totalTokM),         color:'#20B2AA' },
+          { label:'Prompts',            value: totalPrompts.toLocaleString(), color:'#F59E0B' },
           { label:'LLM calls',          value: totalCalls.toLocaleString(),   color:'#4285F4' },
           { label:'Models in use',     value: `${models.length}`,           color:'#8B5CF6' },
         ].map(s => (
@@ -299,14 +296,11 @@ export function ModelsClient({ models, days }: Props) {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1">
-                  {provModels.map(m => {
-                    const tm = TIER_META[m.tier]
-                    return (
-                      <span key={m.id} className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-md', tm.bg, tm.color)}>
-                        {m.name.replace(/^(claude|gpt|gemini)-?/, '')}
-                      </span>
-                    )
-                  })}
+                  {provModels.map(m => (
+                    <span key={m.id} className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-[var(--bg-secondary)] text-[var(--fg-secondary)]">
+                      {m.name.replace(/^(claude|gpt|gemini)-?/, '')}
+                    </span>
+                  ))}
                 </div>
               </div>
             )
@@ -334,27 +328,6 @@ export function ModelsClient({ models, days }: Props) {
           </div>
         )}
 
-        {/* Tier filter — only shown if >1 tier */}
-        {activeTiers.length > 1 && (
-          <div className="flex items-center gap-1 p-1 bg-white dark:bg-[#141428] border border-[var(--border)] rounded-xl">
-            <button onClick={() => setTierFil('all')}
-              className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all',
-                tierFil==='all'?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-              All tiers
-            </button>
-            {activeTiers.map(t => {
-              const tm = TIER_META[t]
-              return (
-                <button key={t} onClick={() => setTierFil(t)}
-                  className={cn('px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all capitalize',
-                    tierFil===t?'bg-[var(--fg)] text-[var(--bg)]':'text-[var(--fg-secondary)] hover:text-[var(--fg)]')}>
-                  {tm?.label ?? t}
-                </button>
-              )
-            })}
-          </div>
-        )}
-
         <div className="flex items-center gap-1.5 text-[11.5px] text-[var(--fg-tertiary)] ml-auto">
           <Filter size={12} /> {filtered.length} of {models.length} model{models.length !== 1 ? 's' : ''}
         </div>
@@ -365,12 +338,12 @@ export function ModelsClient({ models, days }: Props) {
         <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_100px] gap-3 px-5 py-3 border-b border-[var(--border)] bg-[var(--bg-secondary)]">
           {[
             { label:'Model',      key:null as SortKey|null },
-            { label:'Cost MTD',   key:'cost'       as SortKey },
+            { label:'Cost',       key:'cost'       as SortKey },
             { label:'Tokens',     key:'tokens'     as SortKey },
             { label:'Calls',      key:'calls'      as SortKey },
             { label:'$/M tokens', key:'efficiency' as SortKey },
             { label:'% of spend', key:'pct'        as SortKey },
-            { label:'30d trend',  key:null         as SortKey|null },
+            { label:'vs prior',   key:null         as SortKey|null },
           ].map(({ label, key }) => (
             <button key={label}
               onClick={() => key && toggleSort(key)}
@@ -387,7 +360,6 @@ export function ModelsClient({ models, days }: Props) {
             const pColor  = providerColor(m.provider)
             const pct     = totalCost > 0 ? (m.cost30d / totalCost) * 100 : 0
             const totTokM = m.inputTok + m.outputTok
-            const tm      = TIER_META[m.tier]
             return (
               <div key={m.id}
                 className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_100px] gap-3 px-5 py-4 hover:bg-[var(--bg-secondary)]/40 transition-colors items-center">
@@ -402,9 +374,13 @@ export function ModelsClient({ models, days }: Props) {
                   </div>
                   <div className="min-w-0">
                     <p className="text-[12.5px] font-semibold text-[var(--fg)] truncate">{m.name}</p>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className={cn('text-[9.5px] font-semibold px-1.5 py-0.5 rounded-md', tm.bg, tm.color)}>{tm.label}</span>
-                      {m.avgLatencyMs > 0 && <span className="text-[10px] text-[var(--fg-tertiary)]">{m.avgLatencyMs}ms</span>}
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      <span className="text-[10px] text-[var(--fg-tertiary)]" title={PRICE_SOURCE_LABEL[m.priceSource]}>
+                        {fmtRate(m.priceIn)} in · {fmtRate(m.priceOut)} out /1M{m.priceSource === 'override' ? ' (custom)' : m.priceSource === 'unknown' ? ' (fallback)' : ''}
+                      </span>
+                      <span className="text-[10px] text-[var(--fg-tertiary)]">
+                        {m.avgLatencyMs != null ? `· ${Math.round(m.avgLatencyMs).toLocaleString()} ms avg` : '· latency not reported'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -412,6 +388,7 @@ export function ModelsClient({ models, days }: Props) {
                 {/* Cost */}
                 <div>
                   <p className="text-[13px] font-bold text-[var(--fg)] tabular-nums">{fmtCost(m.cost30d)}</p>
+                  {m.notional > 0 && <p className="text-[10px] text-[var(--fg-tertiary)] tabular-nums">{fmtCost(m.metered)} metered · {fmtCost(m.notional)} notional</p>}
                   <div className="mt-0.5">
                     <DeltaBadge curr={m.cost30d} prev={m.costPrev} />
                   </div>

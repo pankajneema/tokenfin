@@ -6,6 +6,7 @@ export function Spinner({ className }: { className?: string }) {
       className={cn('animate-spin', className ?? 'w-4 h-4')}
       viewBox="0 0 24 24"
       fill="none"
+      role="status"
       aria-label="Loading"
     >
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />

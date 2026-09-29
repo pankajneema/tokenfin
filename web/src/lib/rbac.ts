@@ -61,6 +61,10 @@ export const PERMISSIONS = {
   /* MCP */
   'mcp:manage':            OWNER_ADMIN,
 
+  /* Prompts / sessions — owners & admins see everyone's; members & viewers
+     see only their own (see promptScope()). */
+  'prompts:view_all':      OWNER_ADMIN,
+
   /* Analytics — everyone can read */
   'analytics:view':        ALL_ROLES,
   'dashboard:view':        ALL_ROLES,
@@ -78,6 +82,50 @@ export function assertCan(role: Role, permission: Permission): void {
   if (!can(role, permission)) {
     throw new ForbiddenError(`Role '${role}' cannot perform '${permission}'`)
   }
+}
+
+/**
+ * promptScope — which user's prompts/sessions a caller may see.
+ * Returns `null` when the role may see every user's prompts in the org
+ * (owner/admin), otherwise the caller's own user id — pages must then filter
+ * prompt/session queries with `.eq('user_id', scope)`.
+ *
+ * A non-admin with no user id (should not happen for sessions) gets a sentinel
+ * that matches no row, so the page fails closed rather than showing everything.
+ */
+export const NO_USER_SCOPE = '00000000-0000-0000-0000-000000000000'
+export function promptScope(role: Role | null | undefined, userId: string | null | undefined): string | null {
+  if (role && can(role, 'prompts:view_all')) return null
+  return userId || NO_USER_SCOPE
+}
+
+/**
+ * Scopes for an API key's `kind`. New keys are split:
+ *   ingest — write telemetry only (OTLP / SDK ingest)
+ *   read   — analytics reads (MCP, CLI status)
+ * Legacy keys carry ['read','write'] and keep working everywhere.
+ */
+export type KeyKind = 'ingest' | 'read' | 'legacy'
+export function scopesForKind(kind: KeyKind): string[] {
+  if (kind === 'ingest') return ['ingest']
+  if (kind === 'read')   return ['read']
+  return ['read', 'write']
+}
+export function kindForScopes(scopes: readonly string[]): KeyKind {
+  const s = new Set(scopes)
+  if (s.size === 1 && s.has('ingest')) return 'ingest'
+  if (s.size === 1 && s.has('read'))   return 'read'
+  return 'legacy'
+}
+/** True if the key may read analytics (legacy keys with no scopes recorded are allowed). */
+export function keyCanRead(scopes: readonly string[] | null | undefined): boolean {
+  const s = scopes ?? []
+  return s.length === 0 || s.includes('read') || s.includes('admin')
+}
+/** True if the key may push telemetry. */
+export function keyCanIngest(scopes: readonly string[] | null | undefined): boolean {
+  const s = scopes ?? []
+  return s.length === 0 || s.includes('write') || s.includes('ingest')
 }
 
 export class ForbiddenError extends Error {

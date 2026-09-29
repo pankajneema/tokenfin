@@ -1,13 +1,16 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { User, Database, Bell } from 'lucide-react'
+import { User, Database, Bell, Building2, ScrollText, Split } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const TABS = [
   { href: '/dashboard/settings/profile',        icon: User,       label: 'Profile',       desc: 'Account & personal info'     },
+  { href: '/dashboard/settings/workspace',      icon: Building2,  label: 'Workspace',     desc: 'Name, time zone & sign-in'   },
   { href: '/dashboard/settings/notifications',  icon: Bell,       label: 'Notifications', desc: 'Alerts & communication prefs'},
+  { href: '/dashboard/settings/allocation',     icon: Split,      label: 'Allocation',    desc: 'Team & cost-center rules'    },
   { href: '/dashboard/settings/data',           icon: Database,   label: 'Data',          desc: 'Retention & data deletion'   },
+  { href: '/dashboard/settings/audit',          icon: ScrollText, label: 'Audit log',     desc: 'Who changed what, and when'  },
 ]
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
@@ -18,7 +21,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
 
       {/* Page header */}
       <div>
-        <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Settings</h1>
+        <h2 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Settings</h2>
         <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">Manage your account, notifications and data</p>
       </div>
 

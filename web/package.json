@@ -8,7 +8,9 @@
     "start": "next start -p 3001",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "gen:types": "supabase gen types typescript --db-url \"${SUPABASE_DB_URL:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}\" --schema public > src/types/supabase.ts.tmp && (echo '// Generated from the local Supabase DB by `npm run gen:types` (all db/migrations applied). Do not edit by hand.'; cat src/types/supabase.ts.tmp) > src/types/supabase.ts && rm src/types/supabase.ts.tmp"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.0",
@@ -29,6 +31,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",

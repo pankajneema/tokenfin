@@ -1,31 +1,28 @@
 /**
- * @tokenfin/sdk
+ * @tokenfin/sdk — official TypeScript SDK for TokenFin LLM cost attribution.
  *
- * Official TypeScript SDK for the TokenFin LLM Cost Attribution API.
- *
- * Quick start:
  * ```ts
- * import { TokenFinClient } from '@tokenfin/sdk'
+ * import Anthropic from '@anthropic-ai/sdk'
+ * import { TokenFinClient, wrapAnthropic } from '@tokenfin/sdk'
  *
- * const tf = new TokenFinClient({ apiKey: 'tfk_prod_...' })
+ * const tf = new TokenFinClient({ apiKey: process.env.TOKENFIN_API_KEY! })
+ * const anthropic = wrapAnthropic(new Anthropic(), tf)   // usage is now tracked
  *
- * // After any LLM call — fire-and-forget, never throws
+ * // or manually — fire-and-forget, never throws
  * tf.track({ model: 'gpt-4o', inputTokens: 800, outputTokens: 120 })
  *
- * // Drain before process exit
- * await tf.flush()
+ * await tf.shutdown()   // drain before exit
  * ```
  */
 
-export { TokenFinClient } from './client'
+export { TokenFinClient, SDK_VERSION } from './client'
+export { wrapAnthropic, wrapOpenAI } from './wrappers'
+export type { WrapOptions } from './wrappers'
 export type {
   TokenFinConfig,
   TrackEvent,
   FlushResult,
+  ClientStats,
   IngestPayload,
 } from './types'
-
-/**
- * Convenience factory — same as `new TokenFinClient(cfg)`.
- */
 export { createTokenFin } from './factory'

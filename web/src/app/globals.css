@@ -10,8 +10,10 @@
   --bg-hover:      #F4F3F0;
   --bg-active:     #FDECEA;
   --fg:            #1A1A2E;
-  --fg-secondary:  #6B6B8A;
-  --fg-tertiary:   #9898B0;
+  /* Text tokens meet WCAG AA (≥4.5:1) on --bg, --bg-secondary, --bg-tertiary
+     and --bg-hover: secondary 6.3–7.2:1, tertiary 4.7–5.4:1. */
+  --fg-secondary:  #55556F;
+  --fg-tertiary:   #686883;
   --fg-inverse:    #FFFFFF;
   --border:        #E8E6E0;
   --border-strong: #C8C6C0;
@@ -34,6 +36,7 @@
   --chart-3:       #8B5CF6;
   --chart-4:       #0C447C;
   --chart-5:       #F5C842;
+  --focus-ring:    #C2410C;
 }
 
 .dark {
@@ -43,8 +46,9 @@
   --bg-hover:      #1A1A30;
   --bg-active:     #2A1818;
   --fg:            #F0EFF8;
-  --fg-secondary:  #9898B0;
-  --fg-tertiary:   #6B6B88;
+  /* Dark: secondary 8.0–9.5:1, tertiary 5.0–5.9:1 on every dark surface. */
+  --fg-secondary:  #B4B4C8;
+  --fg-tertiary:   #8C8CA8;
   --fg-inverse:    #0D0D1A;
   --border:        #2A2A45;
   --border-strong: #3A3A58;
@@ -60,6 +64,7 @@
   --red-bg:        #2A1010;
   --blue:          #60A5FA;
   --blue-bg:       #0A1A2A;
+  --focus-ring:    #FB923C;
 }
 
 /* ── Base ─────────────────────────────────────────────────── */
@@ -71,6 +76,32 @@ body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Focus ────────────────────────────────────────────────────
+   Keyboard focus is always visible, even where a component sets
+   `focus:outline-none` (that only suppresses the mouse-click outline).
+   Text fields keep their own coral ring and get this outline too. */
+:where(a, button, [role="button"], [role="option"], [role="tab"], [role="switch"], [role="menuitem"], summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: 2px;
+}
+:where(input, select, textarea):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* ── Skip link ──────────────────────────────────────────────── */
+.skip-link {
+  position: absolute; left: 12px; top: -48px; z-index: 100;
+  padding: 8px 14px; border-radius: 10px;
+  background: var(--fg); color: var(--bg); font-size: 13px; font-weight: 600;
+  transition: top 120ms ease;
+}
+.skip-link:focus { top: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
 
 ::-webkit-scrollbar        { width: 6px; height: 6px; }

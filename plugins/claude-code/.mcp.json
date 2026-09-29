@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tokenfin": {
+      "type": "http",
+      "url": "${TOKENFIN_URL:-https://tokenfin.curiousdevs.com}/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${TOKENFIN_READ_KEY}"
+      }
+    }
+  }
+}

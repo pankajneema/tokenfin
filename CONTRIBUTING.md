@@ -28,7 +28,7 @@ These rules come from real bugs. Please follow them.
 2. **Admin client stays on the server.** `createAdminClient()` (service role, bypasses RLS) must never be imported in a `'use client'` file. Any route that uses it must do its own org-membership or role check (`lib/api/auth.ts`, `lib/rbac.ts`).
 3. **No mock data.** If there's no data, render an informative empty state. Never fall back to demo arrays or random numbers.
 4. **Metered vs. notional.** Before computing "spend", decide whether it must be a real bill (read `usage_agg`) or must see all activity (read `usage_events`). See [`docs/data-flow.md`](./docs/data-flow.md#the-metered-vs-notional-split).
-5. **One price table.** Model prices live only in `web/src/lib/mcp/pricing.ts` (and the Go mirror in `backend/internal/pricing`). Don't inline prices anywhere else.
+5. **One price table.** Model prices live only in `web/src/lib/mcp/pricing.ts` (per-org overrides via `web/src/lib/pricing-overrides.ts`). Don't inline prices anywhere else.
 6. **OTLP mapping in one place.** New metric or attribute names go in `web/src/lib/otlp/mapping.ts`. Add them only after you've confirmed them against a real agent session, and add a test.
 7. **Migrations are additive and idempotent.** Add a new numbered file in `db/migrations/` (for example `007_…sql`) using `IF NOT EXISTS` / `CREATE OR REPLACE`. Don't edit an already-released migration's behavior. Enable RLS on every new table. Mirror incremental migrations into `supabase/migrations/` with a timestamped name.
 8. **TypeScript strict.** No `any` escapes without a reason, and `npm run typecheck` must pass.
@@ -40,12 +40,12 @@ These rules come from real bugs. Please follow them.
 make typecheck            # web: tsc --noEmit
 make lint                 # web: next lint
 cd web && npm test        # web: vitest
-cd backend && go vet ./... && go test ./...   # if you touched Go
+cd cli && npm test        # if you touched the CLI (never run it against your real HOME: HOME=$(mktemp -d) node cli/bin/tokenfin.js …)
 make sdk-typecheck        # if you touched the TS SDK
 make sdk-py-test          # if you touched the Python SDK
 ```
 
-`make check` runs Go vet, web typecheck, SDK typecheck and the Python tests together.
+`make check` runs web typecheck, SDK typecheck and the Python tests together. The CLI is published only through the manual **Publish CLI** workflow — bump `cli/package.json` first.
 
 ## Pull requests
 

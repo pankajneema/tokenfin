@@ -1,8 +1,14 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/server'
+import { requireOrgContext } from '@/lib/org-context'
+import { dashBreakdown } from '@/lib/rollups'
+import { resolveWindow, zonedDayStartIso } from '@/lib/rollup-scope'
+import { selectAll } from '@/lib/supabase/paginate'
 import { Scale, Sparkles } from 'lucide-react'
 import { RoutesPanel, type RouteRow } from './_routes'
 
 export const metadata = { title: 'Quality × Cost — TokenFin' }
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 const usd = (n: number) => n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`
 const fmtTok = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${Math.round(n)}`
@@ -10,17 +16,16 @@ const fmtTok = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ?
 const QUALITY_TARGET = 0.8
 
 export default async function QualityCostPage() {
-  const supabase = createClient()
+  const ctx   = await requireOrgContext()
   const admin = createAdminClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  const { data: membership } = await admin
-    .from('members').select('org_id').eq('user_id', user!.id).order('joined_at', { ascending: true }).limit(1)
-  const orgId = membership?.[0]?.org_id ?? ''
-  const since = new Date(Date.now() - 30 * 864e5).toISOString()
+  const orgId = ctx.orgId
+  const win   = resolveWindow(undefined, ctx.timezone, { defaultDays: 30 })
+  const since = zonedDayStartIso(win.from, ctx.timezone)
 
-  const [{ data: scores }, { data: events }, { data: routes }] = await Promise.all([
-    admin.from('eval_scores').select('model, score').eq('org_id', orgId).gte('created_at', since).not('model', 'is', null).not('score', 'is', null),
-    admin.from('usage_events').select('model, total_tokens, output_tokens, cost_usd').eq('org_id', orgId).gte('created_at', since).limit(50_000),
+  const [{ data: scores }, usage, { data: routes }] = await Promise.all([
+    selectAll<{ id: string; created_at: string; model: string; score: number }>(() => admin.from('eval_scores')
+      .select('id, created_at, model, score').eq('org_id', orgId).gte('created_at', since).not('model', 'is', null).not('score', 'is', null)),
+    dashBreakdown(admin, orgId, win.from, win.to, 'model', undefined, 200),
     admin.from('model_routes').select('id, from_model, to_model').eq('org_id', orgId).eq('is_active', true),
   ])
 
@@ -28,23 +33,29 @@ export default async function QualityCostPage() {
   const q = new Map<string, { sum: number; n: number }>()
   for (const s of scores ?? []) { const m = q.get(s.model) ?? { sum: 0, n: 0 }; m.sum += Number(s.score); m.n++; q.set(s.model, m) }
 
-  // Cost/usage per model + output-token variability (stddev).
-  const u = new Map<string, { cost: number; calls: number; tokens: number; out: number[] }>()
-  for (const e of events ?? []) {
-    const m = u.get(e.model) ?? { cost: 0, calls: 0, tokens: 0, out: [] }
-    m.cost += Number(e.cost_usd ?? 0); m.calls++; m.tokens += Number(e.total_tokens ?? 0); m.out.push(Number(e.output_tokens ?? 0))
-    u.set(e.model, m)
+  // Cost/usage per model from the rollups.
+  const u = new Map(usage.rows.map(r => [r.key, r]))
+
+  // Output-token variability needs per-call values: read them (keyset) only for
+  // the models that have eval scores — the ones this page can score.
+  const scored = Array.from(q.keys())
+  const outByModel = new Map<string, number[]>()
+  if (scored.length) {
+    const { data: outs } = await selectAll<{ id: string; created_at: string; model: string; output_tokens: number | null }>(() => admin
+      .from('usage_events').select('id, created_at, model, output_tokens')
+      .eq('org_id', orgId).gte('created_at', since).in('model', scored))
+    for (const e of outs) { const a = outByModel.get(e.model) ?? []; a.push(Number(e.output_tokens ?? 0)); outByModel.set(e.model, a) }
   }
   const std = (a: number[]) => { if (a.length < 2) return 0; const mean = a.reduce((s, v) => s + v, 0) / a.length; return Math.sqrt(a.reduce((s, v) => s + (v - mean) ** 2, 0) / a.length) }
 
-  const models = Array.from(new Set([...Array.from(q.keys()), ...Array.from(u.keys())])).map(model => {
-    const qq = q.get(model), uu = u.get(model)
+  const models = Array.from(new Set([...scored, ...Array.from(u.keys())])).map(model => {
+    const qq = q.get(model), uu = u.get(model), out = outByModel.get(model)
     const quality = qq && qq.n ? qq.sum / qq.n : null
-    const cost = uu?.cost ?? 0, calls = uu?.calls ?? 0
-    const avgOut = uu && uu.out.length ? uu.out.reduce((s, v) => s + v, 0) / uu.out.length : 0
-    const variability = avgOut > 0 ? std(uu!.out) / avgOut : 0        // coefficient of variation
+    const cost = uu?.cost_usd ?? 0, calls = uu?.requests ?? 0
+    const avgOut = out && out.length ? out.reduce((s, v) => s + v, 0) / out.length : 0
+    const variability = out ? (avgOut > 0 ? std(out) / avgOut : 0) : null   // coefficient of variation
     const costPerCorrect = quality && quality > 0 && calls > 0 ? cost / (calls * quality) : null
-    return { model, quality, cost, calls, tokens: uu?.tokens ?? 0, variability, costPerCorrect }
+    return { model, quality, cost, calls, tokens: uu?.total_tokens ?? 0, variability, costPerCorrect }
   }).sort((a, b) => (b.quality ?? 0) - (a.quality ?? 0))
 
   // Recommendation: cheapest model (by avg cost/call) that meets the quality target.
@@ -53,8 +64,7 @@ export default async function QualityCostPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <div className="mb-1 flex items-center gap-2 text-[19px] font-bold text-[var(--fg)]"><Scale size={18} className="text-teal" /> Quality × Cost</div>
-      <p className="mb-5 text-[13px] text-[var(--fg-secondary)]">Cost-per-correct-answer and quality-vs-cost per model (last 30 days). Quality = mean eval score.</p>
+      <p className="mb-5 text-[13px] text-[var(--fg-secondary)]"><Scale size={13} className="inline -mt-0.5 mr-1 text-teal" />Cost-per-correct-answer and quality-vs-cost per model · {win.label}. Quality = mean eval score.</p>
 
       {rec && (
         <div className="mb-5 flex items-start gap-2 rounded-2xl border border-[var(--border)] bg-[var(--green-bg)] p-4 text-[13px] text-[var(--fg)]">
@@ -89,7 +99,7 @@ export default async function QualityCostPage() {
                   <td className="px-3 py-2 text-right text-[var(--fg-secondary)]">{m.calls}</td>
                   <td className="px-3 py-2 text-right text-[var(--fg)]">{usd(m.cost)}</td>
                   <td className="px-3 py-2 text-right text-[var(--fg-secondary)]">{m.costPerCorrect == null ? '—' : usd(m.costPerCorrect)}</td>
-                  <td className="px-3 py-2 text-right text-[var(--fg-tertiary)]">{(m.variability * 100).toFixed(0)}%</td>
+                  <td className="px-3 py-2 text-right text-[var(--fg-tertiary)]">{m.variability == null ? '—' : `${(m.variability * 100).toFixed(0)}%`}</td>
                 </tr>
               ))}
             </tbody>

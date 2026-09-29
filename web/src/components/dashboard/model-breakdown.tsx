@@ -1,10 +1,10 @@
 'use client'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
-import { formatCost } from '@/lib/utils'
+import { formatCost, formatTokens } from '@/lib/utils'
 
 /* ── Types ──────────────────────────────────────────────────── */
 interface ModelStat { name: string; cost: number; tokens: number; reqs: number; pct: number }
-interface Props { data: ModelStat[]; totalCost: number }
+interface Props { data: ModelStat[]; totalCost: number; /** models beyond the top rows */ otherCount?: number }
 
 const COLORS = ['#E8533A', '#00C48C', '#8B5CF6', '#60A5FA', '#F5C842']
 
@@ -35,16 +35,8 @@ function shortName(m: string) {
 function provider(m: string) {
   return MODEL_PROVIDER[m] ?? (m.startsWith('claude') ? 'Anthropic' : m.startsWith('gpt') ? 'OpenAI' : m.startsWith('gemini') ? 'Google' : 'Other')
 }
-function fmtTokens(n: number): string {
-  if (n === 0)         return '—'
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
-  if (n >= 1_000_000)  return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000)      return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
-}
-
 /* ═══════════════════════════════════════════════════════════════ */
-export function ModelBreakdown({ data, totalCost }: Props) {
+export function ModelBreakdown({ data, totalCost, otherCount = 0 }: Props) {
 
   if (!data.length) {
     return (
@@ -55,7 +47,7 @@ export function ModelBreakdown({ data, totalCost }: Props) {
         </div>
         <div className="flex-1 flex items-center justify-center">
           <p className="text-[12.5px] text-[var(--fg-tertiary)] text-center px-4">
-            No model usage yet · send events via the Ingest API
+            No model usage in the last 30 days · connect a tool with <code className="font-mono">npx tokenfin setup</code>
           </p>
         </div>
       </div>
@@ -132,11 +124,16 @@ export function ModelBreakdown({ data, totalCost }: Props) {
             <div className="text-right flex-shrink-0">
               <p className="text-[12px] font-semibold text-[var(--fg)] tabular-nums">{formatCost(row.cost)}</p>
               <p className="text-[10.5px] text-[var(--fg-tertiary)] tabular-nums">
-                {fmtTokens(row.tokens)} · {row.pct}%
+                {row.tokens > 0 ? formatTokens(row.tokens) : '—'} tok · {row.pct}%
               </p>
             </div>
           </div>
         ))}
+        {otherCount > 0 && (
+          <p className="px-1.5 pt-1 text-[10.5px] text-[var(--fg-tertiary)]">
+            + {otherCount} more model{otherCount === 1 ? '' : 's'} · total above includes them
+          </p>
+        )}
       </div>
     </div>
   )

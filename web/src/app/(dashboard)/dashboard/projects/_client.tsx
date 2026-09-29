@@ -4,7 +4,7 @@ import Link           from 'next/link'
 import {
   Plus, Search, LayoutGrid, List, MoreHorizontal,
   Key, BarChart3, Trash2, Clock, Zap, Activity,
-  TrendingUp, TrendingDown, ChevronRight, Layers, X, Pencil,
+  TrendingUp, TrendingDown, ChevronRight, Layers, X, Pencil, MessageSquare,
 } from 'lucide-react'
 import { cn, formatCost, formatTokens, formatNumber } from '@/lib/utils'
 import { TimeAgo } from '@/components/ui/time-ago'
@@ -138,7 +138,7 @@ function ProjectCard({
           <p className="text-[24px] font-bold text-[var(--fg)] tabular-nums leading-none tracking-tight">
             {formatCost(project.cost)}
           </p>
-          <p className="text-[10.5px] text-[var(--fg-tertiary)] mt-0.5">this month</p>
+          <p className="text-[10.5px] text-[var(--fg-tertiary)] mt-0.5">last 30 days</p>
         </div>
 
         {/* Tokens + reqs + sparkline */}
@@ -148,6 +148,11 @@ function ProjectCard({
               <Zap size={11} style={{ color: pal.accent }} />
               <span className="tabular-nums font-medium">{formatTokens(project.tokens)}</span>
               <span className="text-[var(--fg-tertiary)]">tokens</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[11.5px] text-[var(--fg-secondary)]">
+              <MessageSquare size={11} style={{ color: pal.accent }} />
+              <span className="tabular-nums font-medium">{formatNumber(project.prompts)}</span>
+              <span className="text-[var(--fg-tertiary)]">prompts</span>
             </div>
             <div className="flex items-center gap-1.5 text-[11.5px] text-[var(--fg-secondary)]">
               <Activity size={11} style={{ color: pal.accent }} />
@@ -206,6 +211,7 @@ function ProjectRow({
       </td>
       <td className="px-4 py-3.5"><span className="text-[13px] font-semibold text-[var(--fg)] tabular-nums">{formatCost(project.cost)}</span></td>
       <td className="px-4 py-3.5 text-[12.5px] text-[var(--fg-secondary)] tabular-nums">{formatTokens(project.tokens)}</td>
+      <td className="px-4 py-3.5 text-[12.5px] text-[var(--fg-secondary)] tabular-nums">{formatNumber(project.prompts)}</td>
       <td className="px-4 py-3.5 text-[12.5px] text-[var(--fg-secondary)] tabular-nums">{formatNumber(project.reqs)}</td>
       <td className="px-4 py-3.5 text-[12.5px] text-[var(--fg-secondary)]">{project.keyCount}</td>
       <td className="px-4 py-3.5 text-[12px] text-[var(--fg-tertiary)] whitespace-nowrap"><TimeAgo value={project.lastEventAt} format={reltime} /></td>
@@ -295,8 +301,11 @@ function ProjectModal({
       onSave({
         ...saved,
         cost:        initial?.cost        ?? 0,
+        meteredCost:  initial?.meteredCost  ?? 0,
+        notionalCost: initial?.notionalCost ?? 0,
         tokens:      initial?.tokens      ?? 0,
         reqs:        initial?.reqs        ?? 0,
+        prompts:     initial?.prompts     ?? 0,
         keyCount:    initial?.keyCount    ?? 0,
         lastEventAt: initial?.lastEventAt ?? null,
       })
@@ -448,9 +457,11 @@ function EmptyState({ onNew }: { onNew: () => void }) {
 interface Props {
   projects: EnrichedProject[]
   orgId:    string
+  /** e.g. "Last 30 days" */
+  windowLabel: string
 }
 
-export function ProjectsClient({ projects: initialProjects, orgId }: Props) {
+export function ProjectsClient({ projects: initialProjects, orgId, windowLabel }: Props) {
   const [projects,   setProjects]   = useState<EnrichedProject[]>(initialProjects)
   const [view,       setView]       = useState<'grid' | 'list'>('grid')
   const [query,      setQuery]      = useState('')
@@ -471,6 +482,7 @@ export function ProjectsClient({ projects: initialProjects, orgId }: Props) {
 
   const totalCost  = projects.reduce((s, p) => s + p.cost, 0)
   const totalReqs  = projects.reduce((s, p) => s + p.reqs, 0)
+  const totalPrompts = projects.reduce((s, p) => s + p.prompts, 0)
   const topProject = [...projects].sort((a, b) => b.cost - a.cost)[0]
 
   /* ── Handlers ── */
@@ -504,12 +516,9 @@ export function ProjectsClient({ projects: initialProjects, orgId }: Props) {
 
       {/* Page header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-[22px] font-bold text-[var(--fg)] tracking-tight">Projects</h1>
-          <p className="text-[13px] text-[var(--fg-secondary)] mt-0.5">
-            {projects.length} project{projects.length !== 1 ? 's' : ''} · Last 30 days
-          </p>
-        </div>
+        <p className="text-[13px] text-[var(--fg-secondary)]">
+          {projects.length} project{projects.length !== 1 ? 's' : ''} · {windowLabel}
+        </p>
         <button onClick={() => setShowCreate(true)} className="btn-primary text-[13px]">
           <Plus size={14} /> New project
         </button>
@@ -517,9 +526,10 @@ export function ProjectsClient({ projects: initialProjects, orgId }: Props) {
 
       {/* Summary strip — only when there are projects */}
       {projects.length > 0 && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: 'Total cost',    value: formatCost(totalCost),        icon: '💰' },
+            { label: `Cost · ${formatCost(projects.reduce((s, p) => s + p.meteredCost, 0))} metered · ${formatCost(projects.reduce((s, p) => s + p.notionalCost, 0))} notional`, value: formatCost(totalCost), icon: '💰' },
+            { label: 'Total prompts', value: formatNumber(totalPrompts),   icon: '💬' },
             { label: 'Total requests', value: formatNumber(totalReqs),     icon: '⚡' },
             { label: 'Biggest spend', value: topProject?.name ?? '—',      icon: '🏆' },
           ].map(s => (
@@ -577,7 +587,7 @@ export function ProjectsClient({ projects: initialProjects, orgId }: Props) {
           <table className="w-full">
             <thead>
               <tr className="border-b border-[var(--border)]">
-                {['Project','Status','Cost (30d)','Tokens','Requests','API Keys','Last Active',''].map(h => (
+                {['Project','Status','Cost','Tokens','Prompts','Requests','API Keys','Last Active',''].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-[10px] font-semibold text-[var(--fg-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
                 ))}
               </tr>

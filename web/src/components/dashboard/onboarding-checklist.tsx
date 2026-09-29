@@ -8,11 +8,12 @@ const STORAGE_KEY = 'tf_onboarding_dismissed_v1'
 
 interface Props {
   hasProject: boolean
-  hasApiKey:  boolean
+  /** Unused since 0.4: `npx tokenfin@latest setup` mints keys itself. Kept for callers. */
+  hasApiKey?: boolean
   hasEvent:   boolean
 }
 
-export function OnboardingChecklist({ hasProject, hasApiKey, hasEvent }: Props) {
+export function OnboardingChecklist({ hasProject, hasEvent }: Props) {
   const [dismissed, setDismissed] = useState(false)
   const [expanded,  setExpanded]  = useState(true)
 
@@ -47,20 +48,12 @@ export function OnboardingChecklist({ hasProject, hasApiKey, hasEvent }: Props) 
       current: !hasProject,
     },
     {
-      id:      'key',
-      label:   'Create an API key',
-      desc:    'Use it with the SDK, or run `tokenfin setup` to connect Claude Code / Codex / Gemini.',
-      href:    '/dashboard/keys',
-      done:    hasApiKey,
-      current: hasProject && !hasApiKey,
-    },
-    {
       id:      'event',
-      label:   'Send your first event',
-      desc:    'Follow the setup guide — this checklist disappears after.',
+      label:   'Connect your coding agent',
+      desc:    'Run `npx tokenfin@latest setup` — it signs you in, creates this device’s keys and waits for your first event.',
       href:    '/dashboard/setup',
       done:    hasEvent,
-      current: hasProject && hasApiKey && !hasEvent,
+      current: hasProject && !hasEvent,
     },
   ]
 

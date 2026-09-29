@@ -1,8 +1,0 @@
-[build]
-builder = "dockerfile"
-dockerfilePath = "../infra/docker/Dockerfile.ingest"
-
-[deploy]
-startCommand = "/ingest"
-restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 3
