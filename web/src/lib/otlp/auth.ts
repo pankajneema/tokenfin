@@ -23,6 +23,8 @@ export interface KeyCtx {
   userId: string | null
   /** Workspace IANA time zone — days (usage_agg buckets, productivity) use it. */
   timezone?: string
+  /** organizations.trace_capture (migration 025): 'errors' (default) keeps full span detail only for problem traces. */
+  traceCapture?: 'errors' | 'all'
   /** organizations.capture_prompts (migration 011); undefined = allowed. */
   capturePrompts?: boolean
   /** The org's first project — used when the key isn't bound to one. */
@@ -40,6 +42,7 @@ interface KeyRow {
   last_used_at: string | null
   timezone: string
   capture_prompts: boolean
+  trace_capture: 'errors' | 'all'
   default_project_id: string | null
 }
 
@@ -64,15 +67,25 @@ async function loadKeyRow(keyHash: string): Promise<KeyRow | null> {
   const base = 'id, org_id, project_id, user_id, is_active, expires_at, scopes, last_used_at'
   // One round trip: key + org settings + the org's first project.
   let { data, error } = await admin.from('api_keys')
-    .select(`${base}, organizations(timezone, capture_prompts, projects(id, created_at))`)
+    .select(`${base}, organizations!api_keys_org_id_fkey(timezone, capture_prompts, trace_capture, projects(id, created_at))`)
     .eq('key_hash', keyHash)
     .order('created_at', { referencedTable: 'organizations.projects', ascending: true })
     .limit(1, { referencedTable: 'organizations.projects' })
     .maybeSingle()
+  if (error && /trace_capture/.test(error.message)) {
+    // Database without migration 025 — every trace is kept in full (old behaviour).
+    ;({ data, error } = await admin.from('api_keys')
+      .select(`${base}, organizations!api_keys_org_id_fkey(timezone, capture_prompts, projects(id, created_at))`)
+      .eq('key_hash', keyHash)
+      .order('created_at', { referencedTable: 'organizations.projects', ascending: true })
+      .limit(1, { referencedTable: 'organizations.projects' })
+      .maybeSingle())
+    if (data) ((Array.isArray((data as any).organizations) ? (data as any).organizations[0] : (data as any).organizations) ?? {}).trace_capture = 'all'
+  }
   if (error && /capture_prompts|timezone/.test(error.message)) {
     // Database without migration 010/011 — settings fall back to defaults.
     ;({ data, error } = await admin.from('api_keys')
-      .select(`${base}, organizations(projects(id, created_at))`)
+      .select(`${base}, organizations!api_keys_org_id_fkey(projects(id, created_at))`)
       .eq('key_hash', keyHash)
       .order('created_at', { referencedTable: 'organizations.projects', ascending: true })
       .limit(1, { referencedTable: 'organizations.projects' })
@@ -89,6 +102,7 @@ async function loadKeyRow(keyHash: string): Promise<KeyRow | null> {
     last_used_at: d.last_used_at ?? null,
     timezone: tz && isValidTimeZone(tz) ? tz : DEFAULT_TIMEZONE,
     capture_prompts: org?.capture_prompts !== false,
+    trace_capture: org?.trace_capture === 'all' ? 'all' : 'errors',
     default_project_id: org?.projects?.[0]?.id ?? null,
   }
 }
@@ -111,6 +125,7 @@ export async function lookupIngestKey(raw: string): Promise<KeyLookup> {
     ctx: {
       orgId: row.org_id, projectId: row.project_id, keyId: row.id, userId: row.user_id,
       timezone: row.timezone, capturePrompts: row.capture_prompts, defaultProjectId: row.default_project_id,
+      traceCapture: row.trace_capture,
     },
   }
 }

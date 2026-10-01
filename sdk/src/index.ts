@@ -18,6 +18,8 @@
 export { TokenFinClient, SDK_VERSION } from './client'
 export { wrapAnthropic, wrapOpenAI } from './wrappers'
 export type { WrapOptions } from './wrappers'
+export { TokenFinPolicyError, PolicyManager, findRoute, isModelBlocked } from './policy'
+export type { Policy, PolicyRoute } from './policy'
 export type {
   TokenFinConfig,
   TrackEvent,

@@ -205,3 +205,35 @@ test('checkForUpdate never hangs on a dead registry (1.5 s timeout)', async () =
     srv.close()
   }
 })
+
+// ── OpenCode plugin ───────────────────────────────────────────────────────────
+test('bundled OpenCode plugin is byte-identical to plugins/opencode/tokenfin.js', () => {
+  const repoCopy = path.join(__dirname, '..', '..', 'plugins', 'opencode', 'tokenfin.js')
+  if (!fs.existsSync(repoCopy)) return   // published package: no monorepo around it
+  assert.ok(fs.readFileSync(O.opencodePluginSource()).equals(fs.readFileSync(repoCopy)),
+    'cli/assets/opencode-tokenfin.js drifted — cp plugins/opencode/tokenfin.js cli/assets/opencode-tokenfin.js')
+})
+
+test('stripOpencodePlugin drops every opencode-otel-plugin form and keeps the rest', () => {
+  const list = ['opencode-claude-auth@latest', 'opencode-otel-plugin', 'opencode-otel-plugin@0.11.1', ['opencode-otel-plugin', { x: 1 }], ['keep-me', { y: 2 }], 'opencode-otel-plugin-extra']
+  assert.deepEqual(O.stripOpencodePlugin(list), ['opencode-claude-auth@latest', ['keep-me', { y: 2 }], 'opencode-otel-plugin-extra'])
+  assert.equal(O.hasLegacyOpencodePlugin(list), true)
+  assert.equal(O.hasLegacyOpencodePlugin(['a']), false)
+  assert.equal(O.stripOpencodePlugin(undefined), undefined)
+})
+
+test('install / status / uninstall the OpenCode plugin (never clobbers a foreign file)', () => {
+  const r = O.installOpencodePlugin()
+  assert.equal(r.changed, true)
+  assert.match(r.version, /^\d+\.\d+\.\d+$/)
+  assert.equal(O.opencodePluginPath(), path.join(TMP, '.config', 'opencode', 'plugin', 'tokenfin.js'))
+  assert.deepEqual(O.opencodePluginStatus(), { installed: true, ours: true, version: r.version, current: true })
+  assert.equal(O.installOpencodePlugin().changed, false)
+  assert.equal(O.uninstallOpencodePlugin(), true)
+  assert.equal(O.opencodePluginStatus().installed, false)
+  fs.mkdirSync(path.dirname(O.opencodePluginPath()), { recursive: true })
+  fs.writeFileSync(O.opencodePluginPath(), '// someone else')
+  assert.throws(() => O.installOpencodePlugin(), /not the TokenFin plugin/)
+  assert.equal(O.uninstallOpencodePlugin(), false)
+  fs.rmSync(path.join(TMP, '.config'), { recursive: true, force: true })
+})

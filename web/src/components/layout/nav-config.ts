@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Gauge, Compass, BarChart3, Cpu, Layers, Receipt, MessageSquareText, History,
   Waypoints, PiggyBank, Lightbulb, FlaskConical, Scale, Code2, Terminal, Shield, Bell, Boxes, Key,
   Users, UserPlus, Plug, Puzzle, GitBranch, Settings, User, BellRing, Database, Building2, ScrollText,
-  Split, Plus, Rocket, FolderPlus, Moon,
+  Split, Plus, Rocket, FolderPlus, Moon, Bot,
 } from 'lucide-react'
 
 export interface NavLink {
@@ -77,6 +77,7 @@ export const NAV_SECTIONS: NavSection[] = [
     id: 'connect', label: 'Connect',
     items: [
       { label: 'Connections',  href: '/dashboard/setup',        icon: Plug,      desc: 'Connect your coding agents', keywords: 'setup otel claude code codex gemini' },
+      { label: 'Agents',       href: '/dashboard/agents',       icon: Bot,       desc: 'Agent configs per person & machine', keywords: 'devices machines settings config claude code opencode codex gemini' },
       { label: 'Platforms',    href: '/dashboard/mcp',          icon: Puzzle,    desc: 'Connected platforms & MCP',  keywords: 'mcp' },
       { label: 'Integrations', href: '/dashboard/integrations', icon: GitBranch, desc: 'Alert channels & billing',   keywords: 'slack webhook email anthropic openai' },
     ],

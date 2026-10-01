@@ -1,5 +1,6 @@
 import type { TokenFinConfig, TrackEvent, FlushResult, ClientStats, IngestPayload } from './types'
 import { uuidV4, sleep, backoffMs, parseRetryAfter, isRetryableStatus } from './utils'
+import { PolicyManager, type Policy, type PolicyFetchResult } from './policy'
 
 export const SDK_VERSION = '0.2.0'
 
@@ -56,6 +57,8 @@ export class TokenFinClient {
   private exitHandler: (() => void) | null = null
 
   private totals = { sent: 0, dropped: 0 }
+  private _policy: PolicyManager | null = null
+  private readonly policyTtlMs: number
   private cbFailures  = 0
   private cbOpenUntil = 0
 
@@ -69,6 +72,7 @@ export class TokenFinClient {
     this.maxRetryAfterMs = cfg.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER
     this.debug           = cfg.debug ?? false
     this.fetchImpl       = cfg.fetch ?? (typeof fetch === 'function' ? fetch.bind(globalThis) : undefined)
+    this.policyTtlMs     = cfg.policyTtlMs ?? 60_000
 
     const interval = cfg.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL
     if (interval > 0) {
@@ -95,6 +99,16 @@ export class TokenFinClient {
     } catch (err) {
       this._log('track() failed', errMsg(err))
     }
+  }
+
+  /**
+   * The org's SDK policy (model routes / blocked models) from
+   * GET /api/v1/policy, refreshed in the background. Used by the wrappers;
+   * `await tf.policy().ready()` to wait for the first fetch yourself.
+   */
+  policy(): PolicyManager {
+    if (!this._policy) this._policy = new PolicyManager(etag => this._fetchPolicy(etag), this.policyTtlMs)
+    return this._policy
   }
 
   /** Send everything queued so far and wait for it. Never rejects. */
@@ -254,6 +268,44 @@ export class TokenFinClient {
       // Log only the message — never the raw error (may include headers / Bearer token).
       this._log(`request to ${path} failed: ${errMsg(err)}`)
       return { kind: 'network', error: errMsg(err) }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private async _fetchPolicy(etag: string | null): Promise<PolicyFetchResult> {
+    if (!this.fetchImpl) return { status: 'error' }
+    const controller = typeof AbortController === 'function' ? new AbortController() : null
+    const timer = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null
+    ;(timer as { unref?: () => void } | null)?.unref?.()
+    try {
+      const res = await this.fetchImpl(this.baseUrl + '/api/v1/policy', {
+        method: 'GET',
+        headers: {
+          'Authorization':  `Bearer ${this.apiKey}`,
+          'X-TokenFin-SDK': `ts/${SDK_VERSION}`,
+          ...(etag ? { 'If-None-Match': etag } : {}),
+        },
+        signal: controller?.signal,
+      })
+      if (res.status === 304) return { status: 'not_modified' }
+      if (res.status === 404 || res.status === 401 || res.status === 403) {
+        this._log(`policy unavailable (HTTP ${res.status}) — routing off`)
+        return { status: 'unavailable' }
+      }
+      if (!res.ok) return { status: 'error' }
+      const body = await res.json() as Partial<Policy>
+      if (!body || !Array.isArray(body.routes)) return { status: 'error' }
+      const policy: Policy = {
+        routes: body.routes.filter(r => r && typeof r.from === 'string' && typeof r.to === 'string'),
+        blocked_models: Array.isArray(body.blocked_models) ? body.blocked_models.filter(m => typeof m === 'string') : [],
+        version: String(body.version ?? ''),
+        ttl_seconds: typeof body.ttl_seconds === 'number' ? body.ttl_seconds : undefined,
+      }
+      return { status: 'ok', policy, etag: res.headers.get('etag') }
+    } catch (err) {
+      this._log(`policy fetch failed: ${errMsg(err)}`)
+      return { status: 'error' }
     } finally {
       if (timer) clearTimeout(timer)
     }

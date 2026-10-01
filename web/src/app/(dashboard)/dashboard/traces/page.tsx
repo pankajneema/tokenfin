@@ -37,6 +37,7 @@ export default async function TracesPage({ searchParams }: { searchParams: Promi
     let q = admin.from('traces')
       .select('trace_id, name, service_name, start_time, duration_ms, span_count, total_tokens, cost_usd, error_count, models, user_id')
       .eq('org_id', ctx.orgId).gte('start_time', since)
+      .eq('detail', true)   // cost-only skeleton traces (trace_capture = 'errors') aren't listed
     if (scope) q = q.or(`user_id.is.null,user_id.eq.${scope}`)
     if (filters.service) q = q.eq('service_name', filters.service)
     if (filters.model) q = q.contains('models', [filters.model])
@@ -46,12 +47,14 @@ export default async function TracesPage({ searchParams }: { searchParams: Promi
   }
   let list = base()
   if (cursor) list = list.or(cursorFilter(cursor))
-  const [page, anyTrace, opts] = await Promise.all([
+  const [page, anyTrace, opts, orgRow] = await Promise.all([
     list.order('start_time', { ascending: false }).order('trace_id', { ascending: false }).limit(PAGE + 1),
     (scope ? admin.from('traces').select('trace_id').eq('org_id', ctx.orgId).or(`user_id.is.null,user_id.eq.${scope}`)
       : admin.from('traces').select('trace_id').eq('org_id', ctx.orgId)).limit(1),
     admin.rpc('trace_filter_options', { p_org: ctx.orgId, p_since: since }),
+    admin.from('organizations').select('trace_capture').eq('id', ctx.orgId).maybeSingle(),
   ])
+  const captureAll = (orgRow.data as { trace_capture?: string } | null)?.trace_capture === 'all'
   if (page.error) console.error('[traces] list failed:', page.error.message)
 
   const raw = (page.data ?? []) as Array<Record<string, any>>
@@ -78,6 +81,7 @@ export default async function TracesPage({ searchParams }: { searchParams: Promi
       ranges={RANGES.map(r => ({ value: r, label: RANGE_LABEL[r] }))}
       timezone={ctx.timezone}
       scopedToSelf={!!scope}
+      captureAll={captureAll}
       appUrl={process.env.NEXT_PUBLIC_APP_URL || 'https://your-tokenfin-host'}
     />
   )

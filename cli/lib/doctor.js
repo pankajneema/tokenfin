@@ -8,6 +8,7 @@ const O = require('./otel')
 const { getConnStatus, verifyIngestKey } = require('./api')
 const { DEFAULT_APP_URL } = require('./login')
 const { hasCmd } = require('./proc')
+const H = require('./hooks')
 
 const log = (m) => process.stdout.write(m + '\n')
 const PASS = '✔', WARN = '⚠', FAIL = '✗', INFO = '·'
@@ -66,6 +67,16 @@ async function doctor(flags = {}) {
     }
   }
 
+  // 2b'. Session hooks (SessionStart / SessionEnd → ~/.tokenfin/hooks/session.js)
+  if (settings) {
+    if (H.hasSessionHooks(settings)) {
+      line(fs.existsSync(H.sessionScriptPath()) ? PASS : FAIL, fs.existsSync(H.sessionScriptPath())
+        ? 'session hooks installed (SessionStart + SessionEnd)'
+        : 'session hooks point at ' + H.sessionScriptPath() + ', which is missing — run `npx tokenfin@latest setup`')
+    } else if (cfg.session_hooks === false) line(INFO, 'session hooks off (--no-session-hooks)')
+    else if (settings.env && settings.env.OTEL_EXPORTER_OTLP_ENDPOINT) line(WARN, 'session hooks not installed (git branch / repo on Sessions) — run `npx tokenfin@latest setup`')
+  }
+
   // 2c. MCP registration key
   const mcp = O.readMcpKey()
   if (mcp.registered) {
@@ -107,6 +118,22 @@ async function doctor(flags = {}) {
     if (ok && key && !t.otlpEndpoint.endsWith('key=' + key)) line(FAIL, 'Gemini — settings.json sends a different key than this device holds — run `npx tokenfin@latest setup`')
   }
 
+  // 4b. OpenCode — only if the user has it
+  if (fs.existsSync(O.opencodeDir())) {
+    const st = O.opencodePluginStatus()
+    if (!st.installed) line(WARN, 'OpenCode — TokenFin plugin not installed; run `npx tokenfin@latest setup`')
+    else if (!st.ours) line(WARN, 'OpenCode — ' + O.opencodePluginPath() + ' is not the TokenFin plugin')
+    else line(st.current ? PASS : WARN, 'OpenCode — TokenFin plugin v' + (st.version || '?') + ' in ' + O.opencodePluginPath() +
+      (st.current ? '' : ' (outdated — re-run `npx tokenfin@latest setup`)'))
+    let oc = null
+    try { oc = O.readOpencodeConfig() } catch (e) { line(WARN, 'OpenCode — ' + e.message) }
+    if (oc && O.hasLegacyOpencodePlugin(oc.plugin)) {
+      line(st.installed && st.ours ? FAIL : WARN, 'OpenCode — opencode-otel-plugin is still in ' + O.opencodeConfigPath() +
+        (st.installed && st.ours ? ' — it double-counts with the TokenFin plugin; run `npx tokenfin@latest setup`' : ' — it drops cache tokens and prompts; run `npx tokenfin@latest setup`'))
+    }
+    if (st.installed && st.ours && !key && !process.env.TOKENFIN_API_KEY) line(FAIL, 'OpenCode — the plugin has no key (~/.tokenfin/config.json) — run `npx tokenfin@latest login`')
+  }
+
   // 5. Server-side: is the ingest key the agents use still active?
   const agentKey = settingsKey || key
   if (agentKey) {
@@ -135,6 +162,9 @@ async function doctor(flags = {}) {
       }
     }
   }
+
+  // 7. upload the redacted agent configs (Dashboard → Agents) + pending changes
+  if (readKey) await require('./agentconfig').autoSync({ ...flags, key: readKey, appUrl })
 
   log('')
   if (fails) log(FAIL + ' ' + fails + ' problem(s)' + (warns ? ', ' + warns + ' warning(s)' : '') + ' — fixes above.')

@@ -1,19 +1,24 @@
 // Single source of model pricing (USD per 1M tokens) for every cost TokenFin
 // computes: SDK ingest, OTLP logs/metrics/traces, prompt analytics, savings.
-// Anthropic rates are first-party API list prices (2026-06). Cache reads bill
-// at 0.1x input and 5-minute cache writes at 1.25x input unless overridden.
+// Anthropic rates are first-party API list prices (2026-09). Cache reads bill
+// at 0.1x input unless listed (Fable 5.1 / Mythos 5.1: 0.025x, Opus 5.5 and
+// Sonnet 5.5: $0.20). Cache writes default to the 5-minute rate (1.25x input);
+// 1-hour writes bill 2x, which is why Claude Code / Cowork rows use the cost
+// those clients report (they know the TTL split) — see otlp/normalize.ts.
 export type Price = { in: number; out: number; cacheRead?: number; cacheWrite?: number }
 
 export const PRICES: Readonly<Record<string, Price>> = {
   // Anthropic
   'claude-fable-5-1':  { in: 10,   out: 50, cacheRead: 0.25 },
   'claude-fable-5':    { in: 10,   out: 50 },
-  'claude-mythos-5-1': { in: 10,   out: 50 },
+  'claude-mythos-5-1': { in: 10,   out: 50, cacheRead: 0.25 },
+  'claude-mythos-5':   { in: 10,   out: 50 },
   'claude-opus-5-5':   { in: 4,    out: 20, cacheRead: 0.20 },
   'claude-opus-5':     { in: 5,    out: 25 },
   'claude-opus-4-8':   { in: 5,    out: 25 },
   'claude-opus-4-7':   { in: 5,    out: 25 },
   'claude-opus-4-6':   { in: 5,    out: 25 },
+  'claude-sonnet-5-5': { in: 2,    out: 10, cacheRead: 0.20 },
   'claude-sonnet-5':   { in: 2,    out: 10 },
   'claude-sonnet-4-6': { in: 3,    out: 15 },
   'claude-haiku-4-5':  { in: 1,    out: 5 },

@@ -233,3 +233,55 @@ describe('leaf mirror + pricing', () => {
     expect(dedupeSpans([...spans, ...spans])).toHaveLength(spans.length)
   })
 })
+
+describe('prompt content is stored in full', () => {
+  it('keeps a 50,000-char prompt attribute untruncated but still trims other attributes', async () => {
+    const { sanitizeAttributes } = await import('./genai')
+    const long = 'x'.repeat(50_000)
+    const out = sanitizeAttributes({ 'gen_ai.prompt': long, 'some.other': long }, true)
+    expect(out['gen_ai.prompt']).toBe(long)
+    expect(String(out['some.other']).endsWith('…[truncated]')).toBe(true)
+  })
+})
+
+describe('trace capture level (migration 025)', () => {
+  it('problemOf: errors, exceptions, HTTP >= 400, warn levels, truncated / filtered responses', async () => {
+    const { problemOf } = await import('./genai')
+    expect(problemOf(2, {}, false)).toBe('error')
+    expect(problemOf(0, {}, true)).toBe('error')
+    expect(problemOf(0, { 'http.response.status_code': 429 }, false)).toBe('warning')
+    expect(problemOf(0, { 'log.level': 'WARN' }, false)).toBe('warning')
+    expect(problemOf(0, { 'gen_ai.response.finish_reasons': ['length'] }, false)).toBe('warning')
+    expect(problemOf(0, { 'gen_ai.response.finish_reasons': ['stop'], 'http.response.status_code': 200 }, false)).toBeNull()
+  })
+
+  it('rowsForCapture: errors mode keeps problem traces in full, cost skeletons for the rest, drops the rest', async () => {
+    const { rowsForCapture } = await import('./traces')
+    const spans = [
+      { traceId: 'ok', problem: null, usage: { total: 500 } },          // LLM span in a healthy trace → skeleton
+      { traceId: 'ok', problem: null, usage: { total: 0 } },            // plain span in a healthy trace → dropped
+      { traceId: 'bad', problem: 'error' as const, usage: { total: 0 } },
+      { traceId: 'bad', problem: null, usage: { total: 900 } },         // same trace as an error → full
+    ]
+    const rows = spans.map((s, i) => ({ id: i, attributes: { 'gen_ai.prompt': 'secret' }, status_message: 'x', user_email: 'a@b.c' }))
+    const out = rowsForCapture(spans, rows, 'errors')
+    expect(out.map(r => [r.id, r.detail])).toEqual([[0, false], [2, true], [3, true]])
+    expect(out[0]).toMatchObject({ attributes: {}, status_message: null, user_email: null })
+    expect(out[1].attributes).toEqual({ 'gen_ai.prompt': 'secret' })
+    expect(rowsForCapture(spans, rows, 'all').every(r => r.detail)).toBe(true)
+  })
+})
+
+describe('coding-agent internal tracing is dropped (OpenCode SQL / session spans)', () => {
+  it('drops zero-token, non-problem spans from CLI agents even in "all" mode; keeps their problem traces', async () => {
+    const { rowsForCapture } = await import('./traces')
+    const spans = [
+      { traceId: 'oc1', problem: null, usage: { total: 0 }, source: 'opencode' },        // sql.execute → dropped
+      { traceId: 'oc2', problem: 'error' as const, usage: { total: 0 }, source: 'opencode' }, // failing → kept
+      { traceId: 'app', problem: null, usage: { total: 0 }, source: 'otlp' },            // your app, 'all' → kept
+    ]
+    const rows = spans.map((_, i) => ({ id: i, attributes: {} }))
+    expect(rowsForCapture(spans, rows, 'all').map(r => r.id)).toEqual([1, 2])
+    expect(rowsForCapture(spans, rows, 'errors').map(r => r.id)).toEqual([1])
+  })
+})

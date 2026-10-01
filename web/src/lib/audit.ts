@@ -8,6 +8,8 @@ import { createAdminClient } from '@/lib/supabase/server'
 export type AuditAction =
   | 'key.create' | 'key.delete' | 'key.toggle' | 'key.reveal'
   | 'limit.create' | 'limit.update' | 'limit.delete'
+  | 'limit.notify' | 'limit.auto_switch' | 'limit.auto_block'
+  | 'route.create' | 'route.delete' | 'route.revert' | 'model_block.delete'
   | 'project.create' | 'project.update' | 'project.delete'
   | 'team.create' | 'team.update' | 'team.delete'
   | 'member.invite' | 'member.join' | 'member.role_change' | 'member.remove'
@@ -18,6 +20,7 @@ export type AuditAction =
   | 'provider.connect' | 'provider.disconnect'
   | 'alert.create' | 'alert.update' | 'alert.delete'
   | 'price.update'
+  | 'agent_config.request' | 'agent_config.apply' | 'agent_config.fail' | 'agent_config.cancel'
 
 export async function audit(entry: {
   orgId: string

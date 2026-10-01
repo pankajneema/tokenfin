@@ -99,7 +99,7 @@ TokenFin answers those questions with three principles:
 | **Claude Cowork** | Org-wide OpenTelemetry export (Admin settings → Cowork) | notional |
 | **Codex CLI** | Native OpenTelemetry metrics | notional |
 | **Gemini CLI** | Native OpenTelemetry metrics | notional |
-| **OpenCode** | `opencode-otel-plugin` (metrics + traces) | notional |
+| **OpenCode** | TokenFin plugin (`plugins/opencode`) — one row per assistant message, cache + reasoning tokens, prompt text optional | notional (subscription) / metered (API key) |
 | **Your apps** | TypeScript / Python SDK, `POST /api/v1/ingest`, or OTel GenAI traces | metered |
 | **Cursor, GitHub Copilot, Claude Code Analytics** | Pull connectors (daily sync) | vendor-reported |
 | **Anthropic / OpenAI billing** | Admin API (daily sync) for the bill check | vendor-reported |
@@ -258,7 +258,8 @@ sequenceDiagram
 ```
 
 - **Logs** (Claude Code, Cowork): one row per API call, with the prompt joined by `prompt.id`.
-- **Metrics** (Codex, Gemini, OpenCode): per-turn rows derived from counters and histograms, with cumulative series diffed so nothing is counted twice.
+- **OpenCode plugin**: one row per completed assistant message via `/api/v1/ingest/batch`, with the prompt joined by the user message id.
+- **Metrics** (Codex, Gemini): per-turn rows derived from counters and histograms, with cumulative series diffed so nothing is counted twice.
 - **Traces** (your apps): only leaf LLM spans are mirrored into usage, so parent spans never double-count.
 
 ### Data model

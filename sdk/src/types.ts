@@ -48,6 +48,9 @@ export interface TokenFinConfig {
 
   /** Custom fetch implementation (tests, proxies). @default globalThis.fetch */
   fetch?: typeof fetch
+
+  /** How often the wrappers re-read the org policy (model routes / blocks). @default 60000 */
+  policyTtlMs?: number
 }
 
 /** Fields for a single LLM usage event. */

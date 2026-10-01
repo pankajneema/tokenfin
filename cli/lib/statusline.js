@@ -116,6 +116,16 @@ async function fetchBudget(opts = {}) {
   return { ok: true, budget: normalizeBudget(r.json), raw: r.json, cached: false }
 }
 
+// Pending dashboard config changes, as last reported by `tokenfin config push`
+// (~/.tokenfin/agent-state.json). No network call.
+function pendingSuffix() {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(tfDir(), 'agent-state.json'), 'utf8'))
+    const n = Number(s && s.pending) || 0
+    return n > 0 ? ' · ' + n + ' config change' + (n === 1 ? '' : 's') + ' pending (tokenfin config pull)' : ''
+  } catch { return '' }
+}
+
 async function statuslineMain() {
   // Claude Code pipes session JSON on stdin; we don't need it and never wait on it.
   let line = 'TokenFin —'
@@ -125,10 +135,11 @@ async function statuslineMain() {
     else if (r.status === 401) line = 'TokenFin key revoked — npx tokenfin@latest login'
     else if (r.status === 403) line = 'TokenFin needs a read key — npx tokenfin@latest login'
   } catch {}
+  line += pendingSuffix()
   process.stdout.write(line + '\n')
   process.exit(0)
 }
 
-module.exports = { normalizeBudget, formatStatusline, fetchBudget, money, CACHE_TTL_MS }
+module.exports = { normalizeBudget, formatStatusline, fetchBudget, money, CACHE_TTL_MS, pendingSuffix }
 
 if (require.main === module) statuslineMain()

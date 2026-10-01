@@ -11,6 +11,9 @@ import crypto from 'crypto'
 import { attrVal, attrsToMap, nanoToIso, num, repoFrom, allocationTagsFrom, userKeyFrom, istDay } from './attrs'
 import { detectSource, costBasisFor, isRecognizedMetric, isDeltaTemporality, warnUnrecognizedMetric } from './mapping'
 import { computeCost, priceFor } from '@/lib/mcp/pricing'
+
+/** Sources whose own reported cost_usd is exact (Anthropic first-party clients). */
+export const trustsVendorCost = (source: string) => source === 'claude_code' || source === 'cowork'
 import type { BillableTokens } from '@/lib/pricing-overrides'
 import type { KeyCtx } from './auth'
 
@@ -109,13 +112,19 @@ export function normalizeLogs(body: any, _ctx: KeyCtx): UsageRow[] {
           ? `${source}:${providerReqId}`
           : sha(`${source}|${correlationId ?? ''}|${timeNano ?? ts}|${idx}`)
 
-        // Cost is ALWAYS computed server-side, never taken from the event
-        // (spec: cost_usd is server-computed, never client-supplied). computeCost
-        // has sane defaults for models it doesn't know, so this is never 0.
-        const cost = computeCost(model, input, output, cacheR, cacheW)
-        // Vendor-reported cost is kept alongside (never instead of) our price.
+        // Server-side list price (sane defaults for unknown models, never 0).
+        const listCost = computeCost(model, input, output, cacheR, cacheW)
         const vendorRaw = a['cost_usd'] ?? (a['cost_usd_micros'] != null ? num(a['cost_usd_micros']) / 1e6 : undefined)
         const vendorCost = vendorRaw == null || vendorRaw === '' || !Number.isFinite(Number(vendorRaw)) ? null : +Number(vendorRaw).toFixed(8)
+        // Anthropic's own clients (Claude Code, Cowork) price each call exactly:
+        // they know the cache-write TTL split (5-minute writes bill 1.25x input,
+        // 1-hour writes 2x) that the event's single cache_creation_tokens count
+        // hides. Use their figure when it is plausible (within 10x of the list
+        // price); everything else stays server-priced. The rows are notional
+        // (subscription usage), never a bill. Org price overrides still win (persist).
+        const cost = trustsVendorCost(source) && vendorCost != null && vendorCost > 0
+          && vendorCost <= listCost * 10 && vendorCost >= listCost / 10
+          ? vendorCost : listCost
         const opt = (v: unknown) => (v == null || String(v).trim() === '' ? null : String(v))
 
         rows.push({
@@ -215,6 +224,8 @@ export function scanMetrics(body: any): MetricsHealth {
 
 export interface PromptEvent {
   prompt_id: string
+  /** session.id on the prompt event — names the session after its first prompt */
+  session_id: string | null
   prompt_text: string
   prompt_chars: number
   ts: string
@@ -245,6 +256,7 @@ export function normalizePrompts(body: any): PromptEvent[] {
         if (!promptId) continue
         out.push({
           prompt_id: String(promptId),
+          session_id: identity['session.id'] != null && String(identity['session.id']) !== '' ? String(identity['session.id']) : null,
           prompt_text: text,
           prompt_chars: num(a['prompt_length']) || text.length,
           ts: nanoToIso(rec?.timeUnixNano ?? rec?.observedTimeUnixNano) ?? new Date().toISOString(),

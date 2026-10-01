@@ -1,3 +1,4 @@
+import { sessionTitles } from '@/lib/session-titles'
 import { createAdminClient } from '@/lib/supabase/server'
 import { requireOrgContext } from '@/lib/org-context'
 import { promptScope } from '@/lib/rbac'
@@ -13,6 +14,12 @@ export const revalidate = 0
 
 export interface SessionSummary {
   id:       string
+  /** OpenCode's own title, else the first line of the first prompt; null when unknown */
+  title:    string | null
+  /** working directory + git branch (session hooks / OpenCode plugin, migration 023) */
+  cwd:      string | null
+  branch:   string | null
+  ended:    boolean
   start:    string
   end:      string
   durationMs: number
@@ -26,6 +33,9 @@ export interface SessionSummary {
   source:   string
   repo:     string
 }
+
+const sessionStart = (hook: string | null | undefined, firstCall: string) => (hook && hook < firstCall ? hook : firstCall)
+const sessionEnd   = (hook: string | null | undefined, lastCall: string)  => (hook && hook > lastCall ? hook : lastCall)
 
 export interface SessionsMeta {
   windowLabel: string
@@ -71,6 +81,14 @@ export default async function SessionsPage({ searchParams }: { searchParams?: Pr
       .eq('org_id', orgId).in('session_id', ids.slice(i, i + 50)))
     evs.push(...data)
   }
+  const [titles, metaRows] = await Promise.all([
+    sessionTitles(admin, orgId, ids),
+    ids.length
+      ? admin.from('session_meta').select('session_id,cwd,git_branch,started_at,ended_at').eq('org_id', orgId).in('session_id', ids)
+          .then(r => (r.error ? [] : r.data ?? []) as { session_id: string; cwd: string | null; git_branch: string | null; started_at: string | null; ended_at: string | null }[])
+      : Promise.resolve([]),
+  ])
+  const metaBy = new Map(metaRows.map(m => [m.session_id, m]))
   const bySession = new Map<string, Ev[]>()
   for (const e of evs) {
     const g = bySession.get(e.session_id)
@@ -83,9 +101,15 @@ export default async function SessionsPage({ searchParams }: { searchParams?: Pr
     for (const e of es) { const m = e.model || 'unknown'; models.set(m, (models.get(m) ?? 0) + 1) }
     return {
       id:         s.session_id,
-      start:      s.first_at,
-      end:        s.last_at,
-      durationMs: new Date(s.last_at).getTime() - new Date(s.first_at).getTime(),
+      title:      titles.get(s.session_id) ?? null,
+      cwd:        metaBy.get(s.session_id)?.cwd ?? null,
+      branch:     metaBy.get(s.session_id)?.git_branch ?? null,
+      ended:      !!metaBy.get(s.session_id)?.ended_at,
+      // The agent's own start/end (session hooks / OpenCode) when known, else first/last LLM call — same as the session page.
+      start:      sessionStart(metaBy.get(s.session_id)?.started_at, s.first_at),
+      end:        sessionEnd(metaBy.get(s.session_id)?.ended_at, s.last_at),
+      durationMs: new Date(sessionEnd(metaBy.get(s.session_id)?.ended_at, s.last_at)).getTime()
+                - new Date(sessionStart(metaBy.get(s.session_id)?.started_at, s.first_at)).getTime(),
       user:       emails.get(s.user_key) ?? (s.user_key || '—'),
       models:     models.size
         ? Array.from(models.entries()).sort((a, b) => b[1] - a[1]).map(([model, calls]) => ({ model, calls }))

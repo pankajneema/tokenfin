@@ -1,3 +1,4 @@
+import { sessionTitles } from '@/lib/session-titles'
 import { createAdminClient } from '@/lib/supabase/server'
 import { compressContent } from './compress'
 import { ccrPut, ccrGet } from './ccr'
@@ -139,7 +140,10 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
           .map(f => dashSessions(admin, ctx.orgId, from, to, f, { limit: offset + limit, offset: 0, order })))
         page = mergePages(parts, r => r.session_id, sessionCmp(order), limit, offset)
       }
-      return { from, to, timezone: tz, scope: scopeNote(scope !== null), total: page.total, sessions: page.rows }
+      // Session names are prompt content: only when this org captures prompts.
+      const titles = await captureOn(admin, ctx.orgId) ? await sessionTitles(admin, ctx.orgId, page.rows.map(r => r.session_id)) : new Map<string, string>()
+      return { from, to, timezone: tz, scope: scopeNote(scope !== null), total: page.total,
+        sessions: page.rows.map(r => ({ ...r, title: titles.get(r.session_id) ?? null })) }
     }
     case 'get_session': {
       const sessionId = String(args.session_id ?? '').trim()
@@ -154,8 +158,9 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
         .select('created_at, model, input_tokens, output_tokens, cache_read_tokens, total_tokens, cost_usd, cost_basis, tool_name, agent_name, prompt_preview')
         .eq('org_id', ctx.orgId).eq('session_id', sessionId)
         .order('created_at', { ascending: true }).limit(200)
+      const title = text ? (await sessionTitles(admin, ctx.orgId, [sessionId])).get(sessionId) ?? null : null
       return {
-        found: true, scope: scopeNote(scope !== null), session: s,
+        found: true, scope: scopeNote(scope !== null), session: { ...s, title },
         prompt_text: text ? 'redacted previews included' : 'prompt capture is off for this org',
         events: (evs ?? []).map(e => {
           const { prompt_preview, ...rest } = e as Record<string, unknown>

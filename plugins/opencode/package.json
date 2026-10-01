@@ -1,0 +1,16 @@
+{
+  "name": "@tokenfin/opencode",
+  "version": "0.1.0",
+  "description": "First-party TokenFin plugin for OpenCode: per-message tokens (incl. cache + reasoning), cost, session, prompt id and full prompt text.",
+  "type": "module",
+  "main": "tokenfin.js",
+  "exports": "./tokenfin.js",
+  "files": ["tokenfin.js", "README.md"],
+  "scripts": {
+    "test": "node --test tokenfin.test.js"
+  },
+  "keywords": ["opencode", "opencode-plugin", "tokenfin", "finops", "llm", "cost"],
+  "engines": { "node": ">=18" },
+  "private": true,
+  "license": "MIT"
+}

@@ -75,7 +75,12 @@ test('setup strips the legacy Stop hook, deletes record-usage.js, honours --no-p
   assert.match(r.out, /Prompt capture is OFF/)
   assert.match(r.out, /removed legacy 0\.2 Stop hook/)
   const s = readJson(settingsPath)
-  assert.equal(s.hooks, undefined)
+  // legacy Stop hook gone; only the TokenFin session hooks remain
+  assert.equal(s.hooks.Stop, undefined)
+  assert.deepEqual(Object.keys(s.hooks).sort(), ['SessionEnd', 'SessionStart'])
+  assert.match(s.hooks.SessionStart[0].hooks[0].command, /\.tokenfin.hooks.session\.js/)
+  assert.equal(s.hooks.SessionStart[0].hooks[0].timeout, 5)
+  assert.ok(fs.existsSync(path.join(home, '.tokenfin', 'hooks', 'session.js')))
   assert.equal(s.env.MY_VAR, '1')
   assert.equal(s.env.OTEL_LOG_USER_PROMPTS, undefined)
   assert.equal(s.env.OTEL_EXPORTER_OTLP_HEADERS, 'Authorization=Bearer ' + GOOD)
@@ -102,6 +107,27 @@ test('setup strips the legacy Stop hook, deletes record-usage.js, honours --no-p
   const after = readJson(settingsPath)
   assert.deepEqual(after, { env: { MY_VAR: '1' } })
   assert.ok(!fs.existsSync(path.join(home, '.tokenfin', 'config.json')))
+  assert.ok(!fs.existsSync(path.join(home, '.tokenfin', 'hooks', 'session.js')))
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('setup --no-session-hooks strips them and persists; doctor reports the state', async () => {
+  const home = mkHome()
+  const settingsPath = path.join(home, '.claude', 'settings.json')
+  let r = await cli(home, ['setup', '--key', GOOD, '--read-key', READ, '--app-url', base, '--no-wait', '--no-mcp', '--yes'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /Sessions\s+hooks SessionStart \+ SessionEnd/)
+  r = await cli(home, ['setup', '--app-url', base, '--no-wait', '--no-mcp', '--yes', '--no-session-hooks'])
+  assert.match(r.out, /hooks removed \(--no-session-hooks\)/)
+  assert.equal(readJson(settingsPath).hooks, undefined)
+  r = await cli(home, ['setup', '--app-url', base, '--no-wait', '--no-mcp', '--yes'])
+  assert.equal(readJson(settingsPath).hooks, undefined)   // opt-out persisted
+  r = await cli(home, ['doctor'])
+  assert.match(r.out, /session hooks off/)
+  r = await cli(home, ['setup', '--app-url', base, '--no-wait', '--no-mcp', '--yes', '--session-hooks'])
+  assert.ok(readJson(settingsPath).hooks.SessionEnd)
+  r = await cli(home, ['doctor'])
+  assert.match(r.out, /✔ session hooks installed/)
   fs.rmSync(home, { recursive: true, force: true })
 })
 
@@ -140,6 +166,40 @@ test('setup rejects a revoked key; doctor flags key drift and revocation', async
   assert.equal(r.code, 1)
   assert.match(r.out, /settings\.json sends key/)
   assert.match(r.out, /key revoked — run `npx tokenfin@latest login`/)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('OpenCode: setup installs the TokenFin plugin and drops opencode-otel-plugin; doctor + remove', async () => {
+  const home = mkHome()
+  const ocDir = path.join(home, '.config', 'opencode')
+  fs.mkdirSync(ocDir, { recursive: true })
+  const ocCfg = path.join(ocDir, 'opencode.json')
+  fs.writeFileSync(ocCfg, JSON.stringify({ model: 'anthropic/x', plugin: ['opencode-claude-auth@latest', 'opencode-otel-plugin'] }))
+  const pluginFile = path.join(ocDir, 'plugin', 'tokenfin.js')
+
+  let r = await cli(home, ['setup', '--key', GOOD, '--read-key', READ, '--app-url', base, '--no-wait', '--no-mcp', '--yes'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /OpenCode\s+plugin v[\d.]+ → .*plugin.tokenfin\.js \(removed opencode-otel-plugin/)
+  assert.deepEqual(readJson(ocCfg), { model: 'anthropic/x', plugin: ['opencode-claude-auth@latest'] })
+  assert.ok(fs.existsSync(ocCfg + '.bak-tokenfin'))
+  assert.ok(fs.readFileSync(pluginFile, 'utf8').includes('TokenFin plugin for OpenCode'))
+  // the plugin needs no env: config.json carries key + app url
+  const cfg = readJson(path.join(home, '.tokenfin', 'config.json'))
+  assert.equal(cfg.key, GOOD); assert.equal(cfg.appUrl, base)
+
+  r = await cli(home, ['doctor'])
+  assert.match(r.out, /✔ OpenCode — TokenFin plugin v[\d.]+ in /)
+  // a re-added otel plugin is flagged as double counting
+  fs.writeFileSync(ocCfg, JSON.stringify({ plugin: ['opencode-otel-plugin@latest'] }))
+  r = await cli(home, ['doctor'])
+  assert.match(r.out, /✗ OpenCode — opencode-otel-plugin is still in .* double-counts/)
+
+  r = await cli(home, ['remove', '--app-url', base])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /OpenCode — removed TokenFin plugin/)
+  assert.match(r.out, /OpenCode — removed opencode-otel-plugin/)
+  assert.ok(!fs.existsSync(pluginFile))
+  assert.deepEqual(readJson(ocCfg).plugin, [])
   fs.rmSync(home, { recursive: true, force: true })
 })
 

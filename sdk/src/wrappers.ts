@@ -11,11 +11,12 @@
  */
 import type { TokenFinClient } from './client'
 import type { TrackEvent } from './types'
+import { TokenFinPolicyError, findRoute, isModelBlocked } from './policy'
 
 export interface WrapOptions {
   /** Attach the prompt text (last user message) to events. Off by default. */
   capturePrompts?: boolean
-  /** Max characters of prompt text to send when capturePrompts is on. @default 4000 */
+  /** Max characters of prompt text to send when capturePrompts is on. @default unlimited (the full prompt) */
   maxPromptChars?: number
   projectId?: string
   userEmail?: string
@@ -24,6 +25,23 @@ export interface WrapOptions {
   metadata?: Record<string, unknown>
   /** @default "sdk" */
   source?: string
+  /**
+   * Rewrite `model` per the org's active model routes (GET /api/v1/policy,
+   * e.g. an automatic switch after a usage limit). The event records
+   * `metadata.routed_from`. @default true
+   */
+  routeModels?: boolean
+  /**
+   * Throw TokenFinPolicyError for models the org blocked (a limit's
+   * "block in SDKs" action). Off by default: without it the wrapper only routes.
+   * @default false
+   */
+  enforcePolicy?: boolean
+  /**
+   * Longest a call waits for the FIRST policy fetch (later calls never wait).
+   * The fetch starts when the client is wrapped. @default 200
+   */
+  policyWaitMs?: number
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -43,10 +61,11 @@ interface Usage { input: number; output: number; cacheRead: number; cacheWrite: 
 export function wrapAnthropic<T>(client: T, tf: TokenFinClient, opts: WrapOptions = {}): T {
   try {
     const c = client as unknown as Obj
-    patchMethod(c?.messages, 'create', (params, result, started) =>
-      observe(result, started, tf, opts, 'anthropic', params, anthropicCollector()))
-    patchMethod(c?.beta?.messages, 'create', (params, result, started) =>
-      observe(result, started, tf, opts, 'anthropic', params, anthropicCollector()))
+    const gate = policyGate(tf, opts)
+    patchMethod(c?.messages, 'create', (params, result, started, ctx) =>
+      observe(result, started, tf, opts, 'anthropic', params, anthropicCollector(), ctx.routedFrom), undefined, gate)
+    patchMethod(c?.beta?.messages, 'create', (params, result, started, ctx) =>
+      observe(result, started, tf, opts, 'anthropic', params, anthropicCollector(), ctx.routedFrom), undefined, gate)
   } catch { /* never break the host */ }
   return client
 }
@@ -85,16 +104,17 @@ function anthropicCollector(): Collector {
 export function wrapOpenAI<T>(client: T, tf: TokenFinClient, opts: WrapOptions = {}): T {
   try {
     const c = client as unknown as Obj
+    const gate = policyGate(tf, opts)
     patchMethod(c?.chat?.completions, 'create',
-      (params, result, started, ctx) => observe(result, started, tf, opts, 'openai', params, openaiChatCollector(ctx.injected)),
+      (params, result, started, ctx) => observe(result, started, tf, opts, 'openai', params, openaiChatCollector(ctx.injected), ctx.routedFrom),
       (params) => {
         if (params && params.stream === true && !params.stream_options?.include_usage) {
           return { params: { ...params, stream_options: { ...(params.stream_options ?? {}), include_usage: true } }, injected: true }
         }
         return { params, injected: false }
-      })
-    patchMethod(c?.responses, 'create', (params, result, started) =>
-      observe(result, started, tf, opts, 'openai', params, openaiResponsesCollector()))
+      }, gate)
+    patchMethod(c?.responses, 'create', (params, result, started, ctx) =>
+      observe(result, started, tf, opts, 'openai', params, openaiResponsesCollector(), ctx.routedFrom), undefined, gate)
   } catch { /* never break the host */ }
   return client
 }
@@ -151,26 +171,95 @@ interface Collector {
   result(): { model?: string; usage: Usage } | null
 }
 
-type Observer = (params: Obj, result: unknown, started: number, ctx: { injected: boolean }) => unknown
+type Observer = (params: Obj, result: unknown, started: number, ctx: { injected: boolean; routedFrom?: string }) => unknown
 type Prepare = (params: Obj) => { params: Obj; injected: boolean }
 
-function patchMethod(target: Obj | undefined, name: string, observer: Observer, prepare?: Prepare): void {
+// ─── policy (model routes / blocks) ──────────────────────────────────────────
+
+interface PolicyGate {
+  /** Route / block `params.model`. Throws TokenFinPolicyError for a blocked model (enforcePolicy only). */
+  apply(params: Obj): { params: Obj; routedFrom?: string }
+  /** The first policy fetch is still running and the caller allows a short wait. */
+  shouldWait(): boolean
+  wait(): Promise<void>
+}
+
+function policyGate(tf: TokenFinClient, opts: WrapOptions): PolicyGate | undefined {
+  const route = opts.routeModels !== false
+  const enforce = opts.enforcePolicy === true
+  if (!route && !enforce) return undefined
+  const waitMs = opts.policyWaitMs ?? 200
+  let pm: ReturnType<TokenFinClient['policy']>
+  try { pm = tf.policy(); pm.refresh() } catch { return undefined }   // prefetch in the background
+  return {
+    apply(params) {
+      const model = params?.model
+      if (typeof model !== 'string' || !model) return { params }
+      let policy = null
+      try { pm.refresh(); policy = pm.current() } catch { return { params } }   // stale → background refresh
+      if (!policy) return { params }
+      let out = params
+      let routedFrom: string | undefined
+      if (route) {
+        const r = findRoute(policy, model)
+        if (r && r.to && r.to !== model) { out = { ...params, model: r.to }; routedFrom = model }
+      }
+      if (enforce && isModelBlocked(policy, out.model)) throw new TokenFinPolicyError(out.model)
+      return { params: out, routedFrom }
+    },
+    shouldWait: () => waitMs > 0 && !pm.settled,
+    wait: () => pm.ready(waitMs),
+  }
+}
+
+/**
+ * Run `invoke` after `gate` settles, returning a promise that ALSO exposes the
+ * SDK promise helpers (`withResponse`, `asResponse`) so code such as
+ * Anthropic's `messages.stream()` keeps working during the short first wait.
+ */
+function deferred(gate: Promise<void>, invoke: () => unknown): unknown {
+  let inner: Obj | undefined
+  const created = gate.then(() => { inner = invoke() as Obj })
+  const out = created.then(() => inner) as Promise<unknown> & Obj
+  for (const m of ['withResponse', 'asResponse']) {
+    out[m] = (...a: unknown[]) => created.then(() => {
+      const fn = inner?.[m]
+      if (typeof fn !== 'function') throw new TypeError(`${m} is not available on this result`)
+      return fn.apply(inner, a)
+    })
+  }
+  return out
+}
+
+function patchMethod(target: Obj | undefined, name: string, observer: Observer, prepare?: Prepare, gate?: PolicyGate): void {
   if (!target || typeof target[name] !== 'function') return
   const original: AnyFn = target[name]
   if ((original as Obj)[WRAPPED]) return
   const wrapped = function (this: unknown, params: Obj, ...rest: unknown[]) {
-    let callParams = params
-    let injected = false
-    try {
-      if (prepare) ({ params: callParams, injected } = prepare(params))
-    } catch { callParams = params; injected = false }
-    const started = Date.now()
-    const result = original.call(this ?? target, callParams, ...rest) // SDK errors propagate untouched
-    try {
-      return observer(params ?? {}, result, started, { injected }) as unknown
-    } catch {
-      return result
+    const self = this ?? target
+    const invoke = () => {
+      let routed = params
+      let routedFrom: string | undefined
+      if (gate) {
+        try { ({ params: routed, routedFrom } = gate.apply(params)) }
+        catch (e) { if (e instanceof TokenFinPolicyError) throw e; routed = params; routedFrom = undefined }
+      }
+      let callParams = routed
+      let injected = false
+      try {
+        if (prepare) ({ params: callParams, injected } = prepare(routed))
+      } catch { callParams = routed; injected = false }
+      const started = Date.now()
+      const result = original.call(self, callParams, ...rest) // SDK errors propagate untouched
+      try {
+        return observer(routed ?? {}, result, started, { injected, routedFrom }) as unknown
+      } catch {
+        return result
+      }
     }
+    let waiting = false
+    try { waiting = !!gate?.shouldWait() } catch { waiting = false }
+    return waiting ? deferred(gate!.wait(), invoke) : invoke()
   }
   ;(wrapped as Obj)[WRAPPED] = true
   target[name] = wrapped
@@ -183,13 +272,14 @@ function patchMethod(target: Obj | undefined, name: string, observer: Observer, 
  * place while keeping the exact object the SDK returned.
  */
 function observe(result: unknown, started: number, tf: TokenFinClient, opts: WrapOptions,
-  provider: string, params: Obj, collector: Collector): unknown {
+  provider: string, params: Obj, collector: Collector, routedFrom?: string): unknown {
+  const base: Record<string, unknown> = routedFrom ? { routed_from: routedFrom } : {}
   const handle = (value: unknown) => {
     try {
-      if (isAsyncIterable(value)) instrumentStream(value as Obj, started, tf, opts, provider, params, collector)
+      if (isAsyncIterable(value)) instrumentStream(value as Obj, started, tf, opts, provider, params, collector, base)
       else if (value && typeof value === 'object') {
         collector.final(value as Obj)
-        emit(tf, opts, provider, params, collector, started, {})
+        emit(tf, opts, provider, params, collector, started, base)
       }
     } catch { /* ignore */ }
   }
@@ -202,7 +292,7 @@ function observe(result: unknown, started: number, tf: TokenFinClient, opts: Wra
 }
 
 function instrumentStream(stream: Obj, started: number, tf: TokenFinClient, opts: WrapOptions,
-  provider: string, params: Obj, collector: Collector): void {
+  provider: string, params: Obj, collector: Collector, base: Record<string, unknown> = {}): void {
   const origIter = stream[Symbol.asyncIterator]
   if (typeof origIter !== 'function' || origIter[WRAPPED]) return
   let done = false
@@ -211,7 +301,7 @@ function instrumentStream(stream: Obj, started: number, tf: TokenFinClient, opts
     if (done) return
     done = true
     emit(tf, opts, provider, params, collector, started,
-      { stream: true, ...(firstTokenAt ? { ttft_ms: firstTokenAt - started } : {}), ...(status !== 'complete' ? { stream_status: status } : {}) })
+      { ...base, stream: true, ...(firstTokenAt ? { ttft_ms: firstTokenAt - started } : {}), ...(status !== 'complete' ? { stream_status: status } : {}) })
   }
   const iterFn = function (this: unknown) {
     const it = origIter.call(stream) as AsyncIterator<unknown>
@@ -267,7 +357,7 @@ function emit(tf: TokenFinClient, opts: WrapOptions, provider: string, params: O
     }
     if (opts.capturePrompts) {
       const text = lastUserText(params)
-      if (text) ev.promptText = text.slice(0, opts.maxPromptChars ?? 4000)
+      if (text) ev.promptText = opts.maxPromptChars && opts.maxPromptChars > 0 ? text.slice(0, opts.maxPromptChars) : text
     }
     tf.track(ev)
   })

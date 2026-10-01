@@ -16,6 +16,7 @@ const { writeFileAtomic, backup } = require('./fsx')
 const { revokeDeviceKey } = require('./api')
 const { run } = require('./proc')
 const { DEFAULT_APP_URL } = require('./login')
+const H = require('./hooks')
 
 const log = (m) => process.stdout.write(m + '\n')
 
@@ -46,10 +47,12 @@ async function remove(flags = {}) {
       const hooks = O.stripLegacyHooks(s).removed
       let sl = false
       if (O.isOurStatusline(s.statusLine)) { delete s.statusLine; sl = true }
-      if (removed || hooks || sl) {
+      const sess = H.stripSessionHooks(s)
+      if (removed || hooks || sl || sess) {
         O.writeClaudeSettings(s)
         if (removed) log('✔ Claude Code — removed OTel env from settings.json')
         if (hooks) log('✔ Claude Code — removed legacy 0.2 Stop hook')
+        if (sess) log('✔ Claude Code — removed TokenFin session hooks')
         if (sl) log('✔ Claude Code — removed TokenFin statusLine')
       } else log('· Claude Code — nothing to remove')
     }
@@ -77,17 +80,19 @@ async function remove(flags = {}) {
     }
   } catch (e) { log('· Gemini CLI — could not edit settings.json: ' + e.message) }
 
-  // 3b. OpenCode — drop the opencode-otel-plugin from the plugin array
+  // 3b. OpenCode — delete our plugin file; drop a leftover opencode-otel-plugin
   try {
+    if (O.uninstallOpencodePlugin()) log('✔ OpenCode — removed TokenFin plugin (' + O.opencodePluginPath() + ')')
+    else log('· OpenCode — no TokenFin plugin')
     const p = O.opencodeConfigPath()
     if (fs.existsSync(p)) {
       const s = O.readOpencodeConfig()
-      const plugin = O.stripOpencodePlugin(s.plugin)
-      if (Array.isArray(s.plugin) && plugin.length !== s.plugin.length) {
-        backup(p); s.plugin = plugin; O.writeOpencodeConfig(s); log('✔ OpenCode — removed opencode-otel-plugin from opencode.json')
-      } else log('· OpenCode — no TokenFin plugin')
+      if (O.hasLegacyOpencodePlugin(s.plugin)) {
+        backup(p); s.plugin = O.stripOpencodePlugin(s.plugin); O.writeOpencodeConfig(s)
+        log('✔ OpenCode — removed opencode-otel-plugin from ' + path.basename(p))
+      }
     }
-  } catch (e) { log('· OpenCode — could not edit opencode.json: ' + e.message) }
+  } catch (e) { log('· OpenCode — could not edit ' + O.opencodeConfigPath() + ': ' + e.message) }
 
   // 4. unregister the read-only MCP server
   const r = run('claude', ['mcp', 'remove', 'tokenfin', '-s', 'user'])
@@ -96,9 +101,12 @@ async function remove(flags = {}) {
 
   // 5. local TokenFin files
   const files = [configPath(), O.legacyScriptPath(), O.statuslineScriptPath(),
-    path.join(dir(), 'budget-cache.json'), path.join(dir(), 'update-check.json')]
+    path.join(dir(), 'budget-cache.json'), path.join(dir(), 'update-check.json'),
+    H.sessionScriptPath(), path.join(dir(), 'agent-state.json')]
   let deleted = 0
   for (const f of files) { try { if (fs.existsSync(f)) { fs.unlinkSync(f); deleted++ } } catch {} }
+  try { const hd = path.dirname(H.sessionScriptPath()); if (fs.existsSync(hd) && fs.readdirSync(hd).length === 0) fs.rmdirSync(hd) } catch {}
+  if (fs.existsSync(H.disabledPath())) log('· kept ' + H.disabledPath() + ' (hooks you disabled from the dashboard — restore them by hand if you want them back)')
   try { if (fs.existsSync(dir()) && fs.readdirSync(dir()).length === 0) fs.rmdirSync(dir()) } catch {}
   if (deleted) log('✔ deleted ~/.tokenfin credentials and caches')
 

@@ -18,4 +18,7 @@ describe('ruleCoversLimit (mirrors the alert engine)', () => {
     expect(ruleCoversLimit({ trigger_type: 'limit_breach', project_id: null }, { project_id: null, budget_usd: 0 })).toBe(false)
     expect(ruleCoversLimit({ trigger_type: 'limit_breach', project_id: null }, { scope: 'member', project_id: null, budget_usd: 10 })).toBe(false)
   })
+  it('member limits link once they name the member (migration 024)', () => {
+    expect(ruleCoversLimit({ trigger_type: 'limit_breach', project_id: null }, { scope: 'member', project_id: null, budget_usd: 10, user_id: 'u1' })).toBe(true)
+  })
 })

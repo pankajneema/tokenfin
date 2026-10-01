@@ -73,7 +73,7 @@ function fakeOpenAI() {
 async function harness() {
   const srv = await startMock(() => ({ status: 200 }))
   const tf = new TokenFinClient({ apiKey: 'tfk_test', baseUrl: srv.url, flushIntervalMs: 0, flushOnExit: false })
-  const events = async () => { await tf.flush(); return srv.received.flatMap(r => r.body.events) }
+  const events = async () => { await tf.flush(); return srv.received.filter(r => r.path.startsWith('/api/v1/ingest')).flatMap(r => r.body.events) }
   return { srv, tf, events }
 }
 
@@ -83,6 +83,9 @@ test('anthropic non-streaming: same return value, usage incl. cache tokens, no p
     const { client } = fakeAnthropic()
     const wrapped = wrapAnthropic(client, tf)
     assert.equal(wrapped, client)
+    // Identity holds once the first policy fetch has settled (before that, a
+    // call may wait ≤ policyWaitMs and returns a promise with withResponse()).
+    await tf.policy().ready(1000)
     const p = wrapped.messages.create({ model: 'claude-sonnet-4-6', max_tokens: 10, messages: [{ role: 'user', content: 'secret' }] })
     assert.ok(p instanceof FakeAPIPromise, 'APIPromise identity preserved')
     const { data } = await (p as any).withResponse()

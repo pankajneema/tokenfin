@@ -16,7 +16,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 // Machine-to-machine endpoints authenticate with API keys / CRON_SECRET.
 // They never carry a session cookie, so skip the Supabase round-trip entirely.
 // /.well-known/* is public discovery metadata — no session needed either.
-const KEY_AUTH_API = ['/api/v1/ingest', '/api/otel/', '/api/mcp', '/api/v1/cron/', '/.well-known/', '/api/health']
+const KEY_AUTH_API = ['/api/v1/ingest', '/api/otel/', '/api/mcp', '/api/v1/cron/', '/.well-known/', '/api/health', '/api/v1/sessions/meta', '/api/v1/policy']
 
 export async function middleware(request: NextRequest) {
   if (KEY_AUTH_API.some(p => request.nextUrl.pathname.startsWith(p))) return NextResponse.next()

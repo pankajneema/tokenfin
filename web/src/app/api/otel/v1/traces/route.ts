@@ -30,7 +30,7 @@ import { badBody, ok, retryLater, unauthorized } from '@/lib/otlp/respond'
 import { getOrgPrices } from '@/lib/pricing-overrides'
 import { parseTraceRequest } from '@/lib/otlp/genai'
 import { decodeTraceRequest } from '@/lib/otlp/traces-proto'
-import { dedupeSpans, mirrorable, parentKey, priceSpans, spanRow, usageRowFor } from '@/lib/otlp/traces'
+import { dedupeSpans, mirrorable, parentKey, priceSpans, rowsForCapture, spanRow, usageRowFor } from '@/lib/otlp/traces'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,11 +66,17 @@ export async function POST(req: NextRequest) {
   const userIdOf = (email: string | null) => ctx.userId ?? (email ? members.get(email) ?? null : null)
   const spans = priceSpans(parsed, orgPrices)
 
-  // 1. Spans (tenant-scoped key, idempotent).
-  const rows = spans.map(s => spanRow(ctx.orgId, s, userIdOf(s.usage.userEmail)))
-  for (let i = 0; i < rows.length; i += SPAN_CHUNK) {
-    const { error } = await admin.from('spans').upsert(rows.slice(i, i + SPAN_CHUNK), { onConflict: 'org_id,trace_id,span_id' })
-    if (error) return retryLater('spans upsert', `${error.message}${/column/.test(error.message) ? ' (apply migration 018_traces)' : ''}`)
+  // 1. Spans (tenant-scoped key, idempotent) at the org's capture level:
+  //    'errors' (default) keeps full detail only for traces with an error or
+  //    warning, plus a cost-only skeleton of token-bearing spans; 'all' keeps everything.
+  const capture = ctx.traceCapture ?? 'errors'
+  const rows = rowsForCapture(spans, spans.map(s => spanRow(ctx.orgId, s, userIdOf(s.usage.userEmail))), capture)
+  // Full rows upsert (a replay refreshes them); skeletons never overwrite an existing row.
+  for (const [part, ignoreDuplicates] of [[rows.filter(r => r.detail), false], [rows.filter(r => !r.detail), true]] as const) {
+    for (let i = 0; i < part.length; i += SPAN_CHUNK) {
+      const { error } = await admin.from('spans').upsert(part.slice(i, i + SPAN_CHUNK), { onConflict: 'org_id,trace_id,span_id', ignoreDuplicates })
+      if (error) return retryLater('spans upsert', `${error.message}${/column/.test(error.message) ? ' (apply migrations 018 and 025)' : ''}`)
+    }
   }
 
   // 2. Aggregates: spans that parent a token-bearing span, across every stored
@@ -100,6 +106,9 @@ export async function POST(req: NextRequest) {
   // 4. Trace rollups (leaf usage only, errors, models, user, service) in SQL.
   const { error: traceErr } = await admin.rpc('refresh_traces', { p_org: ctx.orgId, p_trace_ids: traceIds, p_project: projectId })
   if (traceErr) return retryLater('refresh_traces', traceErr.message)
+  // traces.detail: does this trace have any fully kept span (the Traces page lists only those).
+  const { error: detailErr } = await admin.rpc('tf_mark_trace_detail', { p_org: ctx.orgId, p_trace_ids: traceIds })
+  if (detailErr && !/tf_mark_trace_detail/.test(detailErr.message)) console.warn('[otlp/traces] detail flag:', detailErr.message)
 
   return ok()
 }

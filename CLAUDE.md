@@ -92,7 +92,7 @@ prevMap.set(shifted, prev + cost)
 
 Prompts vs LLM calls: count prompts with `countPrompts()` from `lib/prompts.ts` (one CLI prompt = one `correlation_id`; each SDK request = one prompt). Read raw rows with `selectAll()` (`lib/supabase/paginate.ts`, keyset-paged when the select has `created_at,id`) — PostgREST caps a single response at 1,000 rows. Prefer the rollup RPCs in `lib/rollups.ts` for anything aggregate.
 
-Migrations 011–015: 011 rollups + ingest (event ids are org-prefixed; `purge_org_data` covers rollups), 012 keys/access, 013 connectors, 014 FinOps, 015 retention for connector tables, 017 `job_runs` (every cron route runs inside `withJobRun()` from `lib/jobs.ts`; 30-day self-prune), 018 traces (span/trace columns, keyset index, `refresh_traces`), 016 prompt privacy (RLS on `prompt_captures`, `usage_events`, `spans`: owner/admin read all, others only their own rows), 019 `dash_breakdown` returns `prompts` per key (each prompt attributed to one key, so they sum to the total; null for skill / mcp_server / cost_basis). Every migration is idempotent and has a byte-identical copy in `supabase/migrations/2026093000001N_*.sql`.
+Migrations 011–015: 011 rollups + ingest (event ids are org-prefixed; `purge_org_data` covers rollups), 012 keys/access, 013 connectors, 014 FinOps, 015 retention for connector tables, 017 `job_runs` (every cron route runs inside `withJobRun()` from `lib/jobs.ts`; 30-day self-prune), 018 traces (span/trace columns, keyset index, `refresh_traces`), 016 prompt privacy (RLS on `prompt_captures`, `usage_events`, `spans`: owner/admin read all, others only their own rows), 019 `dash_breakdown` returns `prompts` per key, 020 re-prices past Claude Code / Cowork rows at their reported cost, 021 `session_titles` (session names: agent's own title wins, else first line of the first prompt; `tf_set_session_title()`; read with `lib/session-titles.ts`), 023 `session_meta` + `session_tool_calls` (session report: directory, branch, host, agent version, start/end + reason, tool calls per prompt; `lib/session-meta.ts`, `POST /api/v1/sessions/meta` from the Claude Code SessionStart/SessionEnd hooks and the OpenCode plugin, plus OTLP resource attrs + `tool_result` events; tool INPUTS/outputs are never stored), 022 `agent_configs` (`/dashboard/agents`, `/api/v1/agent-configs/**`, `lib/agent-configs`; CLI `config push|pull|show` with redaction on the machine AND the server; changes are pull-based, allow-listed and audited; `setup` also installs Claude Code SessionStart/SessionEnd hooks, opt out with `--no-session-hooks`; see docs/AGENTS_CONFIG.md), 024 per-model limits (`limits.model` prefix filter + metric cost/tokens/requests, basis, `notify_at` default 90 with in-app + email, optional `auto_action` switch_model / block_sdk; `lib/alerts/limits-runner.ts` from the alerts cron and `evaluateLimitsAfterIngest()` after every ingest, once per period via `limit_events`; routes/blocks enforced ONLY by the SDK wrappers via `GET /api/v1/policy` (60 s cache, fail open) and by Agents pending model changes for CLI agents), 025 `organizations.trace_capture` ('errors' default: full span detail only for traces with an error/warning — `problemOf()` in `otlp/genai.ts`; other traces keep a cost-only skeleton of token-bearing spans via `rowsForCapture()`; 'all' keeps everything; `spans.detail`/`traces.detail`, Traces page lists detailed traces only) (each prompt attributed to one key, so they sum to the total; null for skill / mcp_server / cost_basis). Every migration is idempotent and has a byte-identical copy in `supabase/migrations/2026093000001N_*.sql`.
 
 ### `usage_agg` is the central analytics table
 - Pre-aggregated daily by `(org_id, project_id, model, bucket)`
@@ -153,6 +153,9 @@ Migrations 011–015: 011 rollups + ingest (event ids are org-prefixed; `purge_o
 - People who already have a workspace see a "You've been invited" banner (dashboard layout).
 - Pages pick the workspace ONLY via `requireOrgContext()` (never `members … limit(1)`), so the `tf_org` choice is consistent everywhere.
 
+### PostgREST embeds (IMPORTANT)
+Always name the FK when embedding `organizations` from `api_keys`: `organizations!api_keys_org_id_fkey(...)`. A second path (e.g. a table referencing both) makes a bare `organizations(...)` embed ambiguous (PGRST201) and breaks every key lookup.
+
 ### Key security model (IMPORTANT)
 - API keys are stored ONLY as `key_hash` (SHA-256) + a **masked** `key_prefix` (e.g. `tfk_prod_abc1_…c05a`). The raw key is returned **once** in the POST response, never again.
 - Bulk-provisioned keys are delivered via single-use, expiring, AES-256-GCM reveal links (`/keys/reveal/[token]`). Needs `KEY_ENCRYPTION_SECRET` env + migration 012 (`key_reveals` table, `api_keys.is_service_account`).
@@ -181,6 +184,13 @@ removed — see `MIGRATION.md`). `npx tokenfin setup` writes an OTel `env` block
   row; `persist.ts` upserts with `ON CONFLICT (event_id) DO NOTHING` (idempotent; replays are no-ops).
   Metrics (`claude_code.token.usage`) are cumulative counters of the same tokens → health-only,
   never persisted (would double-count).
+- **Cost of a CLI-agent event**: Claude Code and Cowork report each call's exact `cost_usd` (they know the
+  5-minute 1.25× vs 1-hour 2× cache-write split that `cache_creation_tokens` hides) → we store THEIR figure
+  (`trustsVendorCost()` in `otlp/normalize.ts`, only when within 10× of list price; org price overrides still win).
+  Every other source is priced server-side from `lib/mcp/pricing.ts`; the client figure is kept as `vendor_cost_usd`.
+- **Prompts are stored and shown in FULL**: no truncation on ingest (logs, SDK, trace content attributes) and the
+  UI renders the complete text with `components/dashboard/prompt-text.tsx` (no clamp / max-height). Session
+  pages group calls by prompt, one card each; prompt rows elsewhere link to `/dashboard/sessions/<id>#prompt-<key>`.
 - **cost_basis**: CLI-agent usage is `notional` (subscription usage priced at API rates — NOT a
   bill; never summed into a metered total). `metered`/`vendor_reported` come with pull connectors.
 - **Mapping is versioned in one file** (`otlp/mapping.ts`); unrecognized metric names are logged,
@@ -190,6 +200,11 @@ removed — see `MIGRATION.md`). `npx tokenfin setup` writes an OTel `env` block
   `<app>/api/otel`, protocol `http/json`, headers `Authorization=Bearer <ingest key>`. Events are bare
   `api_request` / `user_prompt` / `tool_result` with `service.name=cowork` → source `cowork`, notional,
   attributed by `user.email`. Shown on /dashboard/setup (Desktop & chat).
+- **OpenCode** = first-party plugin `plugins/opencode/tokenfin.js` (installed by `setup` into
+  `~/.config/opencode/plugin/`; keep `cli/assets/opencode-tokenfin.js` byte-identical). One row per completed
+  assistant message via `/api/v1/ingest/batch`: all token types incl. cache + reasoning, session id, prompt id
+  (= user message id) and the full prompt text. `AGENT_SOURCES` in `ingest/_core.ts` is the only way a client
+  may send `cost_basis: notional`. The old opencode-otel-plugin metrics path in `otlp/metrics.ts` is legacy.
 - **Codex/Gemini (Phase 4, needs a real-session confirm)**: they report tokens only as metric
   counters. `otlp/metrics.ts` derives per-turn rows by cumulative-diffing (first-seen = baseline,
   emit nothing). `setup` writes `~/.codex/config.toml` (`[otel]`, user-level, `metrics_exporter=otlp-http`

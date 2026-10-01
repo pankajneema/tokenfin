@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { Search, ArrowUpDown, Terminal, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SessionSummary, SessionsMeta } from './page'
+import { untitledLabel } from '@/lib/session-titles'
 
 type SortKey = 'start' | 'durationMs' | 'prompts' | 'calls' | 'tokens' | 'cost' | 'cacheHitPct'
 
@@ -21,6 +22,8 @@ const fmtDuration = (ms: number) => {
 const fmtWhen = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
 const DAY_OPTIONS = [7, 30, 90]
+/** "/Users/dev/code/acme-app" → "code/acme-app" */
+const dirName = (p: string) => p.replace(/\/+$/, '').split(/[\\/]/).slice(-2).join('/')
 
 export function SessionsClient({ sessions, meta }: { sessions: SessionSummary[]; meta: SessionsMeta }) {
   const router = useRouter()
@@ -34,7 +37,7 @@ export function SessionsClient({ sessions, meta }: { sessions: SessionSummary[];
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase()
     const list = s ? sessions.filter(x =>
-      x.id.toLowerCase().includes(s) || x.user.toLowerCase().includes(s) || x.repo.toLowerCase().includes(s) ||
+      x.id.toLowerCase().includes(s) || (x.title ?? '').toLowerCase().includes(s) || (x.cwd ?? '').toLowerCase().includes(s) || (x.branch ?? '').toLowerCase().includes(s) || x.user.toLowerCase().includes(s) || x.repo.toLowerCase().includes(s) ||
       x.source.toLowerCase().includes(s) || x.models.some(m => m.model.toLowerCase().includes(s))) : sessions
     return [...list].sort((a, b) => {
       const va = a[sort.k] ?? -1, vb = b[sort.k] ?? -1
@@ -44,7 +47,7 @@ export function SessionsClient({ sessions, meta }: { sessions: SessionSummary[];
   }, [sessions, q, sort])
 
   const cols: { k: SortKey | null; label: string; right?: boolean }[] = [
-    { k: 'start', label: 'Started' },
+    { k: 'start', label: 'Session' },
     { k: null, label: 'User' },
     { k: 'durationMs', label: 'Duration', right: true },
     { k: null, label: 'Models' },
@@ -93,7 +96,7 @@ export function SessionsClient({ sessions, meta }: { sessions: SessionSummary[];
           <div className="relative max-w-sm mb-4">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--fg-tertiary)]" />
             <input value={q} onChange={e => { setQ(e.target.value); setLimit(PAGE) }}
-              placeholder="Search this page: user, model, repo, source, session id…" className="input pl-8 text-[13px] py-2 w-full" />
+              placeholder="Search: name, folder, branch, user, model, repo, source…" className="input pl-8 text-[13px] py-2 w-full" />
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-[12px]">
@@ -115,9 +118,16 @@ export function SessionsClient({ sessions, meta }: { sessions: SessionSummary[];
               <tbody>
                 {filtered.slice(0, limit).map(s => (
                   <tr key={s.id} className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--bg-secondary)] group">
-                    <td className="py-2 pr-2 whitespace-nowrap">
-                      <Link href={`/dashboard/sessions/${encodeURIComponent(s.id)}`} className="font-semibold text-[var(--fg)] group-hover:text-coral">{fmtWhen(s.start)}</Link>
-                      <p className="text-[10px] font-mono text-[var(--fg-tertiary)]">{s.id.slice(0, 12)}</p>
+                    <td className="py-2 pr-2 min-w-[220px] max-w-[380px]">
+                      <Link href={`/dashboard/sessions/${encodeURIComponent(s.id)}`} title={s.title ?? undefined}
+                        className={cn('block truncate font-semibold group-hover:text-coral', s.title ? 'text-[var(--fg)]' : 'text-[var(--fg-secondary)] italic')}>
+                        {s.title ?? untitledLabel(s.id)}
+                      </Link>
+                      <p className="text-[10.5px] text-[var(--fg-tertiary)] truncate" title={s.cwd ?? undefined}>
+                        {fmtWhen(s.start)}
+                        {s.cwd ? <> · <span className="font-mono">{dirName(s.cwd)}</span></> : <> · <span className="font-mono">{s.id.slice(0, 12)}</span></>}
+                        {s.branch && <> · <span className="font-mono">{s.branch}</span></>}
+                      </p>
                     </td>
                     <td className="py-2 px-2 truncate max-w-[180px] text-[var(--fg-secondary)]">{s.user}</td>
                     <td className="py-2 px-2 text-right tabular-nums">{fmtDuration(s.durationMs)}</td>

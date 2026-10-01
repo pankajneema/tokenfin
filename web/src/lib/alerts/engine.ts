@@ -3,12 +3,14 @@
  * channels. Used by the cron sweep (all orgs) and the "Test fire" button
  * (single rule). Server-only. Fail-open delivery (see notify/send).
  */
-import { sendEmail, sendSlack, sendWebhook } from '@/lib/notify/send'
+import { sendSlack, sendWebhook } from '@/lib/notify/send'
+import { sendAlertEmail } from './email'
+import { zonedMidnightUtc, periodWindow } from './period'
 import { selectAll } from '@/lib/supabase/paginate'
 import { integrationUrl } from '@/lib/integrations/config'
 
 import { detectAnomalies, parseAnomalyScope, type AnomalyScope } from './anomaly'
-import { dailyTotals, runRate, forecastLimit, periodStartDay, type Period } from './forecast'
+import { dailyTotals, runRate, forecastLimit, type Period } from './forecast'
 import { resolvePrefs, categoryFor, wantsEmail, wantsInapp, type NotifPrefs } from './prefs'
 
 type Admin = ReturnType<typeof import('@/lib/supabase/server')['createAdminClient']>
@@ -35,6 +37,8 @@ export interface CtxEvent {
 
 export interface CtxLimit {
   scope: string; project_id: string | null; team_id?: string | null
+  /** member limits (migration 024) */
+  user_id?: string | null
   period?: Period; budget_usd: number; warn_at: number; block_at?: number
 }
 
@@ -60,22 +64,33 @@ export interface OrgCtx {
 
 export interface Evaluation { message: string; critical: boolean }
 
-const today = () => new Date().toISOString().slice(0, 10)
 const monthStart = () => { const n = new Date(); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), 1)).toISOString().slice(0, 10) }
-const weekAgo = () => new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10)
 const usd = (n: number) => `$${n.toFixed(2)}`
 
 export function inferWindow(condition: string | null): Window {
   const c = (condition || '').toLowerCase()
-  if (c.includes('day')) return 'daily'
+  // The Alerts UI writes "Daily spend > $X" — "daily" does not contain "day".
+  if (c.includes('day') || c.includes('daily')) return 'daily'
   if (c.includes('week')) return 'weekly'
   return 'monthly'
 }
 
-function windowSpend(ctx: OrgCtx, projectId: string | null, w: Window): number {
-  const fromTs = (w === 'daily' ? today() : w === 'weekly' ? weekAgo() : monthStart()) + 'T00:00:00Z'
+/**
+ * First instant of the current calendar window in the org time zone (local
+ * midnight): today, this ISO week (Monday), this month — the same periods the
+ * Limits page and the limit sweep (./period) use.
+ */
+export function windowStartIso(w: Window, now: Date, tz: string): string {
+  return zonedMidnightUtc(periodWindow(w, now, tz).fromDay, tz).toISOString()
+}
+
+/** created_at strings from PostgREST carry "+00:00"; compare as instants. */
+const since = (fromIso: string) => { const t = Date.parse(fromIso); return (e: { created_at: string }) => Date.parse(e.created_at) >= t }
+
+function windowSpend(ctx: OrgCtx, projectId: string | null, w: Window, now: Date = new Date()): number {
+  const after = since(windowStartIso(w, now, ctx.timezone || 'UTC'))
   return +ctx.events
-    .filter(r => r.created_at >= fromTs && (projectId ? r.project_id === projectId : true))
+    .filter(r => after(r) && (projectId ? r.project_id === projectId : true))
     .reduce((s, r) => s + Number(r.cost_usd), 0)
     .toFixed(4)
 }
@@ -88,18 +103,20 @@ function limitEvents(ctx: OrgCtx, l: CtxLimit): CtxEvent[] | null {
     const users = new Set(ctx.members.filter(m => m.team_id && m.team_id === l.team_id).map(m => m.user_id))
     return ctx.events.filter(e => e.user_id && users.has(e.user_id))
   }
-  return null // member limits have no member id yet
+  if (l.scope === 'member' && l.user_id) return ctx.events.filter(e => e.user_id === l.user_id)
+  return null // member limit created before migration 024 (no member id)
 }
 
 function limitLabel(ctx: OrgCtx, l: CtxLimit): string {
   if (l.scope === 'project') return ctx.projectName.get(l.project_id ?? '') ?? 'project'
   if (l.scope === 'team') return 'team'
+  if (l.scope === 'member') return ctx.emailByUser.get(l.user_id ?? '') ?? 'member'
   return 'org'
 }
 
-function periodSpend(evs: CtxEvent[], period: Period): number {
-  const fromTs = periodStartDay(period) + 'T00:00:00Z'
-  return evs.filter(e => e.created_at >= fromTs).reduce((s, e) => s + Number(e.cost_usd), 0)
+function periodSpend(evs: CtxEvent[], period: Period, tz: string, now: Date = new Date()): number {
+  const after = since(windowStartIso(period, now, tz))
+  return evs.filter(after).reduce((s, e) => s + Number(e.cost_usd), 0)
 }
 
 export interface LimitSnapshot {
@@ -118,7 +135,7 @@ export function limitSnapshots(ctx: OrgCtx, now: Date = new Date(), projectId: s
     const evs = limitEvents(ctx, l)
     if (!evs) continue
     const period = l.period ?? 'monthly'
-    const spent = periodSpend(evs, period)
+    const spent = periodSpend(evs, period, ctx.timezone || 'UTC', now)
     out.push({
       label: limitLabel(ctx, l), scope: l.scope, project_id: l.project_id, period, budget,
       spent: +spent.toFixed(4), pct: (spent / budget) * 100,
@@ -142,7 +159,7 @@ export function evaluateRuleDetailed(rule: AlertRule, ctx: OrgCtx, now: Date = n
   if (rule.trigger_type === 'threshold') {
     if (rule.threshold == null) return null
     const w = inferWindow(rule.condition)
-    const spent = windowSpend(ctx, rule.project_id, w)
+    const spent = windowSpend(ctx, rule.project_id, w, now)
     return spent >= rule.threshold
       ? ok(`${scopeLabel} ${w} spend has reached $${spent.toFixed(2)}, crossing your $${rule.threshold} alert.`)
       : null
@@ -173,7 +190,7 @@ export function evaluateRuleDetailed(rule: AlertRule, ctx: OrgCtx, now: Date = n
       const evs = limitEvents(ctx, l)
       if (!evs) continue
       const period = l.period ?? 'monthly'
-      const spent = periodSpend(evs, period)
+      const spent = periodSpend(evs, period, ctx.timezone || 'UTC', now)
       const pct = (spent / l.budget_usd) * 100
       // A percent threshold on the rule (Limits → Add alert) overrides warn_at.
       const trigger = rule.threshold != null && rule.threshold > 0 && rule.threshold <= 1000 ? rule.threshold : (l.warn_at ?? 80)
@@ -275,7 +292,7 @@ export async function deliverAlert(admin: Admin, rule: AlertRule, ctx: OrgCtx, m
     const uids = opts.test ? ctx.adminUserIds : ctx.adminUserIds.filter(uid => wantsEmail(prefsOf(uid), cat, critical, now, tz))
     const emails = uids.map(uid => ctx.emailByUser.get(uid)).filter(Boolean) as string[]
     results.email = emails.length
-      ? await sendEmail(emails, `TokenFin ${critical ? 'CRITICAL ' : ''}alert: ${rule.name}`, message)
+      ? await sendAlertEmail(emails, `TokenFin ${critical ? 'CRITICAL ' : ''}alert: ${rule.name}`, message)
       : { sent: false, reason: 'all recipients opted out or in quiet hours' }
   }
   if (ch.slack) results.slack = await sendSlack(ctx.slackUrl, `:rotating_light: *${title}*\n${message}`)
@@ -291,7 +308,10 @@ export async function buildOrgCtx(admin: Admin, orgId: string, emailByUser: Map<
   const [{ data: events }, { data: members }, { data: limits }, { data: projects }, { data: integ }] = await Promise.all([
     selectAll(() => admin.from('usage_events').select('id, correlation_id, user_id, user_email, project_id, model, cost_basis, cost_usd, created_at').eq('org_id', orgId).gte('created_at', sinceTs)),
     admin.from('members').select('user_id, role, team_id').eq('org_id', orgId),
-    admin.from('limits').select('scope, project_id, team_id, period, budget_usd, warn_at, block_at').eq('org_id', orgId).eq('is_active', true),
+    // select('*'): user_id arrives with migration 024. Only legacy dollar
+    // budgets (budget_usd > 0: no model filter, cost metric) are evaluated
+    // here; per-model / token / request limits run in ./limits-runner.
+    admin.from('limits').select('*').eq('org_id', orgId).eq('is_active', true).gt('budget_usd', 0),
     admin.from('projects').select('id, name').eq('org_id', orgId),
     admin.from('org_integrations').select('provider, config, detail, status').eq('org_id', orgId).eq('is_active', true),
   ])

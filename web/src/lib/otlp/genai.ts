@@ -76,6 +76,9 @@ export const isContentKey = (key: string): boolean => CONTENT_KEY.test(key)
 
 const MAX_ATTRS = 256
 const MAX_STRING = 4096
+// Prompt / completion content is kept in FULL (the request body is already
+// capped at 8 MB by the receiver); only other attributes are trimmed.
+const MAX_CONTENT_STRING = Number.POSITIVE_INFINITY
 
 // ── OTLP value helpers (arrays / kvlists too) ────────────────────────────────
 export function anyValue(v: any): unknown {
@@ -164,14 +167,14 @@ export function nanosToMs(n: unknown): number | null {
 }
 
 // ── attributes: redaction + prompt-capture ──────────────────────────────────
-function cleanValue(v: unknown): unknown {
+function cleanValue(v: unknown, max = MAX_STRING): unknown {
   if (typeof v === 'string') {
     const r = redact(v)
-    return r.length > MAX_STRING ? `${r.slice(0, MAX_STRING)}…[truncated]` : r
+    return r.length > max ? `${r.slice(0, max)}…[truncated]` : r
   }
   if (Array.isArray(v) || (v && typeof v === 'object')) {
     let json = JSON.stringify(v)
-    if (json.length > MAX_STRING) return `${redact(json.slice(0, MAX_STRING))}…[truncated]`
+    if (json.length > max) return `${redact(json.slice(0, max))}…[truncated]`
     json = redact(json)
     try { return JSON.parse(json) } catch { return json }
   }
@@ -189,7 +192,7 @@ export function sanitizeAttributes(a: Record<string, unknown>, capture: boolean)
     if (v === undefined) continue
     if (!capture && isContentKey(k)) continue
     if (++n > MAX_ATTRS) { out['tokenfin.attributes_truncated'] = true; break }
-    out[k] = cleanValue(v)
+    out[k] = cleanValue(v, isContentKey(k) ? MAX_CONTENT_STRING : MAX_STRING)
   }
   return out
 }
@@ -275,6 +278,30 @@ export interface ParsedSpan {
   source: string
   usage: GenAiUsage
   attributes: Record<string, unknown>
+  /** 'error' | 'warning' when the span signals a problem (kept in full under trace_capture='errors'); else null */
+  problem: 'error' | 'warning' | null
+}
+
+const WARN_LEVEL = /^(warn|warning|error|err|fatal|critical|severe)$/i
+const WARN_FINISH = /^(length|max_tokens|content_filter|safety|refusal|error|recitation|blocklist|prohibited_content)$/i
+
+/**
+ * Error: OTel status ERROR (incl. error.type / exception events, folded into statusCode).
+ * Warning: an HTTP status >= 400, a warn+ log level / severity attribute, a model
+ * response that stopped for length / safety / refusal, or an explicit tokenfin.warning.
+ */
+export function problemOf(statusCode: number, raw: Record<string, unknown>, hasException: boolean): 'error' | 'warning' | null {
+  if (statusCode === 2 || hasException) return 'error'
+  const http = Number(raw['http.response.status_code'] ?? raw['http.status_code'])
+  if (Number.isFinite(http) && http >= 400) return 'warning'
+  for (const k of ['log.level', 'level', 'severity', 'severity_text', 'log.severity']) {
+    if (typeof raw[k] === 'string' && WARN_LEVEL.test(String(raw[k]).trim())) return 'warning'
+  }
+  const fr = raw['gen_ai.response.finish_reasons'] ?? raw['gen_ai.response.finish_reason'] ?? raw['llm.finish_reason']
+  const reasons = Array.isArray(fr) ? fr : fr == null ? [] : [fr]
+  if (reasons.some(r => WARN_FINISH.test(String(r).trim()))) return 'warning'
+  if (raw['tokenfin.warning'] === true || raw['tokenfin.warning'] === 'true') return 'warning'
+  return null
 }
 
 export interface ParseOpts { capturePrompts: boolean }
@@ -322,6 +349,7 @@ export function parseSpan(sp: any, res: Record<string, unknown>, scope: any, opt
     source: agentSourceOf(res),
     usage,
     attributes: sanitizeAttributes(keep, opts.capturePrompts),
+    problem: problemOf(statusCode, raw, !!exception),
   }
 }
 

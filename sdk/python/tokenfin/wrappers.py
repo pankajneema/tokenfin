@@ -16,10 +16,13 @@ inside TokenFin is swallowed; SDK errors propagate unchanged.
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
+
+from .policy import TokenFinPolicyError
 
 logger = logging.getLogger("tokenfin")
 
@@ -28,10 +31,12 @@ _OBS = "_tokenfin_observer"
 
 
 class _Opts:
-    def __init__(self, capture_prompts: bool = False, max_prompt_chars: int = 4000,
+    def __init__(self, capture_prompts: bool = False, max_prompt_chars: Optional[int] = None,
                  project_id: Optional[str] = None, user_email: Optional[str] = None,
                  session_id: Optional[str] = None, tags: Optional[Dict[str, str]] = None,
-                 metadata: Optional[Dict[str, Any]] = None, source: str = "sdk") -> None:
+                 metadata: Optional[Dict[str, Any]] = None, source: str = "sdk",
+                 route_models: bool = True, enforce_policy: bool = False,
+                 policy_wait_ms: float = 200) -> None:
         self.capture_prompts = capture_prompts
         self.max_prompt_chars = max_prompt_chars
         self.project_id = project_id
@@ -40,6 +45,41 @@ class _Opts:
         self.tags = tags
         self.metadata = metadata
         self.source = source
+        self.route_models = route_models
+        self.enforce_policy = enforce_policy
+        self.policy_wait_ms = policy_wait_ms
+
+
+class _Gate:
+    """Model routes / blocks from the org policy (tf.policy()). Fail open."""
+
+    def __init__(self, tf: Any, opts: _Opts) -> None:
+        self.opts = opts
+        self.pm = tf.policy()
+        self.pm.refresh()  # prefetch in the background
+
+    @staticmethod
+    def make(tf: Any, opts: _Opts) -> Optional["_Gate"]:
+        if not opts.route_models and not opts.enforce_policy:
+            return None
+        try:
+            return _Gate(tf, opts) if callable(getattr(tf, "policy", None)) else None
+        except Exception:
+            return None
+
+    def apply(self, kwargs: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+        try:
+            return self.pm.apply(kwargs, self.opts.route_models, self.opts.enforce_policy)
+        except TokenFinPolicyError:
+            raise
+        except Exception:
+            return kwargs, None
+
+    def wait_seconds(self) -> float:
+        try:
+            return 0.0 if self.pm.settled else max(0.0, float(self.opts.policy_wait_ms) / 1000.0)
+        except Exception:
+            return 0.0
 
 
 def _g(obj: Any, key: str) -> Any:
@@ -149,9 +189,10 @@ class _OpenAIResponsesCollector(_Collector):
 
 class _Observer:
     def __init__(self, tf: Any, opts: _Opts, provider: str, params: Dict[str, Any],
-                 collector: _Collector, started: float) -> None:
+                 collector: _Collector, started: float, routed_from: Optional[str] = None) -> None:
         self.tf, self.opts, self.provider, self.params = tf, opts, provider, params
         self.collector, self.started = collector, started
+        self.routed_from = routed_from
         self.done = False
         self.first_at: Optional[float] = None
 
@@ -172,6 +213,8 @@ class _Observer:
             if not u or sum(u.values()) <= 0:
                 return
             meta: Dict[str, Any] = dict(self.opts.metadata or {})
+            if self.routed_from:
+                meta["routed_from"] = self.routed_from
             meta.update(extra or {})
             if self.first_at is not None:
                 meta["ttft_ms"] = round((self.first_at - self.started) * 1000)
@@ -186,7 +229,9 @@ class _Observer:
             if self.opts.capture_prompts:
                 text = last_user_text(self.params)
                 if text:
-                    fields["prompt_text"] = text[: self.opts.max_prompt_chars]
+                    # Full prompt by default; max_prompt_chars caps it only when set.
+                    m = self.opts.max_prompt_chars
+                    fields["prompt_text"] = text[:m] if m and m > 0 else text
             model = self.collector.model or self.params.get("model") or "unknown"
             self.tf.track(str(model), u["input"], u["output"], **fields)
         except Exception as e:
@@ -318,24 +363,37 @@ def _observe(value: Any, obs: _Observer) -> Any:
 Prepare = Callable[[Dict[str, Any]], Tuple[Dict[str, Any], bool]]
 
 
+def _is_async(fn: Any) -> bool:
+    """async def, or a sync decorator around one (openai's @required_args keeps __wrapped__)."""
+    seen = 0
+    while fn is not None and seen < 5:
+        if inspect.iscoroutinefunction(fn):
+            return True
+        fn, seen = getattr(fn, "__wrapped__", None), seen + 1
+    return False
+
+
 def _patch(target: Any, name: str, tf: Any, opts: _Opts, provider: str,
-           make_collector: Callable[[bool], _Collector], prepare: Optional[Prepare] = None) -> None:
+           make_collector: Callable[[bool], _Collector], prepare: Optional[Prepare] = None,
+           gate: Optional[_Gate] = None) -> None:
     orig = getattr(target, name, None) if target is not None else None
     if orig is None or not callable(orig) or getattr(orig, _MARK, False):
         return
+    is_async = _is_async(orig)
 
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        call_kwargs, injected = kwargs, False
+    def invoke(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+        routed, routed_from = gate.apply(kwargs) if gate is not None else (kwargs, None)
+        call_kwargs, injected = routed, False
         if prepare is not None:
             try:
-                call_kwargs, injected = prepare(kwargs)
+                call_kwargs, injected = prepare(routed)
             except Exception:
-                call_kwargs, injected = kwargs, False
+                call_kwargs, injected = routed, False
         started = time.monotonic()
         result = orig(*args, **call_kwargs)  # SDK errors propagate unchanged
 
         def make_obs() -> _Observer:
-            return _Observer(tf, opts, provider, kwargs, make_collector(injected), started)
+            return _Observer(tf, opts, provider, routed, make_collector(injected), started, routed_from)
 
         if inspect.isawaitable(result):
             async def awaited() -> Any:
@@ -344,13 +402,33 @@ def _patch(target: Any, name: str, tf: Any, opts: _Opts, provider: str,
             return awaited()
         return _observe(result, make_obs())
 
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        wait = gate.wait_seconds() if gate is not None else 0.0
+        if wait <= 0:
+            return invoke(args, kwargs)
+        if is_async:
+            # Wait for the first policy fetch without blocking the event loop.
+            async def deferred() -> Any:
+                try:
+                    await asyncio.get_running_loop().run_in_executor(None, gate.pm.ready, wait)  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                r = invoke(args, kwargs)
+                return await r if inspect.isawaitable(r) else r
+            return deferred()
+        try:
+            gate.pm.ready(wait)  # type: ignore[union-attr]
+        except Exception:
+            pass
+        return invoke(args, kwargs)
+
     setattr(wrapper, _MARK, True)
     wrapper.__wrapped__ = orig  # type: ignore[attr-defined]
     wrapper.__doc__ = getattr(orig, "__doc__", None)
     setattr(target, name, wrapper)
 
 
-def _patch_stream_manager(target: Any, tf: Any, opts: _Opts) -> None:
+def _patch_stream_manager(target: Any, tf: Any, opts: _Opts, gate: Optional[_Gate] = None) -> None:
     """Anthropic `messages.stream()` bypasses `create`; record from the final snapshot on exit."""
     orig = getattr(target, "stream", None) if target is not None else None
     if orig is None or not callable(orig) or getattr(orig, _MARK, False):
@@ -382,9 +460,11 @@ def _patch_stream_manager(target: Any, tf: Any, opts: _Opts) -> None:
         return await super(type(self), self).__aexit__(*exc)  # type: ignore[misc]
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        mgr = orig(*args, **kwargs)
+        # Routing uses the policy already fetched (a stream manager never waits).
+        routed, routed_from = gate.apply(kwargs) if gate is not None else (kwargs, None)
+        mgr = orig(*args, **routed)
         try:
-            mgr.__dict__[_OBS] = _Observer(tf, opts, "anthropic", kwargs, _AnthropicCollector(), time.monotonic())
+            mgr.__dict__[_OBS] = _Observer(tf, opts, "anthropic", routed, _AnthropicCollector(), time.monotonic(), routed_from)
             body: Dict[str, Any] = {}
             if hasattr(type(mgr), "__exit__"):
                 body["__exit__"] = __exit__
@@ -408,15 +488,19 @@ def wrap_anthropic(client: Any, tf: Any, **options: Any) -> Any:
     Instrument an ``Anthropic`` / ``AsyncAnthropic`` client in place.
 
     Options: capture_prompts (default False), max_prompt_chars, project_id,
-    user_email, session_id, tags, metadata, source.
+    user_email, session_id, tags, metadata, source, route_models (default True:
+    rewrite ``model`` per the org's model routes), enforce_policy (default False:
+    raise TokenFinPolicyError for blocked models), policy_wait_ms (default 200:
+    longest the first call waits for the policy).
     """
     try:
         opts = _Opts(**options)
+        gate = _Gate.make(tf, opts)
         messages = getattr(client, "messages", None)
-        _patch(messages, "create", tf, opts, "anthropic", lambda _i: _AnthropicCollector())
-        _patch_stream_manager(messages, tf, opts)
+        _patch(messages, "create", tf, opts, "anthropic", lambda _i: _AnthropicCollector(), gate=gate)
+        _patch_stream_manager(messages, tf, opts, gate)
         beta_messages = getattr(getattr(client, "beta", None), "messages", None)
-        _patch(beta_messages, "create", tf, opts, "anthropic", lambda _i: _AnthropicCollector())
+        _patch(beta_messages, "create", tf, opts, "anthropic", lambda _i: _AnthropicCollector(), gate=gate)
     except Exception as e:
         logger.debug("wrap_anthropic failed: %s", e)
     return client
@@ -441,10 +525,11 @@ def wrap_openai(client: Any, tf: Any, **options: Any) -> Any:
     """
     try:
         opts = _Opts(**options)
+        gate = _Gate.make(tf, opts)
         completions = getattr(getattr(client, "chat", None), "completions", None)
-        _patch(completions, "create", tf, opts, "openai", lambda inj: _OpenAIChatCollector(inj), _openai_prepare)
+        _patch(completions, "create", tf, opts, "openai", lambda inj: _OpenAIChatCollector(inj), _openai_prepare, gate)
         _patch(getattr(client, "responses", None), "create", tf, opts, "openai",
-               lambda _i: _OpenAIResponsesCollector())
+               lambda _i: _OpenAIResponsesCollector(), gate=gate)
     except Exception as e:
         logger.debug("wrap_openai failed: %s", e)
     return client

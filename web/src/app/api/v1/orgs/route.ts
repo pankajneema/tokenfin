@@ -91,6 +91,8 @@ export async function PATCH(req: NextRequest) {
     timezone: z.string().max(64).refine(isValidTimeZone, 'Unknown time zone').optional(),
     // Privacy switch: when false, prompt text is dropped on arrival (usage is still recorded).
     capture_prompts: z.boolean().optional(),
+    // Traces: 'errors' keeps full span detail only for traces with an error / warning.
+    trace_capture: z.enum(['errors', 'all']).optional(),
   }).strict()
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
@@ -118,8 +120,8 @@ export async function PATCH(req: NextRequest) {
   if (error) return dbError(error, 'PATCH orgs')
   if (fields.timezone) clearOrgTimezone(org_id)
   // Key lookups cache the org's timezone + capture_prompts alongside the key.
-  if (fields.timezone || fields.capture_prompts !== undefined) invalidateKeyCache()
-  await audit({ orgId: org_id, actorUserId: guard.userId, action: fields.timezone ? 'org.timezone' : fields.capture_prompts !== undefined ? 'org.privacy' : 'org.update', targetType: 'organization', targetId: org_id, details: fields })
+  if (fields.timezone || fields.capture_prompts !== undefined || fields.trace_capture !== undefined) invalidateKeyCache()
+  await audit({ orgId: org_id, actorUserId: guard.userId, action: fields.timezone ? 'org.timezone' : fields.capture_prompts !== undefined || fields.trace_capture !== undefined ? 'org.privacy' : 'org.update', targetType: 'organization', targetId: org_id, details: fields })
   return NextResponse.json(data)
 }
 

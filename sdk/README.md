@@ -115,9 +115,36 @@ process.on('SIGTERM', async () => { await tf.shutdown(); process.exit(0) })
 | `timeoutMs` | `5000` | per request |
 | `flushOnExit` | `true` | flush on `beforeExit` |
 | `debug` | `false` | `console.debug` logging |
+| `policyTtlMs` | `60000` | how often the wrappers re-read the org policy |
 
 Wrapper options: `capturePrompts` (default `false`), `maxPromptChars`, `projectId`,
-`userEmail`, `sessionId`, `tags`, `metadata`, `source`.
+`userEmail`, `sessionId`, `tags`, `metadata`, `source`, `routeModels` (default `true`),
+`enforcePolicy` (default `false`), `policyWaitMs` (default `200`).
+
+### Model routes and limits (policy)
+
+The wrappers read your org's policy from `GET /api/v1/policy` (the same key you ingest with)
+in the background and refresh it every 60 s. They **fail open**: no policy, an error or an older
+server leaves every call unchanged.
+
+- **Routes** — when a model route is active (added on the Limits page, or switched on
+  automatically when a per-model limit with *Switch model* is reached), the wrapper rewrites
+  `model` before the call and records `metadata.routed_from` on the event. `routeModels: false`
+  turns this off.
+- **Blocks** — a limit with *Block in SDKs* adds the model to `blocked_models`. Only apps that
+  opt in with `enforcePolicy: true` refuse such calls, with a `TokenFinPolicyError`
+  (`err.model`, `err.code === 'model_blocked'`):
+
+```ts
+import { wrapAnthropic, TokenFinPolicyError } from '@tokenfin/sdk'
+const anthropic = wrapAnthropic(new Anthropic(), tf, { enforcePolicy: true })
+try { await anthropic.messages.create({ model: 'claude-opus-4-8', max_tokens: 512, messages }) }
+catch (e) { if (e instanceof TokenFinPolicyError) { /* fall back to another model */ } else throw e }
+```
+
+The fetch starts when you wrap the client. A call made before the first fetch finishes waits
+at most `policyWaitMs` (200 ms); during that short window the wrapper returns a promise that
+still offers `withResponse()` / `asResponse()`. `await tf.policy().ready()` waits explicitly.
 
 ---
 
@@ -173,7 +200,10 @@ await tf.shutdown()                 # e.g. in your FastAPI lifespan
 
 The Python config uses the same options in snake_case (`base_url`, `batch_size`, `flush_interval`
 in seconds, `max_queue_size`, `max_retries`, `max_retry_after`, `timeout`, `flush_on_exit`,
-`debug`). It drains the queue with `atexit` and installs no signal handlers.
+`debug`, `policy_ttl`). It drains the queue with `atexit` and installs no signal handlers.
+The wrappers take `route_models=True`, `enforce_policy=False` and `policy_wait_ms=200`, and raise
+`tokenfin.TokenFinPolicyError` for blocked models when `enforce_policy=True` (see *Model routes
+and limits* above; the policy is fetched on a background thread).
 
 ---
 

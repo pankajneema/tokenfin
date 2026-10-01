@@ -48,6 +48,35 @@ export function spanRow(orgId: string, s: PricedSpan, userId: string | null): Re
   }
 }
 
+/**
+ * Rows to store under the org's trace capture level.
+ *   'all'    — every span in full.
+ *   'errors' — full detail for every span of a trace that has an error or warning
+ *              span in this export; for other traces only a cost skeleton of the
+ *              token-bearing spans (ids, parent, model, tokens, cost, timing — no
+ *              attributes, no status text) so leaf detection across exports and
+ *              cost stay exact; spans with neither are dropped.
+ */
+export function rowsForCapture<T extends Record<string, unknown>>(
+  spans: Array<{ traceId: string; problem: 'error' | 'warning' | null; usage: { total: number }; source?: string }>,
+  rows: T[],
+  capture: 'errors' | 'all',
+): Array<T & { detail: boolean }> {
+  const problemTraces = new Set(spans.filter(s => s.problem).map(s => s.traceId))
+  const out: Array<T & { detail: boolean }> = []
+  spans.forEach((s, i) => {
+    // A coding agent's OWN internal tracing (OpenCode exports every SQL query,
+    // session lookup and HTTP call when OTEL_EXPORTER_OTLP_ENDPOINT is set) is
+    // noise: its usage comes from logs / metrics / the plugin. Keep only its
+    // problem traces, whatever the capture level.
+    const agentNoise = !!s.source && s.source !== 'otlp' && !problemTraces.has(s.traceId) && s.usage.total <= 0
+    if (agentNoise) return
+    if (capture === 'all' || problemTraces.has(s.traceId)) out.push({ ...rows[i], detail: true })
+    else if (s.usage.total > 0) out.push({ ...rows[i], attributes: {}, status_message: null, user_email: null, detail: false })
+  })
+  return out
+}
+
 /** "trace|span" keys of spans that parent a token-bearing span. */
 export const parentKey = (traceId: string, spanId: string) => `${traceId}|${spanId}`
 

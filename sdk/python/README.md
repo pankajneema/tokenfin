@@ -57,6 +57,25 @@ and network errors, and honours `Retry-After`.
 | `timeout` | `5.0` | per-request timeout (seconds) |
 | `flush_on_exit` | `True` | drain the queue from `atexit` |
 | `debug` | `False` | debug logging on the `tokenfin` logger |
+| `policy_ttl` | `60.0` | seconds between refreshes of the org policy (model routes / blocks) |
+
+### Model routes and limits
+
+`wrap_anthropic` / `wrap_openai` read the org policy (`GET /api/v1/policy`, same key) on a
+background thread and fail open. Active model routes — including automatic switches when a
+per-model limit is reached — rewrite `model` before the call and record `metadata.routed_from`.
+Pass `enforce_policy=True` to raise `TokenFinPolicyError` for models a limit blocked;
+`route_models=False` disables routing; `policy_wait_ms` (default 200) caps how long the first
+call waits for the first fetch (async clients wait without blocking the event loop).
+
+```python
+from tokenfin import TokenFinPolicyError
+client = wrap_anthropic(Anthropic(), tf, enforce_policy=True)
+try:
+    client.messages.create(model="claude-opus-4-8", max_tokens=512, messages=msgs)
+except TokenFinPolicyError as e:
+    ...  # e.model is blocked for this org
+```
 
 See [`sdk/README.md`](../README.md) for the full guide.
 

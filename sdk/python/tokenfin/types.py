@@ -42,6 +42,9 @@ class TokenFinConfig:
     debug: bool = False
     """Emit debug logs via the ``tokenfin`` logger."""
 
+    policy_ttl: float = 60.0
+    """Seconds between background refreshes of the org policy (model routes / blocks) used by the wrappers."""
+
 
 @dataclass
 class TrackEvent:

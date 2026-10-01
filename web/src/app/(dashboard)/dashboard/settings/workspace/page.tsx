@@ -14,7 +14,7 @@ export default async function WorkspacePage() {
   const ctx = await requireOrgContext()   // honours the selected workspace (tf_org)
   const orgId = ctx.orgId
   const [{ data: org }, role] = await Promise.all([
-    admin.from('organizations').select('name, slug, timezone, capture_prompts').eq('id', orgId).maybeSingle(),
+    admin.from('organizations').select('name, slug, timezone, capture_prompts, trace_capture').eq('id', orgId).maybeSingle(),
     Promise.resolve(ctx.role),
   ])
   return (
@@ -25,6 +25,7 @@ export default async function WorkspacePage() {
       slug={org?.slug ?? ''}
       timezone={org?.timezone ?? DEFAULT_TIMEZONE}
       capturePrompts={org?.capture_prompts !== false}
+      traceCapture={(org as { trace_capture?: string } | null)?.trace_capture === 'all' ? 'all' : 'errors'}
     />
   )
 }

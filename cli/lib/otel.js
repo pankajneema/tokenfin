@@ -7,7 +7,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { writeJsonAtomic, readJsonStrict, backup } = require('./fsx')
+const { writeJsonAtomic, writeFileAtomic, readJsonStrict, backup } = require('./fsx')
 
 // ── Claude Code (~/.claude/settings.json, or $CLAUDE_CONFIG_DIR/settings.json) ─
 // Claude Code keeps its home-directory files in $CLAUDE_CONFIG_DIR when set.
@@ -199,22 +199,74 @@ function geminiTelemetry(otelEndpoint, key, opts = {}) {
 const readGeminiSettings = () => readJsonStrict(geminiSettingsPath())
 const writeGeminiSettings = (s) => writeJsonAtomic(geminiSettingsPath(), s)
 
-// ── OpenCode (~/.config/opencode/opencode.json) ───────────────────────────────
-// OpenCode loads the opencode-otel-plugin from its `plugin` array; the plugin
-// reads the standard OTel env vars at process init, so `setup` only ensures
-// the plugin is listed.
-const OPENCODE_PLUGIN = 'opencode-otel-plugin'
-const opencodeConfigPath = () => path.join(os.homedir(), '.config', 'opencode', 'opencode.json')
+// ── OpenCode ($XDG_CONFIG_HOME/opencode, default ~/.config/opencode) ─────────
+// Capture is TokenFin's own plugin (plugins/opencode/tokenfin.js, bundled here
+// as assets/opencode-tokenfin.js — keep them byte-identical). OpenCode 1.x
+// auto-loads every {plugin,plugins}/*.{js,ts} in its config dir, so setup just
+// copies the file to ~/.config/opencode/plugin/tokenfin.js. The plugin reads
+// the key and URL from ~/.tokenfin/config.json — no shell env vars needed.
+// The third-party opencode-otel-plugin (drops cache tokens, session ids and
+// prompt text) is removed from the `plugin` array so usage isn't counted twice.
+const LEGACY_OPENCODE_PLUGIN = 'opencode-otel-plugin'
+const OPENCODE_PLUGIN = LEGACY_OPENCODE_PLUGIN   // back-compat export name
+const OPENCODE_MARK = 'TokenFin plugin for OpenCode'
+const opencodeDir = () => path.join((process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.trim()) || path.join(os.homedir(), '.config'), 'opencode')
+// opencode.json, or opencode.jsonc when that is the only one present.
+function opencodeConfigPath() {
+  const json = path.join(opencodeDir(), 'opencode.json')
+  const jsonc = path.join(opencodeDir(), 'opencode.jsonc')
+  return !fs.existsSync(json) && fs.existsSync(jsonc) ? jsonc : json
+}
+const opencodePluginPath = () => path.join(opencodeDir(), 'plugin', 'tokenfin.js')
+const opencodePluginSource = () => path.join(__dirname, '..', 'assets', 'opencode-tokenfin.js')
 const readOpencodeConfig = () => readJsonStrict(opencodeConfigPath())
 const writeOpencodeConfig = (s) => writeJsonAtomic(opencodeConfigPath(), s)
 
-function upsertOpencodePlugin(plugin) {
-  const list = Array.isArray(plugin) ? plugin.filter((p) => typeof p === 'string') : []
-  if (!list.includes(OPENCODE_PLUGIN)) list.push(OPENCODE_PLUGIN)
-  return list
+const pluginName = (p) => (Array.isArray(p) ? p[0] : p)
+// "opencode-otel-plugin", "opencode-otel-plugin@1.2.3", "…@latest" (+ [name, opts] tuples).
+const isLegacyOpencodePlugin = (p) => {
+  const n = pluginName(p)
+  return typeof n === 'string' && (n === LEGACY_OPENCODE_PLUGIN || n.startsWith(LEGACY_OPENCODE_PLUGIN + '@'))
 }
 function stripOpencodePlugin(plugin) {
-  return Array.isArray(plugin) ? plugin.filter((p) => p !== OPENCODE_PLUGIN) : plugin
+  return Array.isArray(plugin) ? plugin.filter((p) => !isLegacyOpencodePlugin(p)) : plugin
+}
+const hasLegacyOpencodePlugin = (plugin) => Array.isArray(plugin) && plugin.some(isLegacyOpencodePlugin)
+
+const pluginVersionOf = (text) => { const m = /const VERSION = '([^']+)'/.exec(String(text || '')); return m ? m[1] : null }
+const isOurOpencodePlugin = (text) => String(text || '').includes(OPENCODE_MARK)
+
+// Copy the bundled plugin into OpenCode's plugin dir. Returns { changed, version }.
+function installOpencodePlugin() {
+  const src = fs.readFileSync(opencodePluginSource())
+  const dest = opencodePluginPath()
+  let cur = null
+  try { cur = fs.readFileSync(dest) } catch {}
+  if (cur && !isOurOpencodePlugin(cur)) throw new Error(dest + ' exists and is not the TokenFin plugin — left it alone')
+  const changed = !cur || !cur.equals(src)
+  if (changed) writeFileAtomic(dest, src)
+  return { changed, version: pluginVersionOf(src) }
+}
+
+// Installed plugin state for doctor: { installed, ours, version, current }.
+function opencodePluginStatus() {
+  let text = null
+  try { text = fs.readFileSync(opencodePluginPath(), 'utf8') } catch {}
+  if (text == null) return { installed: false }
+  let bundled = null
+  try { bundled = fs.readFileSync(opencodePluginSource(), 'utf8') } catch {}
+  return { installed: true, ours: isOurOpencodePlugin(text), version: pluginVersionOf(text), current: bundled == null || text === bundled }
+}
+
+// Delete the installed plugin (only if it is ours). Returns true when removed.
+function uninstallOpencodePlugin() {
+  const p = opencodePluginPath()
+  try {
+    if (!fs.existsSync(p) || !isOurOpencodePlugin(fs.readFileSync(p, 'utf8'))) return false
+    fs.unlinkSync(p)
+    try { if (fs.readdirSync(path.dirname(p)).length === 0) fs.rmdirSync(path.dirname(p)) } catch {}
+    return true
+  } catch { return false }
 }
 
 // Read the key in the user-scope `tokenfin` MCP registration (read-only peek
@@ -237,6 +289,8 @@ module.exports = {
   statuslineScriptPath, statuslineCommand, isOurStatusline, STATUSLINE_MARK,
   codexConfigPath, codexOtelToml, codexOtelBlock, upsertCodexBlock, stripCodexBlock, hasCodexBlock,
   geminiSettingsPath, geminiTelemetry, readGeminiSettings, writeGeminiSettings,
-  OPENCODE_PLUGIN, opencodeConfigPath, readOpencodeConfig, writeOpencodeConfig,
-  upsertOpencodePlugin, stripOpencodePlugin, readMcpKey,
+  OPENCODE_PLUGIN, LEGACY_OPENCODE_PLUGIN, opencodeDir, opencodeConfigPath, opencodePluginPath, opencodePluginSource,
+  readOpencodeConfig, writeOpencodeConfig, stripOpencodePlugin, hasLegacyOpencodePlugin, isLegacyOpencodePlugin,
+  installOpencodePlugin, uninstallOpencodePlugin, opencodePluginStatus, isOurOpencodePlugin, pluginVersionOf,
+  readMcpKey,
 }

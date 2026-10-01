@@ -1,3 +1,5 @@
+import Link from 'next/link'
+import { PromptText } from '@/components/dashboard/prompt-text'
 import { createAdminClient }  from '@/lib/supabase/server'
 import { requireOrgContext }  from '@/lib/org-context'
 import { promptScope }        from '@/lib/rbac'
@@ -202,6 +204,15 @@ export default async function PromptsAnalyticsPage({ searchParams }: { searchPar
       return { ...base, ...rate(base) }
     })
 
+  // prompt id → its session, so each prompt links to the full view in its session.
+  const linkKeys = Array.from(new Set([...topKeys, ...capturedRaw.map(c => c.prompt_hash).filter((h): h is string => !!h)]))
+  const sessionByKey = new Map<string, string>()
+  for (let i = 0; i < linkKeys.length; i += 200) {
+    const { data } = await admin.from('usage_events').select('correlation_id, session_id')
+      .eq('org_id', orgId).in('correlation_id', linkKeys.slice(i, i + 200)).not('session_id', 'is', null).limit(1000)
+    for (const e of data ?? []) if (e.correlation_id && e.session_id && !sessionByKey.has(e.correlation_id)) sessionByKey.set(e.correlation_id, e.session_id)
+  }
+
   const hashedRequests = rows.length
   const scopeNote = scope ? 'Showing your prompts only — owners and admins see everyone\'s.' : null
 
@@ -220,13 +231,16 @@ export default async function PromptsAnalyticsPage({ searchParams }: { searchPar
         notionalCost={summary.notional_cost_usd}
         avgLatencyMs={summary.avg_latency_ms == null ? null : Math.round(summary.avg_latency_ms)}
       />
-      <TopPrompts rows={top.rows} total={top.total} preview={textByHash} emails={emails} windowLabel={win.label} />
-      <CapturedPrompts rows={captured} />
+      <TopPrompts rows={top.rows} total={top.total} preview={textByHash} emails={emails} windowLabel={win.label} sessions={sessionByKey} />
+      <CapturedPrompts rows={captured} sessions={sessionByKey} />
     </>
   )
 }
 
-function TopPrompts({ rows, total, preview, emails, windowLabel }: { rows: DashPrompt[]; total: number; preview: Map<string, string>; emails: Map<string, string>; windowLabel: string }) {
+const sessionHref = (session: string, key: string) =>
+  `/dashboard/sessions/${encodeURIComponent(session)}#prompt-${encodeURIComponent(key)}`
+
+function TopPrompts({ rows, total, preview, emails, windowLabel, sessions }: { rows: DashPrompt[]; total: number; preview: Map<string, string>; emails: Map<string, string>; windowLabel: string; sessions: Map<string, string> }) {
   if (rows.length === 0) return null
   return (
     <div className="mt-8">
@@ -251,7 +265,11 @@ function TopPrompts({ rows, total, preview, emails, windowLabel }: { rows: DashP
             {rows.map(p => (
               <tr key={p.prompt_key} className="border-t border-[var(--border)]">
                 <td className="px-3 py-2 max-w-[280px] truncate text-[var(--fg)]" title={preview.get(p.prompt_key) ?? p.prompt_key}>
-                  {preview.get(p.prompt_key) ? clipText(preview.get(p.prompt_key)!, 90) : <span className="font-mono text-[11px] text-[var(--fg-tertiary)]">{p.prompt_key.slice(0, 18)}</span>}
+                  {sessions.get(p.prompt_key)
+                    ? <Link href={sessionHref(sessions.get(p.prompt_key)!, p.prompt_key)} className="hover:underline">
+                        {preview.get(p.prompt_key) ? clipText(preview.get(p.prompt_key)!, 90) : <span className="font-mono text-[11px] text-[var(--fg-tertiary)]">{p.prompt_key.slice(0, 18)}</span>}
+                      </Link>
+                    : preview.get(p.prompt_key) ? clipText(preview.get(p.prompt_key)!, 90) : <span className="font-mono text-[11px] text-[var(--fg-tertiary)]">{p.prompt_key.slice(0, 18)}</span>}
                 </td>
                 <td className="px-3 py-2 max-w-[180px] truncate text-[var(--fg-secondary)]">{emails.get(p.user_key) ?? (p.user_key || '—')}</td>
                 <td className="px-3 py-2 whitespace-nowrap text-[var(--fg-secondary)]">{p.model || '—'} · {sourceLabel(p.source)}</td>
@@ -271,7 +289,7 @@ function TopPrompts({ rows, total, preview, emails, windowLabel }: { rows: DashP
 const clipText = (s: string | null, n: number) => !s ? '' : s.length > n ? s.slice(0, n) + '…' : s
 const usd = (n: number) => n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`
 
-function CapturedPrompts({ rows }: { rows: Array<{ id: string; model: string; prompt_text: string; response_text: string | null; input_tokens: number; output_tokens: number; cost_usd: number; created_at: string; calls: number }> }) {
+function CapturedPrompts({ rows, sessions }: { rows: Array<{ id: string; model: string; prompt_hash: string | null; prompt_text: string; response_text: string | null; input_tokens: number; output_tokens: number; cost_usd: number; created_at: string; calls: number }>; sessions: Map<string, string> }) {
   return (
     <div className="mt-8">
       <div className="mb-1 text-[15px] font-bold text-[var(--fg)]">Captured prompts</div>
@@ -286,21 +304,18 @@ function CapturedPrompts({ rows }: { rows: Array<{ id: string; model: string; pr
         <div className="space-y-3">
           {rows.map(r => (
             <details key={r.id} className="rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
-              <summary className="flex cursor-pointer items-center justify-between text-[12.5px]">
-                <span className="font-medium text-[var(--fg)]">{r.model}</span>
+              <summary className="flex cursor-pointer items-center justify-between gap-3 text-[12.5px]">
+                <span className="min-w-0 truncate"><span className="font-medium text-[var(--fg)]">{r.model || 'Prompt'}</span> <span className="text-[var(--fg-secondary)]">— {clipText(r.prompt_text.replace(/\s+/g, ' '), 100)}</span></span>
                 <span className="text-[var(--fg-tertiary)]">{(Number(r.input_tokens) + Number(r.output_tokens)).toLocaleString()} tok · {usd(Number(r.cost_usd))}{r.calls > 1 ? ` · ${r.calls} calls` : ''} · {new Date(r.created_at).toLocaleString()}</span>
               </summary>
               <div className="mt-3 space-y-2">
-                <div>
-                  <div className="mb-1 text-[11px] font-semibold uppercase text-[var(--fg-tertiary)]">Prompt</div>
-                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-[var(--bg-tertiary)] p-3 font-mono text-[11px] text-[var(--fg)]">{clipText(r.prompt_text, 8000)}</pre>
-                </div>
-                {r.response_text && (
-                  <div>
-                    <div className="mb-1 text-[11px] font-semibold uppercase text-[var(--fg-tertiary)]">Response</div>
-                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-[var(--bg-tertiary)] p-3 font-mono text-[11px] text-[var(--fg)]">{clipText(r.response_text, 8000)}</pre>
-                  </div>
+                <PromptText label="Prompt" text={r.prompt_text} />
+                {r.prompt_hash && sessions.get(r.prompt_hash) && (
+                  <Link href={sessionHref(sessions.get(r.prompt_hash)!, r.prompt_hash)} className="inline-block text-[12px] font-medium text-teal hover:underline">
+                    Open in its session →
+                  </Link>
                 )}
+                {r.response_text && <PromptText label="Response" text={r.response_text} />}
               </div>
             </details>
           ))}

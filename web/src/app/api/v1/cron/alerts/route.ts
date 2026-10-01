@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { recordDeliveryResults } from '@/lib/integrations/delivery'
+import { runOrgLimits } from '@/lib/alerts/limits-runner'
 import { buildOrgCtx, evaluateRuleDetailed, deliverAlert, inCooldown, claimFire, type AlertRule, type Evaluation } from '@/lib/alerts/engine'
 import crypto from 'crypto'
 import { withJobRun } from '@/lib/jobs'
@@ -46,7 +47,8 @@ export async function GET(req: NextRequest) {
     let { data: rules, error } = await load(COLS + ', anomaly_scope')
     if (error) ({ data: rules } = await load(COLS))
     const active = (rules ?? []) as unknown as AlertRule[]
-    if (active.length === 0) return NextResponse.json({ evaluated: 0, fired: 0 })
+    const limits = await sweepLimits(admin, orgFilter)
+    if (active.length === 0) return NextResponse.json({ evaluated: 0, fired: 0, limits })
 
     // Resolve emails once (shared across orgs).
     const emailByUser = new Map<string, string>()
@@ -84,6 +86,29 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ evaluated, fired })
+    return NextResponse.json({ evaluated, fired, limits })
   }, { route: ROUTE })
+}
+
+/**
+ * Limits with a notify threshold or an automatic action (migration 024):
+ * once-per-period notifications, model switches and SDK blocks. One org's
+ * failure never stops the others.
+ */
+async function sweepLimits(admin: ReturnType<typeof createAdminClient>, orgFilter: string | null) {
+  let q = admin.from('limits').select('org_id').eq('is_active', true)
+  if (orgFilter) q = q.eq('org_id', orgFilter)
+  const { data } = await q
+  const orgs = Array.from(new Set(((data ?? []) as { org_id: string }[]).map(r => r.org_id)))
+  const total = { orgs: orgs.length, limits: 0, notified: 0, actions: 0, errors: 0 }
+  for (const orgId of orgs) {
+    try {
+      const r = await runOrgLimits(admin, orgId, { source: 'cron' })
+      total.limits += r.limits; total.notified += r.notified; total.actions += r.actions
+    } catch (e) {
+      total.errors++
+      log.error('limit sweep failed', { route: ROUTE, org_id: orgId, err: e })
+    }
+  }
+  return total
 }

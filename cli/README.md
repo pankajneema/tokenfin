@@ -51,11 +51,14 @@ Model responses, files and your provider API keys are never sent.
 |---|---|
 | `login` | Browser sign-in. Stores this device's **ingest** key (agents' telemetry) and **read** key (status, budget, MCP) in `~/.tokenfin/config.json` (mode 0600) with a stable `device_id`. Logging in again rotates only this device's keys — and re-points any agent config that already uses TokenFin at the new key, so capture never silently breaks. |
 | `login --device` | Same, via a short code approved in any signed-in browser (`/cli/device`). |
-| `setup` | Writes OTel config for each **installed** agent (others are skipped): `env` in `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), `[otel]` in `~/.codex/config.toml`, `telemetry` in `~/.gemini/settings.json`, `opencode-otel-plugin` in `~/.config/opencode/opencode.json`. Registers the read-only MCP server with the read key. Removes the legacy 0.2 Stop hook (`record-usage.js`) if present. Waits for the first event. |
+| `setup` | Writes OTel config for each **installed** agent (others are skipped): `env` in `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), `[otel]` in `~/.codex/config.toml`, `telemetry` in `~/.gemini/settings.json`, the TokenFin plugin in `~/.config/opencode/plugin/tokenfin.js` (and drops `opencode-otel-plugin` from `opencode.json`). Registers the read-only MCP server with the read key. Removes the legacy 0.2 Stop hook (`record-usage.js`) if present. Waits for the first event. |
 | `status` | Configured? Events flowing? Prompt capture on or off? |
 | `doctor` | Diagnoses silent data loss: config validity, protocol, temporality, **key drift** (settings.json / Codex / Gemini / MCP using a different key than `config.json`), **revoked keys** (checks the ingest key against the receiver and the read key against `/api/v1/connections`), a leftover legacy hook, events in the last 24 h. Exit code 1 on problems. |
 | `budget` | Today / month-to-date spend (yours) and the tightest budget with % used. `--json` for raw output. |
-| `statusline` | One line for Claude Code's status bar: `TokenFin $1.23 today · $45.67 MTD · 62% of budget`. |
+| `config push` | Uploads a **redacted** snapshot of each installed agent's user-level config (Claude Code, OpenCode, Codex, Gemini) for Dashboard → Agents. Secrets are removed **on this machine** before upload. Also runs quietly at the end of `setup`, `status` and `doctor`. |
+| `config pull [--yes]` | Reviews config changes requested in the dashboard (an allow-listed set of fields only): prints the diff, asks (or `--yes`), backs the file up to `*.bak-tokenfin`, writes it atomically, reports applied / failed and pushes the new snapshot. Prints which agent to restart. Without a terminal and without `--yes` nothing is applied. |
+| `config show` | Prints the redacted snapshot `config push` would send (nothing is sent). |
+| `statusline` | One line for Claude Code's status bar: `TokenFin $1.23 today · $45.67 MTD · 62% of budget` (plus `· 1 config change pending` when the dashboard requested one). |
 | `remove` | Asks the server to revoke this device's keys, strips every agent's TokenFin config, the legacy hook and our statusLine (backups first), unregisters MCP, deletes `~/.tokenfin`. |
 
 Options:
@@ -68,6 +71,7 @@ Options:
 | `--no-prompts`, `--prompts` | Prompt text capture off / on. |
 | `--statusline` | Add the budget line to Claude Code's `statusLine` — only if you don't already have one (never overwritten). |
 | `--no-wait`, `--no-mcp` | Don't wait for the first event / don't register MCP. |
+| `--no-session-hooks`, `--session-hooks` | Don't add / re-add the Claude Code `SessionStart` + `SessionEnd` hooks (the choice is remembered). |
 | `--no-revoke` | `remove` without revoking the keys server-side. |
 | `-y, --yes` | Non-interactive (no browser, no update check). |
 
@@ -108,6 +112,41 @@ It calls `GET /api/v1/me/budget` with your read key and caches the answer for 60
 `~/.tokenfin/budget-cache.json`, so it adds no noticeable latency. If you already have a status
 line, setup leaves it alone — call `node ~/.tokenfin/statusline.js` from your own script instead.
 
+## Agent configs (Dashboard → Agents)
+
+`config push` reads `~/.claude/settings.json` (+ MCP server names/types/URLs from `~/.claude.json`),
+`~/.config/opencode/opencode.json(c)` (+ the plugin dir listing), `~/.codex/config.toml` and
+`~/.gemini/settings.json`, plus each agent's version (`<agent> --version`, 2 s timeout, cached 12 h).
+Before anything leaves the machine it replaces with `[redacted]`: values under keys matching
+`key|token|secret|password|auth|credential|bearer|cookie`, every OTLP / MCP header value, and any
+string that looks like a `tfk_…` / `sk-…` / `sk-ant-…` / `ghp_…` / JWT / AWS / Slack / Google key,
+a URL password or `?key=`, or a long hex / high-entropy string. `tokenfin config show` prints exactly
+what would be sent.
+
+`config pull` applies changes requested in the dashboard. Only these fields can ever be changed
+(the CLI re-checks the list and refuses anything else, even if the server sent it):
+
+| Agent | Fields |
+|---|---|
+| Claude Code | `model`, prompt capture (`env.OTEL_LOG_USER_PROMPTS`), `permissions.defaultMode` (not `bypassPermissions`), `permissions.allow/ask/deny/additionalDirectories` (replaced whole), the TokenFin status line, hooks: enable / disable / delete existing ones or add the fixed TokenFin session-hook template |
+| OpenCode | `model`, `small_model`, `permission.edit/webfetch/bash`, the TokenFin plugin |
+| Codex CLI | `model`, `[otel] log_user_prompt` |
+| Gemini CLI | `model.name`, `telemetry.logPrompts` |
+| all | "Repair connection" — rewrite the TokenFin telemetry block with the key stored on this machine |
+
+Disabled hooks are parked in `~/.tokenfin/disabled-hooks.json` so they can be re-enabled. After a
+change, restart the agent (it reads its config at start); the dashboard shows "Restart … to apply"
+until no process older than the change is running.
+
+## Session hooks
+
+`setup` registers `node ~/.tokenfin/hooks/session.js` as a Claude Code `SessionStart` and
+`SessionEnd` hook (5 s timeout). It reads the hook JSON from stdin, adds the git branch and origin
+remote (credentials stripped), hostname and the cached Claude Code version, and posts
+`{session_id, event, agent, cwd, git_branch, repo, hostname, agent_version, start_source | end_reason, at}`
+to `/api/v1/sessions/meta` with the ingest key. It never reads the transcript, prints nothing,
+and always exits 0 within ~2 s. Opt out with `setup --no-session-hooks`; `remove` deletes it.
+
 ## Robustness notes
 
 - Every config file is written atomically (temp file + rename) after a `.bak-tokenfin` backup, so a
@@ -130,24 +169,18 @@ separate ingest + read keys.
 
 ## OpenCode
 
-`setup` ensures `opencode-otel-plugin` is listed in the `plugin` array of
-`~/.config/opencode/opencode.json`. The plugin reads the standard OTel env vars when opencode
-starts, so the shell that launches opencode must export them:
-
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<app>/api/otel"
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <ingest key>"
-export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
-export OTEL_METRICS_EXPORTER=otlp
-export OTEL_LOGS_EXPORTER=otlp
-export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
-```
+`setup` installs TokenFin's own OpenCode plugin at `~/.config/opencode/plugin/tokenfin.js`
+(OpenCode loads every `*.js` in that folder) and removes `opencode-otel-plugin` from the `plugin`
+array of `opencode.json`, so nothing is counted twice. The plugin reads the key and URL from
+`~/.tokenfin/config.json` — no shell env vars. It sends one event per completed assistant message
+with cache and reasoning tokens, session id, prompt id and the full prompt text (unless
+`--no-prompts`). `remove` deletes it; `doctor` checks it. Details: `plugins/opencode/README.md`.
 
 ## What's captured
 
 Per turn: model, input/output tokens, cache read/write tokens, and cost — from each agent's native
 telemetry (`claude_code.api_request` logs, `codex.turn.token_usage` / `gen_ai.client.token.usage`
-metrics, OpenCode `gen_ai` traces/metrics) — plus prompt text unless you opted out. CLI agents
+metrics, the TokenFin OpenCode plugin) — plus prompt text unless you opted out. CLI agents
 report **notional** cost (what it would cost on the API), shown separately from metered spend.
 
 `OTEL_METRICS_INCLUDE_REPOSITORY=1` (Claude Code v2.1.269+) adds `vcs.repository.*` so cost and

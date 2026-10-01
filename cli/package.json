@@ -6,11 +6,12 @@
     "tokenfin": "bin/tokenfin.js"
   },
   "scripts": {
-    "test": "node --test test/unit.test.js test/cli.test.js"
+    "test": "node --test test/unit.test.js test/cli.test.js test/agentconfig.test.js"
   },
   "files": [
     "bin",
     "lib",
+    "assets",
     "README.md"
   ],
   "engines": {

@@ -282,7 +282,7 @@ type Window = 'daily' | 'weekly' | 'monthly'
 /** Mirrors lib/alerts/engine inferWindow(): the window is read from the condition text. */
 function windowOf(condition: string | null | undefined): Window {
   const c = (condition || '').toLowerCase()
-  return c.includes('day') ? 'daily' : c.includes('week') ? 'weekly' : 'monthly'
+  return c.includes('day') || c.includes('daily') ? 'daily' : c.includes('week') ? 'weekly' : 'monthly'
 }
 const WINDOW_LABEL: Record<Window, string> = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }
 

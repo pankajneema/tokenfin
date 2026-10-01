@@ -118,12 +118,20 @@ const API_REQ = {
 }
 
 describe('normalizeLogs enrichment', () => {
-  it('captures vendor cost without letting it replace the server-side price', () => {
+  it('uses Claude Code\'s own exact cost (it knows the 5m/1h cache-write split), keeping it as vendor cost too', () => {
     const [row] = normalizeLogs(lBody([rec(API_REQ)]), CTX)
     expect(row.vendor_cost_usd).toBe(0.0199)
-    expect(row.cost_usd).toBe(computeCost('claude-opus-4-8', 1000, 200))
+    expect(row.cost_usd).toBe(0.0199)
     expect(row.price_known).toBe(true)
     expect(row).toMatchObject({ query_source: 'subagent', agent_name: 'reviewer', skill_name: 'pdf', mcp_server: 'github' })
+  })
+
+  it('never lets other sources set their own cost, and ignores implausible vendor figures', () => {
+    const [other] = normalizeLogs(lBody([rec(API_REQ, 'api_request')], [kv('service.name', 'support-bot')]), CTX)
+    expect(other.source).toBe('otlp')
+    expect(other.cost_usd).toBe(computeCost('claude-opus-4-8', 1000, 200))
+    const [wild] = normalizeLogs(lBody([rec({ ...API_REQ, cost_usd: 999 })]), CTX)
+    expect(wild.cost_usd).toBe(computeCost('claude-opus-4-8', 1000, 200))   // > 10x list → list price
   })
 
   it('reads repo + cost-allocation tags from resource attributes', () => {
@@ -204,7 +212,7 @@ describe('price overrides', () => {
     expect(opus.cost_usd).toBe(+((1000 * 3 + 200 * 4) / 1e6).toFixed(8))
     expect(opus.vendor_cost_usd).toBe(0.0199)
     expect(opus.tags.price_known).toBeUndefined()
-    expect(mystery.cost_usd).toBe(computeCost('mystery-9', 1000, 200))   // $2/$8 default
+    expect(mystery.cost_usd).toBe(0.0199)   // Claude Code's own price beats our $2/$8 guess
     expect(mystery.tags.price_known).toBe('false')
     expect(opus.tags.source).toBe('claude_code')
   })

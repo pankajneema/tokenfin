@@ -21,6 +21,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Deque, Dict, List, Optional
 
+from .policy import PolicyManager, fetch_policy_urllib
 from .types import FlushResult, TokenFinConfig, TrackEvent
 from .utils import (
     SERVER_BATCH_CAP, HttpResult, SendOutcome, backoff_seconds, event_to_payload,
@@ -75,6 +76,15 @@ class TokenFinClient:
             atexit.register(self._atexit)
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    def policy(self) -> "PolicyManager":
+        """The org's SDK policy (model routes / blocked models) from ``GET /api/v1/policy``,
+        refreshed on a background thread. Used by the wrappers."""
+        pm = getattr(self, "_policy_mgr", None)
+        if pm is None:
+            pm = PolicyManager(fetch_policy_urllib(self._base, self._cfg.api_key, self._cfg.timeout), self._cfg.policy_ttl)
+            self._policy_mgr = pm
+        return pm
 
     def track(self, model: str, input_tokens: Optional[int] = None,
               output_tokens: Optional[int] = None, **fields: Any) -> None:

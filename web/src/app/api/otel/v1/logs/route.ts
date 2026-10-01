@@ -13,6 +13,9 @@ import { readOtlp } from '@/lib/otlp/decode'
 import { normalizeLogs, normalizePrompts, normalizeApiErrors } from '@/lib/otlp/normalize'
 import { persistRows, persistPrompts, persistApiErrors } from '@/lib/otlp/persist'
 import { badBody, ok, retryLater, unauthorized } from '@/lib/otlp/respond'
+import { attrsToMap } from '@/lib/otlp/attrs'
+import { detectSource } from '@/lib/otlp/mapping'
+import { sessionContextFromLogs, persistSessionMeta, persistToolCalls } from '@/lib/session-meta'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,6 +39,11 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return retryLater('logs persist', e?.message ?? String(e))
   }
+  // Session context (agent, version, host, Cowork workspace) + tool calls. Best-effort.
+  try {
+    const sc = sessionContextFromLogs(body, attrsToMap, detectSource)
+    await Promise.all([persistSessionMeta(admin, ctx.orgId, sc.metas), persistToolCalls(admin, ctx.orgId, sc.tools)])
+  } catch (e: any) { console.warn('[otlp/logs] session context skipped:', e?.message ?? e) }
   // api_error events → api_errors_daily counters (never usage rows). Best-effort.
   const apiErrors = await persistApiErrors(admin, ctx, normalizeApiErrors(body, ctx.timezone))
   if (apiErrors) console.log(`[otlp/logs] org=${ctx.orgId} api_errors=${apiErrors}`)

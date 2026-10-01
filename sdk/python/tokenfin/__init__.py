@@ -21,6 +21,7 @@ from .async_client import AsyncTokenFinClient
 from .types import TrackEvent, FlushResult, TokenFinConfig
 from .utils import SDK_VERSION
 from .wrappers import wrap_anthropic, wrap_openai
+from .policy import TokenFinPolicyError, find_route, is_model_blocked
 
 __all__ = [
     "TokenFinClient",
@@ -30,6 +31,9 @@ __all__ = [
     "TokenFinConfig",
     "wrap_anthropic",
     "wrap_openai",
+    "TokenFinPolicyError",
+    "find_route",
+    "is_model_blocked",
 ]
 
 __version__ = SDK_VERSION

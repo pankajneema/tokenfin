@@ -14,6 +14,8 @@
  * therefore never rolls into any aggregate twice. event_ids are prefixed with
  * the org id so one tenant can never collide with (and suppress) another's.
  */
+import { evaluateLimitsAfterIngest } from '@/lib/alerts/limits-runner'
+import { defer } from '@/lib/otlp/auth'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PromptEvent } from './normalize'
 import type { KeyCtx } from './auth'
@@ -222,6 +224,8 @@ export async function persistRows(admin: SupabaseClient, ctx: KeyCtx, rows: Usag
       total_tokens: Number(rec.total_tokens), cost_usd: Number(rec.cost_usd), cost_basis: rec.cost_basis as string,
     }))),
   ])
+  // Per-model limits (90% alert / auto-switch) — after the response, throttled per org.
+  if (res.inserted > 0) defer(() => evaluateLimitsAfterIngest(admin, ctx.orgId))
   return res
 }
 
@@ -233,6 +237,7 @@ export async function persistRows(admin: SupabaseClient, ctx: KeyCtx, rows: Usag
 export async function persistPrompts(admin: SupabaseClient, ctx: KeyCtx, prompts: PromptEvent[]): Promise<number> {
   if (!promptCaptureAllowed(ctx) || prompts.length === 0) return 0
   const projectId = await resolveProjectId(admin, ctx)
+  await nameSessions(admin, ctx.orgId, prompts)
   return insertPromptCaptures(admin, prompts.map(p => ({
     org_id: ctx.orgId,
     project_id: projectId,
@@ -243,6 +248,23 @@ export async function persistPrompts(admin: SupabaseClient, ctx: KeyCtx, prompts
     context: p.source,
     created_at: p.ts,
   })))
+}
+
+/**
+ * Name each session after its first prompt (earliest in this export; the
+ * database keeps whichever title arrived first and never overwrites an
+ * agent's explicit title). Best-effort: a failure never loses the prompt.
+ */
+export async function nameSessions(admin: SupabaseClient, orgId: string, prompts: Array<Pick<PromptEvent, 'session_id' | 'prompt_text' | 'ts'>>): Promise<void> {
+  const first = new Map<string, { text: string; ts: string }>()
+  for (const p of prompts) {
+    if (!p.session_id || !p.prompt_text?.trim()) continue
+    const cur = first.get(p.session_id)
+    if (!cur || p.ts < cur.ts) first.set(p.session_id, { text: p.prompt_text, ts: p.ts })
+  }
+  await Promise.all(Array.from(first.entries()).map(([session, v]) =>
+    admin.rpc('tf_set_session_title', { p_org: orgId, p_session: session, p_title: redact(v.text), p_origin: 'prompt' })
+      .then(({ error }) => { if (error) console.warn('[otlp] session title skipped:', error.message) })))
 }
 
 /** Atomically add productivity increments (upsert_productivity, migration 007). */

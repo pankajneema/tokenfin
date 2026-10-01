@@ -25,6 +25,7 @@ async function status(flags = {}) {
   if (configured) log('  prompt text: ' + (env.OTEL_LOG_USER_PROMPTS ? 'captured (opt out: setup --no-prompts)' : 'not captured'))
 
   if (!key) { log('· no stored key — run `npx tokenfin@latest login` to check live event flow'); return }
+  await require('./agentconfig').autoSync({ ...flags, key, appUrl })
 
   const r = await getConnStatus(appUrl, key, 'claude_code')
   if (!r.ok) { log('✗ ' + (r.status === 401 || r.status === 403 ? r.why : 'could not reach TokenFin — ' + r.why)); return }

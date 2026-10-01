@@ -23,6 +23,8 @@ const FILTERS: { label: string; value: string }[] = [
 const LABEL: Record<string, string> = {
   'key.create': 'Created API key', 'key.delete': 'Deleted API key', 'key.toggle': 'Enabled/disabled API key', 'key.reveal': 'Revealed API key',
   'limit.create': 'Created budget limit', 'limit.update': 'Changed budget limit', 'limit.delete': 'Deleted budget limit',
+  'limit.notify': 'Limit reached its notify threshold', 'limit.auto_switch': 'Limit auto-switched a model', 'limit.auto_block': 'Limit blocked a model for SDKs',
+  'route.create': 'Added a model route', 'route.delete': 'Turned off a model route', 'route.revert': 'Reverted an automatic model switch', 'model_block.delete': 'Lifted a model block',
   'project.create': 'Created project', 'project.update': 'Changed project', 'project.delete': 'Deleted project',
   'team.create': 'Created team', 'team.update': 'Changed team', 'team.delete': 'Deleted team',
   'member.invite': 'Invited members', 'member.join': 'Joined via invitation', 'member.role_change': 'Changed member role', 'member.remove': 'Removed member',
@@ -33,6 +35,8 @@ const LABEL: Record<string, string> = {
   'provider.connect': 'Connected provider billing', 'provider.disconnect': 'Disconnected provider billing',
   'alert.create': 'Created alert rule', 'alert.update': 'Changed alert rule', 'alert.delete': 'Deleted alert rule',
   'price.update': 'Changed custom model prices',
+  'agent_config.request': 'Requested an agent config change', 'agent_config.apply': 'Applied an agent config change',
+  'agent_config.fail': 'Agent config change failed', 'agent_config.cancel': 'Cancelled an agent config change',
 }
 
 const summarize = (d: Record<string, unknown>) =>

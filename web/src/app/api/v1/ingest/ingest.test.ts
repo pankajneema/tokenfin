@@ -74,4 +74,43 @@ describe('prepareEvent', () => {
     expect(off.ok && off.ev.record.prompt_preview).toBeNull()
     expect(off.ok && off.ev.record.prompt_hash).toBeTruthy()  // fingerprint only
   })
+
+  it('input-only events are not given invented output tokens', () => {
+    const p = prepareEvent({ model: 'gpt-5', input_tokens: 10 }, null, env())
+    expect(p.ok && [p.ev.record.input_tokens, p.ev.record.output_tokens, p.ev.record.total_tokens]).toEqual([10, 0, 10])
+  })
+})
+
+describe('prepareEvent — OpenCode plugin (agent source)', () => {
+  const oc = {
+    model: 'claude-sonnet-4-6', provider: 'anthropic', source: 'opencode',
+    input_tokens: 20, output_tokens: 300, reasoning_tokens: 50, cache_read_tokens: 40_000, cache_write_tokens: 2_000,
+    session_id: 'ses_1', correlation_id: 'msg_user_1', cost_usd: 0, cost_basis: 'notional', repo: 'acme/app',
+  }
+  it('keeps notional, server-prices tokens incl. cache + reasoning, keeps the vendor figure', () => {
+    const p = prepareEvent({ ...oc, prompt_text: 'x'.repeat(20_000) }, 'msg_asst_1', env())
+    expect(p.ok).toBe(true)
+    if (!p.ok) return
+    const r = p.ev.record
+    expect(r.cost_basis).toBe('notional')
+    expect(r.cost_usd).toBe(computeCost('claude-sonnet-4-6', 20, 350, 40_000, 2_000))
+    expect(Number(r.cost_usd)).toBeGreaterThan(0)
+    expect(r.vendor_cost_usd).toBe(0)
+    expect(r.total_tokens).toBe(20 + 300 + 50 + 40_000 + 2_000)
+    expect([r.cache_read_tokens, r.cache_write_tokens, r.reasoning_tokens]).toEqual([40_000, 2_000, 50])
+    expect([r.session_id, r.correlation_id, r.prompt_hash, r.repo, r.source]).toEqual(['ses_1', 'msg_user_1', 'msg_user_1', 'acme/app', 'opencode'])
+    expect(String(p.ev.prompt?.prompt_text).length).toBe(20_000)
+    expect(p.ev.prompt?.prompt_hash).toBe('msg_user_1')
+  })
+  it('an API-key provider is metered and server-priced (vendor figure cannot lower it)', () => {
+    const p = prepareEvent({ ...oc, cost_usd: 0.000001, cost_basis: 'metered' }, null, env())
+    expect(p.ok && p.ev.record.cost_basis).toBe('metered')
+    expect(p.ok && p.ev.record.cost_usd).toBe(computeCost('claude-sonnet-4-6', 20, 350, 40_000, 2_000))
+  })
+  it('a non-agent source cannot claim notional (no budget dodging)', () => {
+    const p = prepareEvent({ ...oc, source: 'direct' }, null, env())
+    expect(p.ok && p.ev.record.cost_basis).toBeUndefined()
+    // SDK convention: cache/reasoning are inside input/output, not added again.
+    expect(p.ok && p.ev.record.total_tokens).toBe(320)
+  })
 })

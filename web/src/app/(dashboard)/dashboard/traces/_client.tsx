@@ -41,6 +41,8 @@ export function TracesClient(props: {
   nextCursor: string | null
   paged: boolean
   hasAnyTrace: boolean
+  /** organizations.trace_capture === 'all' (else only traces with errors / warnings keep full detail) */
+  captureAll?: boolean
   services: string[]
   models: string[]
   ranges: { value: string; label: string }[]
@@ -48,7 +50,7 @@ export function TracesClient(props: {
   scopedToSelf: boolean
   appUrl: string
 }) {
-  const { rows, filters, nextCursor, paged, hasAnyTrace, services, models, ranges, timezone, scopedToSelf, appUrl } = props
+  const { rows, filters, nextCursor, paged, hasAnyTrace, services, models, ranges, timezone, scopedToSelf, appUrl, captureAll } = props
   const router = useRouter()
   const pathname = usePathname()
   const [pending, start] = useTransition()
@@ -79,6 +81,11 @@ export function TracesClient(props: {
         <p className="mt-0.5 text-[13px] text-[var(--fg-secondary)]">
           OpenTelemetry GenAI traces from your apps and agents · times in {timezone}
           {scopedToSelf && ' · showing your traces and unattributed service traces'}
+        </p>
+        <p className="mt-1 text-[12px] text-[var(--fg-tertiary)]">
+          {captureAll
+            ? 'Capturing every trace in full.'
+            : <>Only traces with an error or warning are kept in full; the cost of every trace is still counted. Capture all traces in <a href="/dashboard/settings/workspace" className="text-teal hover:underline">Settings → Workspace</a>.</>}
         </p>
       </div>
 

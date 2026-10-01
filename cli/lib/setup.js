@@ -7,7 +7,8 @@
 // Claude Code: OTel env block in ~/.claude/settings.json (per-turn via logs).
 // Codex CLI:   [otel] in ~/.codex/config.toml, user-level (per-turn via metrics).
 // Gemini CLI:  telemetry in ~/.gemini/settings.json (per-turn via metrics).
-// OpenCode:    opencode-otel-plugin in ~/.config/opencode/opencode.json.
+// OpenCode:    TokenFin plugin → ~/.config/opencode/plugin/tokenfin.js (per message,
+//              full tokens incl. cache + prompt text); drops opencode-otel-plugin.
 // Agents that aren't installed are skipped. Every write is atomic + backed up.
 
 const fs = require('fs')
@@ -18,6 +19,7 @@ const O = require('./otel')
 const { getConnAll, verifyIngestKey } = require('./api')
 const { DEFAULT_APP_URL } = require('./login')
 const { run, hasCmd } = require('./proc')
+const H = require('./hooks')
 
 const log = (m) => process.stdout.write(m + '\n')
 const die = (m) => { throw new Error(m) }
@@ -75,13 +77,22 @@ function configureGemini(otelEndpoint, key, opts) {
   O.writeGeminiSettings(s)
   return { ok: true, msg: 'telemetry → ' + p }
 }
+// Install TokenFin's own plugin (reads ~/.tokenfin/config.json itself) and
+// drop the third-party opencode-otel-plugin so nothing is counted twice.
 function configureOpencode() {
+  const inst = O.installOpencodePlugin()
+  let msg = 'plugin ' + (inst.version ? 'v' + inst.version + ' ' : '') + (inst.changed ? '→ ' : 'up to date at ') + O.opencodePluginPath()
   const p = O.opencodeConfigPath()
-  const s = O.readOpencodeConfig()
-  backup(p)
-  s.plugin = O.upsertOpencodePlugin(s.plugin)
-  O.writeOpencodeConfig(s)
-  return { ok: true, msg: 'plugin → ' + p }
+  let s
+  try { s = O.readOpencodeConfig() }
+  catch { return { ok: false, msg: msg + '; could not parse ' + p + ' — remove "' + O.LEGACY_OPENCODE_PLUGIN + '" from its plugin list yourself (double counting)' } }
+  if (O.hasLegacyOpencodePlugin(s.plugin)) {
+    backup(p)
+    s.plugin = O.stripOpencodePlugin(s.plugin)
+    O.writeOpencodeConfig(s)
+    msg += ' (removed ' + O.LEGACY_OPENCODE_PLUGIN + ' from ' + path.basename(p) + ')'
+  }
+  return { ok: true, msg }
 }
 
 // Register the read-only MCP server with the READ key. No shell (so the
@@ -94,6 +105,24 @@ function registerMcp(mcpUrl, readKey) {
   if (rm.shim) return { ok: false, manual: `claude mcp add-json -s user tokenfin '${json.replace(readKey, '<READ_KEY>')}'` }
   const add = run('claude', ['mcp', 'add-json', '-s', 'user', 'tokenfin', json])
   return { ok: !add.error && add.status === 0 }
+}
+
+// Claude Code SessionStart / SessionEnd hooks → ~/.tokenfin/hooks/session.js
+// (session id, cwd, git branch/remote, hostname → /api/v1/sessions/meta).
+// enabled=false strips ours (opt-out persists via config.session_hooks).
+function configureSessionHooks(enabled) {
+  const s = O.readClaudeSettings()
+  const had = H.hasSessionHooks(s)
+  if (!enabled) {
+    if (!H.stripSessionHooks(s)) return { ok: true, msg: 'off (--no-session-hooks)' }
+    O.backupClaudeSettings(); O.writeClaudeSettings(s)
+    return { ok: true, msg: 'removed (--no-session-hooks)' }
+  }
+  H.installSessionScript()
+  const before = JSON.stringify(s)
+  H.addSessionHooks(s)
+  if (JSON.stringify(s) !== before) { O.backupClaudeSettings(); O.writeClaudeSettings(s) }
+  return { ok: true, msg: (had ? 'up to date' : 'SessionStart + SessionEnd') + ' → ' + H.sessionScriptPath() }
 }
 
 // Install the statusline script + settings entry. Never overwrites a
@@ -182,12 +211,13 @@ async function setup(flags = {}) {
   const otelEndpoint = appUrl + '/api/otel'
   const cfg = readConfig()
   const prompts = flags.prompts === false ? false : flags.prompts === true ? true : cfg.prompts !== false
+  const sessionHooks = flags.sessionHooks === false ? false : flags.sessionHooks === true ? true : cfg.session_hooks !== false
   const opts = { prompts }
 
   const v = await verifyIngestKey(appUrl, key)
   if (!v.ok) die('key check failed — ' + v.why)
   log('✔ key verified\n')
-  writeConfig({ ...readConfig(), key, read_key: readKey, appUrl, url: appUrl + '/api/mcp', prompts, device_id: cfg.device_id || ensureDeviceId() })
+  writeConfig({ ...readConfig(), key, read_key: readKey, appUrl, url: appUrl + '/api/mcp', prompts, session_hooks: sessionHooks, device_id: cfg.device_id || ensureDeviceId() })
 
   promptNotice(prompts)
 
@@ -196,6 +226,8 @@ async function setup(flags = {}) {
     any = true
     try { const r = configureClaude(otelEndpoint, key, opts); emit(r.ok, 'Claude Code', r.msg) }
     catch (e) { emit(false, 'Claude Code', e.message) }
+    try { const r = configureSessionHooks(sessionHooks); emit(r.ok, 'Sessions', 'hooks ' + r.msg) }
+    catch (e) { emit(false, 'Sessions', e.message) }
   } else log('· Claude Code  not installed — skipped')
   if (O.deleteLegacyScript()) emit(true, 'Legacy', 'deleted ~/.tokenfin/record-usage.js (0.2 hook script)')
 
@@ -227,6 +259,9 @@ async function setup(flags = {}) {
     catch (e) { emit(false, 'Statusline', e.message) }
   }
 
+  // Upload the (redacted) agent configs for Dashboard → Agents; quiet on failure.
+  await require('./agentconfig').autoSync({ ...flags, key: readKey, appUrl })
+
   if (flags.wait === false) { log('\nDone. Run a turn in your agent, then `npx tokenfin@latest status`.'); return }
   log('\nWaiting for first event… open a coding agent and run a turn.')
   const ev = await waitForAnyEvent(appUrl, readKey)
@@ -241,4 +276,4 @@ async function setup(flags = {}) {
   }
 }
 
-module.exports = { setup, refreshAgentConfigs, registerMcp, installStatusline, configureClaude, promptNotice }
+module.exports = { setup, refreshAgentConfigs, registerMcp, installStatusline, configureClaude, configureSessionHooks, promptNotice }

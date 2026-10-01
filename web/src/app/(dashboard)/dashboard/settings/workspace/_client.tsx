@@ -14,8 +14,8 @@ function allTimeZones(): string[] {
   return ['UTC', 'Asia/Kolkata', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney']
 }
 
-export function WorkspaceClient({ orgId, isOwner, name: initialName, slug, timezone: initialTz, capturePrompts: initialCapture }: {
-  orgId: string; isOwner: boolean; name: string; slug: string; timezone: string; capturePrompts: boolean
+export function WorkspaceClient({ orgId, isOwner, name: initialName, slug, timezone: initialTz, capturePrompts: initialCapture, traceCapture: initialTrace }: {
+  orgId: string; isOwner: boolean; name: string; slug: string; timezone: string; capturePrompts: boolean; traceCapture: 'errors' | 'all'
 }) {
   const router = useRouter()
   const zones = useMemo(allTimeZones, [])
@@ -25,7 +25,8 @@ export function WorkspaceClient({ orgId, isOwner, name: initialName, slug, timez
   const [saved, setSaved]   = useState(false)
   const [error, setError]   = useState<string | null>(null)
   const [capture, setCapture] = useState(initialCapture)
-  const dirty = name.trim() !== initialName || tz !== initialTz || capture !== initialCapture
+  const [trace, setTrace] = useState<'errors' | 'all'>(initialTrace)
+  const dirty = name.trim() !== initialName || tz !== initialTz || capture !== initialCapture || trace !== initialTrace
 
   const now = useMemo(() => {
     try { return new Intl.DateTimeFormat(undefined, { timeZone: tz, dateStyle: 'medium', timeStyle: 'short' }).format(new Date()) }
@@ -38,6 +39,7 @@ export function WorkspaceClient({ orgId, isOwner, name: initialName, slug, timez
     if (name.trim() !== initialName) body.name = name.trim()
     if (tz !== initialTz) body.timezone = tz
     if (capture !== initialCapture) body.capture_prompts = capture
+    if (trace !== initialTrace) body.trace_capture = trace
     const res = await fetch('/api/v1/orgs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     setSaving(false)
     if (!res.ok) { setError('Could not save. Only the workspace owner can change these settings.'); return }
@@ -95,6 +97,23 @@ export function WorkspaceClient({ orgId, isOwner, name: initialName, slug, timez
             Stored prompts are always redacted for secrets first.
           </p>
         </div>
+
+        <fieldset className="mt-5 space-y-1.5" disabled={!isOwner}>
+          <legend className="text-[12px] font-medium text-[var(--fg-secondary)]">Traces</legend>
+          {([
+            ['errors', 'Errors & warnings only (recommended)', 'Keep full detail only for traces with an error or warning. Every trace is still counted toward cost.'],
+            ['all', 'All traces', 'Keep every span with its attributes. Uses more storage.'],
+          ] as const).map(([v, label, hint]) => (
+            <label key={v} className="flex items-start gap-2.5 cursor-pointer">
+              <input type="radio" name="trace-capture" value={v} checked={trace === v} onChange={() => { setTrace(v); setSaved(false) }}
+                className="mt-0.5 h-4 w-4 accent-[var(--blue)] disabled:opacity-60" />
+              <span>
+                <span className="block text-[12.5px] text-[var(--fg)]">{label}</span>
+                <span className="block text-[11.5px] text-[var(--fg-tertiary)]">{hint}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
 
         <div className="flex items-center gap-3 mt-5">
           <button onClick={save} disabled={!isOwner || !dirty || saving} className="btn-primary disabled:opacity-50">

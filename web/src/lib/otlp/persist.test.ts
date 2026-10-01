@@ -105,8 +105,26 @@ describe('persistRows batching', () => {
 
     process.env.CAPTURE_PROMPTS = '0'
     const envOff = recordingAdmin()
-    expect(await persistPrompts(envOff, ctx(), [{ prompt_id: 'p', prompt_text: 'hi', prompt_chars: 2, ts: new Date().toISOString(), source: 'claude_code', user_email: null }])).toBe(0)
+    expect(await persistPrompts(envOff, ctx(), [{ prompt_id: 'p', session_id: null, prompt_text: 'hi', prompt_chars: 2, ts: new Date().toISOString(), source: 'claude_code', user_email: null }])).toBe(0)
     expect(envOff.trips).toHaveLength(0)
+  })
+})
+
+describe('session names', () => {
+  it('names each session after its EARLIEST prompt in the export (one rpc per session)', async () => {
+    const admin = recordingAdmin()
+    const p = (id: string, session: string | null, text: string, ts: string) =>
+      ({ prompt_id: id, session_id: session, prompt_text: text, prompt_chars: text.length, ts, source: 'claude_code', user_email: null })
+    await persistPrompts(admin, ctx({ userId: 'u1' }), [
+      p('b', 's1', 'second prompt', '2026-09-30T10:05:00Z'),
+      p('a', 's1', 'Fix the login bug\nwith details', '2026-09-30T10:00:00Z'),
+      p('c', 's2', 'Other session', '2026-09-30T10:01:00Z'),
+      p('d', null, 'no session', '2026-09-30T10:02:00Z'),
+    ])
+    const calls = admin.trips.filter((t: any) => t.name === 'tf_set_session_title').map((t: any) => t.payload)
+    expect(calls).toHaveLength(2)
+    expect(calls.find((c: any) => c.p_session === 's1')).toMatchObject({ p_title: 'Fix the login bug\nwith details', p_origin: 'prompt' })
+    expect(calls.find((c: any) => c.p_session === 's2')).toMatchObject({ p_title: 'Other session' })
   })
 })
 

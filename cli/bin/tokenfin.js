@@ -18,6 +18,8 @@ function parseArgs(argv) {
     else if (a === '--statusline') out.flags.statusline = true
     else if (a === '--no-wait') out.flags.wait = false
     else if (a === '--no-mcp') out.flags.mcp = false
+    else if (a === '--no-session-hooks') out.flags.sessionHooks = false
+    else if (a === '--session-hooks') out.flags.sessionHooks = true
     else if (a === '--no-revoke') out.flags.revoke = false
     else if (a === '--json') out.flags.json = true
     else if (a === '--dry-run') out.flags.dryRun = true
@@ -51,6 +53,12 @@ Commands:
   budgets apply <file> [--dry-run]
               Budgets-as-code: plan / apply limits + alerts from a YAML file
               (needs an admin-scoped key via --key or TOKENFIN_API_KEY).
+  config push Upload a REDACTED snapshot of each agent's config (Dashboard → Agents).
+              Secrets are removed on this machine before anything is sent.
+  config pull [--yes]
+              Review and apply config changes requested in the dashboard: shows
+              the diff, asks, backs up the file, writes it, reports back.
+  config show Print the redacted snapshot "config push" would send.
   statusline  One line for Claude Code's status bar (used by setup --statusline).
   remove      Fully undo setup, revoke this device's key, delete ~/.tokenfin.
 
@@ -64,6 +72,10 @@ Options:
                         status bar (only if you don't already have a statusLine).
       --no-wait         setup: don't wait for the first event.
       --no-mcp          setup: don't register the read-only MCP server.
+      --no-session-hooks
+                        setup: don't add the Claude Code SessionStart/SessionEnd
+                        hooks (session id, cwd, git branch → richer Sessions).
+      --session-hooks   setup: re-enable them.
   -y, --yes             Non-interactive; never prompt or open a browser.
   -h, --help            Show help.
   -v, --version         Print version.
@@ -99,6 +111,7 @@ async function main() {
       break
     }
     case 'budget':                           await require('../lib/budget').budget(flags); break
+    case 'config':                           process.exitCode = await require('../lib/agentconfig').configCmd(_, flags); break
     case 'budgets':                          process.exitCode = await require('../lib/budgets').budgets(_, flags); break
     case 'remove': case 'uninstall':         await require('../lib/remove').remove(flags); break
     case 'help':                             console.log(HELP); break
