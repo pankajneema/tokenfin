@@ -15,6 +15,7 @@ process.env.HOME = TMP
 process.env.USERPROFILE = TMP
 delete process.env.CLAUDE_CONFIG_DIR
 delete process.env.CODEX_HOME
+delete process.env.XDG_CONFIG_HOME   // GitHub runners set it; OpenCode paths must follow the temp HOME
 delete process.env.CI
 
 const O = require('../lib/otel')
