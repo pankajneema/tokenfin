@@ -77,7 +77,7 @@ except TokenFinPolicyError as e:
     ...  # e.model is blocked for this org
 ```
 
-See [`sdk/README.md`](../README.md) for the full guide.
+See the [full SDK guide](https://github.com/pankajneema/tokenfin/blob/main/sdk/README.md) for everything else.
 
 ## License
 

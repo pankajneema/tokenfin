@@ -174,7 +174,24 @@ separate ingest + read keys.
 array of `opencode.json`, so nothing is counted twice. The plugin reads the key and URL from
 `~/.tokenfin/config.json` — no shell env vars. It sends one event per completed assistant message
 with cache and reasoning tokens, session id, prompt id and the full prompt text (unless
-`--no-prompts`). `remove` deletes it; `doctor` checks it. Details: `plugins/opencode/README.md`.
+`--no-prompts`). `remove` deletes it; `doctor` checks it. Details: [plugins/opencode](https://github.com/pankajneema/tokenfin/tree/main/plugins/opencode).
+
+**Cost basis.** OpenCode usage is recorded as **notional** (subscription usage priced at API rates,
+never a bill) by default — like Claude Code — because OpenCode reports a cost even for subscription
+logins such as `opencode-claude-auth`. If you really pay per token through an API key, record it as
+**metered** instead:
+
+```bash
+TOKENFIN_COST_BASIS=metered opencode
+```
+
+or set `"opencode_cost_basis": "metered"` in `~/.tokenfin/config.json`.
+
+## Claude Cowork
+
+Cowork (Team / Enterprise) is configured once for the whole organization, not per machine: in Claude
+**Admin settings → Cowork**, set the OTLP endpoint, protocol and header shown on your TokenFin
+**Connections** page, then start a new Cowork session. No CLI step is needed.
 
 ## What's captured
 
