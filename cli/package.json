@@ -1,6 +1,6 @@
 {
   "name": "tokenfin",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "TokenFin CLI — point your coding agents' native OpenTelemetry (Claude Code, Codex, Gemini, OpenCode) at your TokenFin dashboard. No proxy, no hooks.",
   "bin": {
     "tokenfin": "bin/tokenfin.js"

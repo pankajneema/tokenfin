@@ -11,7 +11,9 @@
 //   • reads the hook JSON from stdin (session_id, cwd, hook_event_name,
 //     source | reason, transcript_path) — the transcript is NEVER read or sent;
 //   • prints NOTHING (SessionStart stdout is injected into Claude's context);
-//   • always exits 0, within ~2 s, whatever happens (never blocks a session).
+//   • always exits 0 fast: the network upload runs in a DETACHED child process
+//     (`--send`), so Claude Code only waits for stdin + two local git calls
+//     (~100 ms), never for the round-trip to TokenFin.
 //
 // Sends {session_id, event, agent, cwd, git_branch, repo, hostname,
 // agent_version, start_source?, end_reason?, at} to {appUrl}/api/v1/sessions/meta
@@ -22,7 +24,7 @@ const os = require('os')
 const path = require('path')
 const http = require('http')
 const https = require('https')
-const { execFileSync } = require('child_process')
+const { execFileSync, spawn } = require('child_process')
 
 const HARD_DEADLINE_MS = 1900
 const quit = () => { try { process.exit(0) } catch { /* ignore */ } }
@@ -103,15 +105,37 @@ async function main() {
   }
   if (event === 'start' && typeof input.source === 'string') body.start_source = input.source.slice(0, 40)
   if (event === 'end' && typeof input.reason === 'string') body.end_reason = input.reason.slice(0, 40)
-  await post(appUrl + '/api/v1/sessions/meta', key, body, 1200)
+  sendDetached(appUrl + '/api/v1/sessions/meta', body)
+}
+
+/** Hand the upload to a detached child so the hook returns immediately. */
+function sendDetached(url, body) {
+  try {
+    const child = spawn(process.execPath, [__filename, '--send'], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+      env: { ...process.env, TOKENFIN_HOOK_URL: url, TOKENFIN_HOOK_BODY: JSON.stringify(body) },
+    })
+    child.unref()
+  } catch { /* best effort */ }
+}
+
+/** Child side of sendDetached: POST once (key re-read from config), then exit. */
+async function sendFromEnv() {
+  const cfg = readJson(path.join(tfDir(), 'config.json')) || {}
+  const key = String(cfg.key || cfg.read_key || '').trim()
+  let body = null
+  try { body = JSON.parse(process.env.TOKENFIN_HOOK_BODY || '') } catch { /* nothing to send */ }
+  const url = process.env.TOKENFIN_HOOK_URL || ''
+  if (key && body && /^https?:\/\//.test(url)) await post(url, key, body, 8000)
 }
 
 module.exports = { cleanRemote }
 
 if (require.main === module) {
   // Hard stop: whatever happens, exit 0 before Claude Code's hook timeout.
-  setTimeout(quit, HARD_DEADLINE_MS)
+  const sending = process.argv.includes('--send')
+  setTimeout(quit, sending ? 10_000 : HARD_DEADLINE_MS)
   process.on('uncaughtException', quit)
   process.on('unhandledRejection', quit)
-  main().then(quit, quit)
+  ;(sending ? sendFromEnv() : main()).then(quit, quit)
 }
