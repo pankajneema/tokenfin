@@ -17,7 +17,7 @@ lint:
 typecheck:
 	cd web && npm run typecheck
 
-# ── SDK (@tokenfin/sdk) ────────────────────────────────────────────────────────
+# ── SDK (tokenfin-sdk) ────────────────────────────────────────────────────────
 sdk-install:
 	cd sdk && npm install
 

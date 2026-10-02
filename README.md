@@ -136,7 +136,7 @@ npx tokenfin@latest setup --no-prompts   # never send prompt text from this mach
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk'
-import { TokenFinClient, wrapAnthropic } from '@tokenfin/sdk'
+import { TokenFinClient, wrapAnthropic } from 'tokenfin-sdk'
 
 const tf = new TokenFinClient({ apiKey: process.env.TOKENFIN_API_KEY! })
 const anthropic = wrapAnthropic(new Anthropic(), tf, { tags: { feature: 'chat' } })
@@ -349,7 +349,7 @@ Found a vulnerability? Please follow [SECURITY.md](./SECURITY.md) instead of ope
 | Telemetry intake | OTLP/HTTP, JSON and protobuf |
 | MCP | Streamable HTTP, JSON-RPC 2.0 |
 | CLI | Node.js, zero runtime dependencies (`npx tokenfin`) |
-| SDKs | TypeScript (`@tokenfin/sdk`), Python (`tokenfin`) |
+| SDKs | TypeScript (`tokenfin-sdk`), Python (`tokenfin`) |
 | Email / chat delivery | Resend, Slack, webhooks |
 | Hosting | Vercel + Supabase, with GitHub Actions for CI and scheduled jobs |
 

@@ -1,5 +1,5 @@
 {
-  "name": "@tokenfin/sdk",
+  "name": "tokenfin-sdk",
   "version": "0.2.0",
   "description": "Official TypeScript SDK for the TokenFin LLM Cost Attribution API",
   "license": "MIT",

@@ -25,7 +25,7 @@ Please give us reasonable time to fix the issue before any public disclosure. Do
 
 ## Supported versions
 
-Security fixes go to the `main` branch and the latest published versions of the `tokenfin` CLI, `@tokenfin/sdk` and the `tokenfin` Python package.
+Security fixes go to the `main` branch and the latest published versions of the `tokenfin` CLI, `tokenfin-sdk` and the `tokenfin` Python package.
 
 ## Scope
 

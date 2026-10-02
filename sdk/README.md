@@ -5,7 +5,7 @@ Track LLM token usage and cost from your own code and see it in TokenFin
 
 | Language   | Package          | Source            |
 |------------|------------------|-------------------|
-| TypeScript | `@tokenfin/sdk`  | [`sdk/src`](./src) |
+| TypeScript | `tokenfin-sdk`  | [`sdk/src`](./src) |
 | Python     | `tokenfin`       | [`sdk/python`](./python) |
 
 Both SDKs have the same features:
@@ -26,7 +26,7 @@ Get an API key from **Dashboard → API Keys**. It starts with `tfk_` and needs 
 ## TypeScript
 
 ```bash
-npm install @tokenfin/sdk
+npm install tokenfin-sdk
 # plus whichever LLM SDK you use (optional peer deps):
 npm install @anthropic-ai/sdk   # and/or: npm install openai
 ```
@@ -35,7 +35,7 @@ npm install @anthropic-ai/sdk   # and/or: npm install openai
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk'
-import { TokenFinClient, wrapAnthropic } from '@tokenfin/sdk'
+import { TokenFinClient, wrapAnthropic } from 'tokenfin-sdk'
 
 const tf = new TokenFinClient({ apiKey: process.env.TOKENFIN_API_KEY! })
 const anthropic = wrapAnthropic(new Anthropic(), tf, {
@@ -57,7 +57,7 @@ for await (const event of stream) { /* unchanged */ }
 
 ```ts
 import OpenAI from 'openai'
-import { TokenFinClient, wrapOpenAI } from '@tokenfin/sdk'
+import { TokenFinClient, wrapOpenAI } from 'tokenfin-sdk'
 
 const tf = new TokenFinClient({ apiKey: process.env.TOKENFIN_API_KEY! })
 const openai = wrapOpenAI(new OpenAI(), tf)
@@ -136,7 +136,7 @@ server leaves every call unchanged.
   (`err.model`, `err.code === 'model_blocked'`):
 
 ```ts
-import { wrapAnthropic, TokenFinPolicyError } from '@tokenfin/sdk'
+import { wrapAnthropic, TokenFinPolicyError } from 'tokenfin-sdk'
 const anthropic = wrapAnthropic(new Anthropic(), tf, { enforcePolicy: true })
 try { await anthropic.messages.create({ model: 'claude-opus-4-8', max_tokens: 512, messages }) }
 catch (e) { if (e instanceof TokenFinPolicyError) { /* fall back to another model */ } else throw e }

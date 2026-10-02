@@ -1,4 +1,4 @@
-// ─── Public types exported by @tokenfin/sdk ───────────────────────────────────
+// ─── Public types exported by tokenfin-sdk ───────────────────────────────────
 
 /** Configuration for the TokenFin client. */
 export interface TokenFinConfig {
