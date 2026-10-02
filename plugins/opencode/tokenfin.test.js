@@ -52,7 +52,10 @@ test('buildEvent: payload shape, cost basis rule, latency', () => {
       idempotency_key: 'msg_a1', cost_usd: 0, cost_basis: 'notional', prompt_text: 'hi', metadata: undefined,
     })
   assert.equal(ev.metadata.agent, 'build')
-  assert.equal(buildEvent(done({ cost: 0.0123 })).cost_basis, 'metered')
+  // OpenCode reports a cost even for subscription logins → still notional by default…
+  assert.equal(buildEvent(done({ cost: 0.0123 })).cost_basis, 'notional')
+  // …metered only when the user opts in (API-key billing).
+  assert.equal(buildEvent(done({ cost: 0.0123 }), { cost_basis: 'metered' }).cost_basis, 'metered')
   assert.equal(buildEvent(done({ tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })), null)
   assert.equal(buildEvent({ ...userMsg() }), null)
 })
@@ -223,8 +226,9 @@ test('readConfig: env wins, then ~/.tokenfin/config.json (url may be the MCP url
     assert.equal(readConfig({}, home).key, '')
     fs.mkdirSync(path.join(home, '.tokenfin'))
     fs.writeFileSync(path.join(home, '.tokenfin', 'config.json'), JSON.stringify({ key: 'tfk_file', url: 'http://local:3002/api/mcp', prompts: false }))
-    assert.deepEqual(readConfig({}, home), { key: 'tfk_file', url: 'http://local:3002', prompts: false })
-    assert.deepEqual(readConfig({ TOKENFIN_API_KEY: 'tfk_env', TOKENFIN_URL: 'http://env/' }, home), { key: 'tfk_env', url: 'http://env', prompts: false })
+    assert.deepEqual(readConfig({}, home), { key: 'tfk_file', url: 'http://local:3002', prompts: false, basis: 'notional' })
+    assert.deepEqual(readConfig({ TOKENFIN_API_KEY: 'tfk_env', TOKENFIN_URL: 'http://env/' }, home), { key: 'tfk_env', url: 'http://env', prompts: false, basis: 'notional' })
+    assert.equal(readConfig({ TOKENFIN_COST_BASIS: 'metered' }, home).basis, 'metered')
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 

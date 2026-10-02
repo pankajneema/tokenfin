@@ -426,12 +426,14 @@ test('session hook posts metadata, prints nothing, exits 0 fast — and never bl
     p.on('close', (code) => resolve({ code, out, ms: Date.now() - t0 }))
     p.stdin.end(JSON.stringify(input))
   })
+  // The upload runs in a detached child after the hook exits — wait for it.
+  const waitFor = async (pred, ms = 5000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = pred(); if (v) return v; await new Promise((r) => setTimeout(r, 25)) } return null }
   calls.length = 0
   let r = await run({ session_id: 'sess-1', hook_event_name: 'SessionStart', source: 'startup', cwd: repo, transcript_path: '/tmp/t.jsonl' })
   assert.equal(r.code, 0)
   assert.equal(r.out, '')
-  assert.ok(r.ms < 2500, 'took ' + r.ms)
-  const c = calls.find((x) => x.url === '/api/v1/sessions/meta')
+  assert.ok(r.ms < 1000, 'hook should return without waiting for the network, took ' + r.ms)
+  const c = await waitFor(() => calls.find((x) => x.url === '/api/v1/sessions/meta'))
   assert.ok(c, 'no POST')
   assert.equal(c.auth, KEY)
   assert.equal(c.json.session_id, 'sess-1')
@@ -446,7 +448,8 @@ test('session hook posts metadata, prints nothing, exits 0 fast — and never bl
     assert.equal(c.json.repo, 'https://github.com/acme/app.git')
   }
   r = await run({ session_id: 'sess-1', hook_event_name: 'SessionEnd', reason: 'logout', cwd: repo })
-  assert.equal(calls.filter((x) => x.url === '/api/v1/sessions/meta').pop().json.end_reason, 'logout')
+  const end = await waitFor(() => calls.filter((x) => x.url === '/api/v1/sessions/meta').find((x) => x.json.event === 'end'))
+  assert.equal(end.json.end_reason, 'logout')
   // dead server + garbage stdin: still exit 0, silent, bounded
   fs.writeFileSync(path.join(home, '.tokenfin', 'config.json'), JSON.stringify({ key: KEY, appUrl: 'http://10.255.255.1:9' }))
   r = await run('not json')

@@ -11,6 +11,8 @@
 // retries never double count.
 //
 // Config (first match wins):
+//   cost basis: notional (subscription, default) — set TOKENFIN_COST_BASIS=metered
+//               or config.json `opencode_cost_basis: "metered"` when you pay per token
 //   key: TOKENFIN_API_KEY, TOKENFIN_KEY, ~/.tokenfin/config.json `key`
 //   url: TOKENFIN_URL, TOKENFIN_APP_URL, config.json `appUrl` or `url`
 //   prompt text: off when TOKENFIN_PROMPTS=0 or config.json `prompts: false`
@@ -106,7 +108,11 @@ function buildEvent(info, extra = {}) {
     correlation_id: info.parentID || null,
     idempotency_key: info.id,
     cost_usd: cost,
-    cost_basis: cost === 0 && tokens > 0 ? 'notional' : 'metered',
+    // Coding-agent usage is subscription usage (notional) by default, like Claude
+    // Code — OpenCode reports a non-zero `cost` even for subscription logins
+    // (e.g. opencode-claude-auth), so its figure can't tell the two apart.
+    // People who pay per token via an API key opt in with basis "metered".
+    cost_basis: extra.cost_basis === 'metered' ? 'metered' : 'notional',
     metadata: {
       agent: info.mode || null,
       finish: info.finish || null,
@@ -130,7 +136,9 @@ function readConfig(env = process.env, home = homedir()) {
   const rawUrl = String(env.TOKENFIN_URL || env.TOKENFIN_APP_URL || file.appUrl || file.url || DEFAULT_URL).trim()
   const url = rawUrl.replace(/\/+$/, '').replace(/\/api\/mcp$/, '').replace(/\/+$/, '')
   const prompts = !(env.TOKENFIN_PROMPTS === '0' || env.TOKENFIN_PROMPTS === 'false' || file.prompts === false)
-  return { key, url, prompts }
+  // 'metered' only when explicitly configured (API-key billing); default 'notional'.
+  const basis = String(env.TOKENFIN_COST_BASIS || file.opencode_cost_basis || '').trim().toLowerCase() === 'metered' ? 'metered' : 'notional'
+  return { key, url, prompts, basis }
 }
 
 // ── git identity (cached per directory) ─────────────────────────────────────
@@ -210,7 +218,7 @@ function createTracker(opts = {}) {
     const c = config()
     if (!c.key) { once('nokey', 'warn', 'TokenFin: no key found (run `npx tokenfin setup`) — OpenCode usage is not being recorded.'); return }
     const text = c.prompts ? promptFor(info.parentID) : null
-    const ev = buildEvent(info, { prompt_text: text, session_title: c.prompts ? titles.get(info.sessionID) : null })
+    const ev = buildEvent(info, { prompt_text: text, session_title: c.prompts ? titles.get(info.sessionID) : null, cost_basis: c.basis })
     if (!ev) return
     if (text) { promptUsed.add(info.parentID); bounded(promptUsed, 20_000); prompts.delete(info.parentID); partText.delete(info.parentID) }
     queue.push({ ev, dir: (info.path && (info.path.root || info.path.cwd)) || defaultDir, attempts: 0 })
