@@ -5,8 +5,8 @@ Track LLM token usage and cost from your own code and see it in TokenFin
 
 | Language   | Package          | Source            |
 |------------|------------------|-------------------|
-| TypeScript | `tokenfin-sdk`  | [`sdk/src`](./src) |
-| Python     | `tokenfin`       | [`sdk/python`](./python) |
+| TypeScript | `tokenfin-sdk`  | [`sdk/src`](https://github.com/pankajneema/tokenfin/tree/main/sdk/src) |
+| Python     | `tokenfin`       | [`sdk/python`](https://github.com/pankajneema/tokenfin/tree/main/sdk/python) |
 
 Both SDKs have the same features:
 

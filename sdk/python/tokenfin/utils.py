@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from .types import TrackEvent
 
-SDK_VERSION = "0.2.0"
+SDK_VERSION = "0.2.1"
 SERVER_BATCH_CAP = 500
 
 

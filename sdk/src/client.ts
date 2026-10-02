@@ -2,7 +2,7 @@ import type { TokenFinConfig, TrackEvent, FlushResult, ClientStats, IngestPayloa
 import { uuidV4, sleep, backoffMs, parseRetryAfter, isRetryableStatus } from './utils'
 import { PolicyManager, type Policy, type PolicyFetchResult } from './policy'
 
-export const SDK_VERSION = '0.2.0'
+export const SDK_VERSION = '0.2.1'
 
 const DEFAULT_BASE_URL        = 'https://tokenfin.curiousdevs.com'
 const DEFAULT_TIMEOUT_MS      = 5_000
