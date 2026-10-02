@@ -6,7 +6,7 @@ import { TokenFinConfig } from './types'
  * Equivalent to `new TokenFinClient(cfg)` — provided for ergonomic imports.
  *
  * ```ts
- * import { createTokenFin } from '@tokenfin/sdk'
+ * import { createTokenFin } from 'tokenfin-sdk'
  * const tf = createTokenFin({ apiKey: process.env.TOKENFIN_API_KEY! })
  * ```
  */

@@ -1,9 +1,9 @@
 /**
- * @tokenfin/sdk — official TypeScript SDK for TokenFin LLM cost attribution.
+ * tokenfin-sdk — official TypeScript SDK for TokenFin LLM cost attribution.
  *
  * ```ts
  * import Anthropic from '@anthropic-ai/sdk'
- * import { TokenFinClient, wrapAnthropic } from '@tokenfin/sdk'
+ * import { TokenFinClient, wrapAnthropic } from 'tokenfin-sdk'
  *
  * const tf = new TokenFinClient({ apiKey: process.env.TOKENFIN_API_KEY! })
  * const anthropic = wrapAnthropic(new Anthropic(), tf)   // usage is now tracked

@@ -39,8 +39,8 @@ jobs:
       - name: Check version is not already published
         run: |
           V=$(node -p "require('./package.json').version")
-          if npm view "@tokenfin/sdk@$V" version >/dev/null 2>&1; then
-            echo "::error::@tokenfin/sdk@$V is already on npm — bump sdk/package.json"; exit 1
+          if npm view "tokenfin-sdk@$V" version >/dev/null 2>&1; then
+            echo "::error::tokenfin-sdk@$V is already on npm — bump sdk/package.json"; exit 1
           fi
       - run: npm pack --dry-run
       - name: Publish
