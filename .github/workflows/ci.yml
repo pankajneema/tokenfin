@@ -164,6 +164,12 @@ jobs:
           context: .
           file: infra/docker/Dockerfile.web
           push: false
+          # Placeholders: NEXT_PUBLIC_* are inlined at build time and the build
+          # parses the Supabase URL; real values come from the deploy environment.
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder
+            NEXT_PUBLIC_APP_URL=http://localhost:3001
           cache-from: type=gha,scope=web
           cache-to:   type=gha,scope=web,mode=max
 

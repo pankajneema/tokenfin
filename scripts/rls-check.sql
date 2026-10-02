@@ -77,13 +77,16 @@ END $$;
 
 -- ── 4. As anon and as an authenticated NON-member, every public table and
 --       view returns 0 rows (or is denied outright). ─────────────────────────
-CREATE OR REPLACE FUNCTION pg_temp.rls_visible_rows(p_role TEXT) RETURNS TEXT
+-- Reference tables that are intentionally readable by every signed-in user
+-- (no customer data): model_prices is the global list-price catalog
+-- (policy model_prices_read, migration 005).
+CREATE OR REPLACE FUNCTION pg_temp.rls_visible_rows(p_role TEXT, p_public TEXT[] DEFAULT '{}') RETURNS TEXT
 LANGUAGE plpgsql AS $$
 DECLARE t RECORD; n BIGINT; leaks TEXT := '';
 BEGIN
   FOR t IN
     SELECT c.relname FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
-    WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm') ORDER BY c.relname
+    WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm') AND NOT (c.relname = ANY (p_public)) ORDER BY c.relname
   LOOP
     BEGIN
       EXECUTE format('SET LOCAL ROLE %I', p_role);
@@ -106,7 +109,7 @@ BEGIN
   SELECT s.stranger INTO stranger FROM _rls_seed s;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', stranger, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', stranger::text, true);
-  leaks := pg_temp.rls_visible_rows('authenticated');
+  leaks := pg_temp.rls_visible_rows('authenticated', ARRAY['model_prices']);
   IF leaks <> '' THEN RAISE EXCEPTION 'authenticated non-member can read rows in: %', leaks; END IF;
 END $$;
 
