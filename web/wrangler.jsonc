@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tokenfin",
+  "main": "worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    { "binding": "WORKER_SELF_REFERENCE", "service": "tokenfin" }
+  ],
+  // Replaces the Vercel Cron schedule from vercel.json (UTC). See worker.ts.
+  "triggers": {
+    "crons": ["0 2 * * *", "30 2 * * *", "30 3 * * *", "0 4 * * *", "0 5 * * 1"]
+  },
+  "observability": { "enabled": true }
+}
